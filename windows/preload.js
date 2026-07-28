@@ -12,4 +12,12 @@ contextBridge.exposeInMainWorld('webforge', {
   togglePin: (id) => ipcRenderer.send('toggle-pin', id),
   onTabsUpdated: (cb) => ipcRenderer.on('tabs-updated', (_e, state) => cb(state)),
   onFocusUrl: (cb) => ipcRenderer.on('focus-url', () => cb()),
+  // bookmarks (#11)
+  toggleStar: () => ipcRenderer.send('toggle-star'),
+  toggleBookmarksPanel: () => ipcRenderer.send('toggle-bookmarks-panel'),
+  openBookmark: (url, background) => ipcRenderer.send('open-bookmark', { url, background }),
+  removeBookmark: (id) => ipcRenderer.send('remove-bookmark', id),
+  importBookmarks: () => ipcRenderer.invoke('import-bookmarks'),
+  onBookmarksPanel: (cb) => ipcRenderer.on('bookmarks-panel', (_e, open) => cb(open)),
+  onBookmarksUpdated: (cb) => ipcRenderer.on('bookmarks-updated', (_e, list) => cb(list)),
 });

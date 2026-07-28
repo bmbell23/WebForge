@@ -8,12 +8,15 @@
 const { app, BaseWindow, WebContentsView, ipcMain, dialog, Menu, nativeTheme } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const bookmarks = require('./bookmarks');
 
 const HOME_URL = 'https://duckduckgo.com/';
 const SEARCH_URL = 'https://duckduckgo.com/?q=';
 // Keep in sync with ui/index.html's grid.
 const SIDEBAR_W = 240;
 const TOPBAR_H = 44;
+const BM_PANEL_W = 280; // #11 bookmarks panel, right side
+let bmPanelOpen = false;
 
 let win, chrome;
 const tabs = new Map(); // id -> WebContentsView
@@ -67,10 +70,31 @@ function layout() {
     view.setBounds({
       x: SIDEBAR_W,
       y: TOPBAR_H,
-      width: width - SIDEBAR_W,
+      width: width - SIDEBAR_W - (bmPanelOpen ? BM_PANEL_W : 0),
       height: height - TOPBAR_H,
     });
   }
+}
+
+// #11: bookmarks panel + star state.
+function pushBookmarks() {
+  chrome?.webContents.send('bookmarks-updated', bookmarks.all());
+}
+
+function toggleBookmarksPanel() {
+  bmPanelOpen = !bmPanelOpen;
+  chrome?.webContents.send('bookmarks-panel', bmPanelOpen);
+  if (bmPanelOpen) pushBookmarks();
+  layout();
+}
+
+function toggleStarCurrent() {
+  const url = activeWc()?.getURL();
+  if (!url) return;
+  if (bookmarks.has(url)) bookmarks.remove(url);
+  else bookmarks.add({ title: activeWc().getTitle(), url });
+  pushBookmarks();
+  pushState(); // star state rides on tab state
 }
 
 function tabState() {
@@ -83,6 +107,7 @@ function tabState() {
       loading: wc.isLoading(),
       active: id === activeId,
       pinned: pinnedIds.has(id),
+      starred: bookmarks.has(wc.getURL()),
       canGoBack: wc.navigationHistory.canGoBack(),
       canGoForward: wc.navigationHistory.canGoForward(),
     };
@@ -220,6 +245,8 @@ function setupShortcuts() {
           { label: 'Close Tab', accelerator: 'CmdOrCtrl+W', click: () => closeTab(activeId) },
           { label: 'Pin/Unpin Tab', accelerator: 'CmdOrCtrl+Shift+P', click: () => togglePin(activeId) },
           { label: 'Close Unpinned Tabs', accelerator: 'CmdOrCtrl+Shift+W', click: () => purgeUnpinned() },
+          { label: 'Bookmarks Panel', accelerator: 'CmdOrCtrl+B', click: () => toggleBookmarksPanel() },
+          { label: 'Bookmark This Page', accelerator: 'CmdOrCtrl+D', click: () => toggleStarCurrent() },
           { label: 'Next Tab', accelerator: 'Control+Tab', click: () => cycleTab(1) },
           { label: 'Previous Tab', accelerator: 'Control+Shift+Tab', click: () => cycleTab(-1) },
           {
@@ -252,6 +279,35 @@ ipcMain.on('new-tab', () => createTab());
 ipcMain.on('close-tab', (_e, id) => closeTab(id));
 ipcMain.on('activate-tab', (_e, id) => activateTab(id));
 ipcMain.on('toggle-pin', (_e, id) => togglePin(id));
+
+// #11: bookmarks IPC.
+ipcMain.on('toggle-bookmarks-panel', () => toggleBookmarksPanel());
+ipcMain.on('toggle-star', () => toggleStarCurrent());
+ipcMain.on('open-bookmark', (_e, { url, background }) => {
+  if (background) createTab(url, true);
+  else activeWc()?.loadURL(url);
+});
+ipcMain.on('remove-bookmark', (_e, id) => {
+  bookmarks.remove(id);
+  pushBookmarks();
+  pushState();
+});
+ipcMain.handle('import-bookmarks', async () => {
+  const { canceled, filePaths } = await dialog.showOpenDialog(win, {
+    title: 'Import Firefox bookmarks (HTML export or JSON backup)',
+    filters: [{ name: 'Bookmarks', extensions: ['html', 'json'] }],
+    properties: ['openFile'],
+  });
+  if (canceled || !filePaths[0]) return null;
+  try {
+    const result = bookmarks.importFile(filePaths[0]);
+    pushBookmarks();
+    pushState();
+    return result;
+  } catch (e) {
+    return { error: String(e.message || e) };
+  }
+});
 
 // Self-update: electron-updater against the generic HTTP provider on
 // dockerhost (releases/windows/ behind nginx :8012 — see docker-compose.yml).

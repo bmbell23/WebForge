@@ -26,6 +26,7 @@
     "files": [
       "main.js",
       "preload.js",
+      "bookmarks.js",
       "ui/**"
     ],
     "win": {

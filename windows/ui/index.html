@@ -143,6 +143,61 @@
     font-size: 13px; outline: none;
   }
 
+  /* --- bookmarks panel (#11), right side under the nav bar --- */
+  #bmpanel {
+    position: absolute;
+    top: 44px; right: 0; bottom: 0;
+    width: 280px;
+    display: none;
+    flex-direction: column;
+    background: var(--bg);
+    border-left: 1px solid var(--hover);
+    z-index: 5;
+  }
+  #bmpanel.open { display: flex; }
+  #bmpanel header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 10px;
+    font-weight: 600;
+    color: var(--text-dim);
+  }
+  #bmimport {
+    border: none; border-radius: 6px;
+    padding: 4px 10px;
+    background: var(--surface); color: var(--text);
+    font-size: 12px; cursor: pointer;
+  }
+  #bmimport:hover { background: var(--hover); }
+  #bmlist { flex: 1; overflow-y: auto; scrollbar-width: thin; padding: 0 6px 10px; }
+  .bmfolder {
+    padding: 8px 6px 3px;
+    font-size: 11px; font-weight: 600;
+    color: var(--text-dim);
+    text-transform: uppercase; letter-spacing: 0.04em;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .bm {
+    display: flex; align-items: center; gap: 6px;
+    height: 28px; padding: 0 4px 0 8px;
+    border-radius: 6px;
+    color: var(--text);
+    cursor: default; white-space: nowrap;
+  }
+  .bm:hover { background: var(--hover); }
+  .bm .title { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+  .bm .rm {
+    width: 18px; height: 18px;
+    border: none; border-radius: 50%;
+    background: transparent; color: inherit;
+    font-size: 11px; cursor: pointer;
+    visibility: hidden;
+  }
+  .bm:hover .rm { visibility: visible; }
+  .bm .rm:hover { background: var(--hover); }
+  #bmempty { padding: 14px 12px; color: var(--text-dim); }
+
   /* --- load progress (indeterminate), pinned to the nav bar's bottom --- */
   #progress {
     position: absolute;
@@ -177,7 +232,16 @@
     <button id="reloadstop" title="Reload">⟳</button>
     <input id="url" type="text" spellcheck="false"
            placeholder="Search or enter address">
+    <button id="star" title="Bookmark this page (Ctrl+D)">☆</button>
+    <button id="bmtoggle" title="Bookmarks (Ctrl+B)">📚</button>
     <div id="progress"></div>
+  </div>
+  <div id="bmpanel">
+    <header>
+      <span id="bmcount">Bookmarks</span>
+      <button id="bmimport" title="Import a Firefox bookmarks export">Import…</button>
+    </header>
+    <div id="bmlist"></div>
   </div>
 <script>
   const tablist = document.getElementById('tablist');
@@ -244,6 +308,70 @@
     reloadstop.textContent = activeLoading ? '✕' : '⟳';
     reloadstop.title = activeLoading ? 'Stop' : 'Reload';
     progress.className = activeLoading ? 'loading' : '';
+    star.textContent = active.starred ? '★' : '☆';
+  });
+
+  // --- bookmarks (#11) ---
+  const star = document.getElementById('star');
+  const bmpanel = document.getElementById('bmpanel');
+  const bmlist = document.getElementById('bmlist');
+  const bmcount = document.getElementById('bmcount');
+
+  star.onclick = () => webforge.toggleStar();
+  document.getElementById('bmtoggle').onclick = () => webforge.toggleBookmarksPanel();
+  document.getElementById('bmimport').onclick = async () => {
+    const r = await webforge.importBookmarks();
+    if (!r) return;
+    bmcount.textContent = r.error
+      ? `Import failed: ${r.error}`
+      : `Imported ${r.added} (${r.skipped} dupes skipped)`;
+  };
+
+  webforge.onBookmarksPanel((open) => bmpanel.classList.toggle('open', open));
+  webforge.onBookmarksUpdated((list) => {
+    bmcount.textContent = `Bookmarks (${list.length})`;
+    if (!list.length) {
+      bmlist.replaceChildren(
+        Object.assign(document.createElement('div'), {
+          id: 'bmempty',
+          textContent: 'No bookmarks yet. Star a page (Ctrl+D) or Import a Firefox export.',
+        })
+      );
+      return;
+    }
+    const byFolder = new Map();
+    for (const b of list) {
+      const key = b.folder || 'Other';
+      if (!byFolder.has(key)) byFolder.set(key, []);
+      byFolder.get(key).push(b);
+    }
+    const nodes = [];
+    for (const [folder, items] of [...byFolder.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+      const h = document.createElement('div');
+      h.className = 'bmfolder';
+      h.textContent = folder;
+      h.title = folder;
+      nodes.push(h);
+      for (const b of items) {
+        const el = document.createElement('div');
+        el.className = 'bm';
+        el.title = b.url;
+        const t = document.createElement('span');
+        t.className = 'title';
+        t.textContent = b.title;
+        el.appendChild(t);
+        const rm = document.createElement('button');
+        rm.className = 'rm';
+        rm.textContent = '✕';
+        rm.title = 'Remove bookmark';
+        rm.onclick = (e) => { e.stopPropagation(); webforge.removeBookmark(b.id); };
+        el.appendChild(rm);
+        el.onclick = () => webforge.openBookmark(b.url, false);
+        el.onauxclick = (e) => { if (e.button === 1) webforge.openBookmark(b.url, true); };
+        nodes.push(el);
+      }
+    }
+    bmlist.replaceChildren(...nodes);
   });
 </script>
 </body>
