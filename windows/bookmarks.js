@@ -13,14 +13,33 @@ function load() {
     try {
       cached = JSON.parse(fs.readFileSync(file(), 'utf8'));
     } catch {
-      cached = { bookmarks: [] };
+      cached = { bookmarks: [], updatedAt: 0 };
     }
-    if (!Array.isArray(cached.bookmarks)) cached = { bookmarks: [] };
+    if (!Array.isArray(cached.bookmarks)) cached = { bookmarks: [], updatedAt: 0 };
+    if (typeof cached.updatedAt !== 'number') cached.updatedAt = 0;
   }
   return cached.bookmarks;
 }
 
 function save() {
+  cached.updatedAt = Date.now(); // local mutation → we are now the newest copy
+  try {
+    fs.writeFileSync(file(), JSON.stringify(cached));
+  } catch {}
+}
+
+// --- #13 sync support: whole-store last-write-wins ---
+function meta() {
+  load();
+  return { updatedAt: cached.updatedAt };
+}
+
+// Adopt the server's copy verbatim, KEEPING its timestamp (bumping it would
+// make every client look newer than the server and ping-pong forever).
+function replaceAll(list, updatedAt) {
+  load();
+  cached.bookmarks = Array.isArray(list) ? list : [];
+  cached.updatedAt = updatedAt || 0;
   try {
     fs.writeFileSync(file(), JSON.stringify(cached));
   } catch {}
@@ -115,4 +134,4 @@ function importFile(filePath) {
   return { found: parsed.length, added, skipped: parsed.length - added };
 }
 
-module.exports = { all, has, add, remove, importFile };
+module.exports = { all, has, add, remove, importFile, meta, replaceAll };

@@ -11,3 +11,15 @@ services:
       - "8012:80"
     volumes:
       - ./releases:/usr/share/nginx/html:ro
+
+  # #13: bookmarks sync — tiny stdlib-only LWW JSON store on :8013.
+  webforge_sync:
+    image: python:3.12-alpine
+    container_name: webforge_sync
+    restart: unless-stopped
+    command: python /app/sync.py
+    ports:
+      - "8013:8013"
+    volumes:
+      - ./server:/app:ro
+      - ./data:/data

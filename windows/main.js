@@ -111,6 +111,7 @@ function toggleStarCurrent() {
   else bookmarks.add({ title: activeWc().getTitle(), url });
   pushBookmarks();
   pushState(); // star state rides on tab state
+  scheduleSyncSoon();
 }
 
 function tabState() {
@@ -288,6 +289,45 @@ async function setupAdblock() {
   }
 }
 
+// #13: opportunistic bookmark sync against dockerhost — whole-store
+// last-write-wins by updatedAt. Fails silently off the tailnet (work-VPN
+// case): purely offline-first, catches up whenever home is reachable.
+const SYNC_URL = 'http://100.69.184.113:8013/store/bookmarks';
+let syncTimer = null;
+let syncing = false;
+
+async function syncBookmarks() {
+  if (syncing) return;
+  syncing = true;
+  try {
+    const local = bookmarks.meta();
+    const res = await fetch(SYNC_URL, { signal: AbortSignal.timeout(5000) });
+    const remote = await res.json();
+    const remoteAt = remote.updatedAt || 0;
+    if (remoteAt > local.updatedAt) {
+      bookmarks.replaceAll(remote.data, remoteAt);
+      pushBookmarks();
+      pushState();
+    } else if (local.updatedAt > remoteAt) {
+      await fetch(SYNC_URL, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ data: bookmarks.all(), updatedAt: local.updatedAt }),
+        signal: AbortSignal.timeout(5000),
+      });
+    }
+  } catch {
+    // off the tailnet / server down — try again next cycle
+  } finally {
+    syncing = false;
+  }
+}
+
+function scheduleSyncSoon() {
+  clearTimeout(syncTimer);
+  syncTimer = setTimeout(syncBookmarks, 5000);
+}
+
 // #12: automatic login fill — user decision: "everything once I'm in".
 // Exact-origin match; fills the first saved login for the page's origin into
 // the first empty password form found. Silent no-op when locked or unmatched.
@@ -402,6 +442,7 @@ function onUnlocked() {
     else activateTab(tabOrder[0]);
   }
   pushState();
+  syncBookmarks(); // #13: catch up whenever a session starts
 }
 
 // Keyboard shortcuts via a hidden application menu — accelerators fire no
@@ -464,6 +505,7 @@ ipcMain.on('remove-bookmark', (_e, id) => {
   bookmarks.remove(id);
   pushBookmarks();
   pushState();
+  scheduleSyncSoon();
 });
 // #15: vault IPC (used by ui/lock.html).
 ipcMain.handle('vault-status', () => ({
@@ -497,6 +539,7 @@ ipcMain.handle('import-bookmarks', async () => {
     const result = bookmarks.importFile(filePaths[0]);
     pushBookmarks();
     pushState();
+    scheduleSyncSoon();
     return result;
   } catch (e) {
     return { error: String(e.message || e) };
@@ -553,6 +596,7 @@ app.whenReady().then(() => {
   createWindow();
   setupShortcuts();
   setupAutoUpdate();
+  setInterval(syncBookmarks, 10 * 60 * 1000); // #13: periodic catch-up
 });
 
 app.on('before-quit', () => saveSessionNow()); // flush any pending debounce
