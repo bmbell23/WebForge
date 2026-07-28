@@ -10,6 +10,10 @@ contextBridge.exposeInMainWorld('wf', {
   setEngine: (e) => ipcRenderer.invoke('int:set-engine', e),
   saveTabGroups: (list) => ipcRenderer.invoke('int:save-tab-groups', list),
   syncStatus: () => ipcRenderer.invoke('int:sync-status'),
+  // credentials (#47 — moved here from the chrome panel)
+  getCreds: () => ipcRenderer.invoke('int:get-creds'),
+  saveCred: (c) => ipcRenderer.invoke('int:save-cred', c),
+  deleteCred: (id) => ipcRenderer.invoke('int:delete-cred', id),
   // bookmarks
   getBookmarks: () => ipcRenderer.invoke('int:get-bookmarks'),
   getHotkeys: () => ipcRenderer.invoke('int:get-hotkeys'),

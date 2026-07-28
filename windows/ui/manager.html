@@ -70,6 +70,11 @@
   }
   .dropping { background: var(--drop) !important; outline: 1px dashed var(--accent); }
   #root { min-height: 60px; }
+  #rootdrop {
+    padding: 10px 12px; margin-bottom: 10px;
+    border: 1px dashed var(--hover); border-radius: 8px;
+    color: var(--dim); font-size: 12px; text-align: center;
+  }
   .empty { color: var(--dim); padding: 20px 4px; }
   .editform {
     display: flex; flex-direction: column; gap: 6px;
@@ -98,6 +103,7 @@
     <button id="collapse">Collapse all</button>
     <button id="import">Import Firefox…</button>
   </div>
+  <div id="rootdrop">⤒ Drop here to move to the top level</div>
   <div id="root"></div>
 </div>
 <script>
@@ -265,7 +271,8 @@
       : bms;
     const root = document.getElementById('root');
     root.replaceChildren();
-    dropTarget(root, ''); // drop on empty space = move to top level
+    dropTarget(root, ''); // empty space = top level
+    dropTarget(document.getElementById('rootdrop'), ''); // explicit target (#29)
 
     if (!list.length) {
       root.appendChild(Object.assign(document.createElement('div'), {

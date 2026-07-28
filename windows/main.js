@@ -56,6 +56,7 @@ let activeId = null;
 let nextTabId = 1;
 const pinnedIds = new Set(); // #9
 const hotkeyByTab = new Map(); // #16: tabId -> keyId (a tab per bound hotkey)
+const faviconByTab = new Map(); // #45: tabId -> icon URL
 let locked = true;           // #15: the app is a brick until the vault unlocks
 
 // #16: sidebar ordering — hotkey group first, then pinned, then normal.
@@ -368,6 +369,7 @@ function tabState() {
       active: id === activeId,
       pinned: pinnedIds.has(id),
       hotkey: hotkeyByTab.get(id) || null,
+      favicon: faviconByTab.get(id) || null, // #45
       starred: bookmarks.has(wc.getURL()),
       canGoBack: wc.navigationHistory.canGoBack(),
       canGoForward: wc.navigationHistory.canGoForward(),
@@ -454,6 +456,12 @@ function createTab(url = null, background = false) {
   ]) {
     wc.on(ev, pushState);
   }
+  wc.on('page-favicon-updated', (_e2, icons) => { // #45
+    if (icons?.length) {
+      faviconByTab.set(id, icons[0]);
+      pushState();
+    }
+  });
   wc.on('did-finish-load', () => tryAutofill(wc)); // #12
   wc.on('dom-ready', () => {
     wc.send('sticky-mode', hotkeyByTab.has(id)); // #33
@@ -499,6 +507,7 @@ function closeTab(id) {
   const idx = tabOrder.indexOf(id);
   tabs.delete(id);
   hotkeyByTab.delete(id); // #16: the binding survives; only the open tab dies
+  faviconByTab.delete(id);
   tabOrder = tabOrder.filter((t) => t !== id);
   win.contentView.removeChildView(view);
   view.webContents.close();
@@ -665,6 +674,24 @@ function togglePin(id) {
   else pinnedIds.add(id);
   sortTabOrder();
   pushState();
+}
+
+// #46: "misc" = not pinned, not a hotkey tab, and not matched by any
+// user-defined tab group. Ctrl+Shift+X sweeps exactly those.
+function closeMiscTabs() {
+  const groups = getSettings().tabGroups || [];
+  const inGroup = (url) =>
+    groups.some((g) => {
+      const p = String(g.pattern || '').trim().replace(/\*+$/, '').toLowerCase();
+      return p && String(url).toLowerCase().startsWith(p);
+    });
+  const doomed = tabOrder.filter(
+    (id) =>
+      !pinnedIds.has(id) &&
+      !hotkeyByTab.has(id) &&
+      !inGroup(tabs.get(id).webContents.getURL())
+  );
+  for (const id of doomed) closeTab(id);
 }
 
 // #16 redefinition of #9's purge: "normal" = neither pinned nor hotkey.
@@ -988,10 +1015,10 @@ function menuTemplate() {
           { label: 'Duplicate Tab', accelerator: 'CmdOrCtrl+Shift+U', click: () => locked || duplicateActiveTab() },
           { label: 'Pin/Unpin Tab', accelerator: 'CmdOrCtrl+Shift+P', click: () => togglePin(activeId) },
           { label: 'Close Normal Tabs', accelerator: 'CmdOrCtrl+Shift+W', click: () => closeNormalTabs() },
+          { label: 'Close Misc Tabs', accelerator: 'CmdOrCtrl+Shift+X', click: () => locked || closeMiscTabs() },
           { label: 'Detach Hotkey Tab', accelerator: 'CmdOrCtrl+Shift+D', click: () => detachActiveHotkeyTab() },
           { label: 'Bookmarks Panel', accelerator: 'CmdOrCtrl+B', click: () => locked || toggleBookmarksPanel() },
           { label: 'Bookmark Manager', accelerator: 'CmdOrCtrl+Shift+B', click: () => locked || toggleBmManager() },
-          { label: 'Passwords Panel', accelerator: 'CmdOrCtrl+Shift+K', click: () => locked || togglePwPanel() },
           { label: 'Settings', accelerator: 'CmdOrCtrl+Shift+S', click: () => locked || toggleSettings() },
           { label: 'Bookmark This Page', accelerator: 'CmdOrCtrl+D', click: () => locked || starCurrent() },
           { label: 'Lock WebForge', accelerator: 'CmdOrCtrl+Shift+L', click: () => showLock() },
@@ -1028,6 +1055,11 @@ ipcMain.on('new-tab', () => createTab());
 ipcMain.on('close-tab', (_e, id) => closeTab(id));
 ipcMain.on('activate-tab', (_e, id) => activateTab(id));
 ipcMain.on('toggle-pin', (_e, id) => togglePin(id));
+// #46: close every tab in a sidebar group (chrome knows the grouping).
+ipcMain.on('close-tabs', (_e, ids) => {
+  if (locked || !Array.isArray(ids)) return;
+  for (const id of ids) closeTab(Number(id));
+});
 
 // #16: hotkey IPC — key presses arrive from content preloads AND the chrome UI.
 ipcMain.on('webforge-key', (_e, keyId) => handleHotkeyPress(String(keyId)));
@@ -1158,6 +1190,12 @@ ipcMain.handle('int:sync-status', async () => {
     return { reachable: false, local };
   }
 });
+ipcMain.handle('int:get-creds', () => (locked ? [] : credentials.list()));
+ipcMain.handle('int:save-cred', (_e, cred) => {
+  if (locked) return false;
+  return credentials.upsert(cred || {});
+});
+ipcMain.handle('int:delete-cred', (_e, id) => (locked ? false : credentials.removeById(String(id))));
 ipcMain.handle('int:get-bookmarks', () => bookmarks.all());
 ipcMain.handle('int:get-hotkeys', () => hotkeys.all());
 ipcMain.handle('int:save-bookmark', (_e, b) => {

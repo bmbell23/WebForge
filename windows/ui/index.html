@@ -131,7 +131,22 @@
   .tab .pin { font-size: 10px; }
   .tab.pinned .close { display: none; } /* #9: unpin to close */
   /* #16: hotkey group */
+  .favicon { width: 14px; height: 14px; flex: 0 0 auto; border-radius: 3px; }
+  .favdot {
+    width: 6px; height: 6px; flex: 0 0 auto;
+    border-radius: 50%; background: var(--text-dim); opacity: 0.5;
+  }
+  .groupclose {
+    margin-left: auto;
+    width: 16px; height: 16px;
+    border: none; border-radius: 50%;
+    background: transparent; color: var(--text-dim);
+    font-size: 10px; cursor: pointer; visibility: hidden;
+  }
+  .grouphdr:hover .groupclose { visibility: visible; }
+  .groupclose:hover { background: var(--hover); color: var(--text); }
   .grouphdr {
+    display: flex; align-items: center; gap: 6px;
     padding: 8px 6px 3px;
     font-size: 10px; font-weight: 700;
     color: var(--text-dim);
@@ -500,9 +515,7 @@
   <div id="sidebar">
     <header>
       <span>WebForge</span>
-      <span>
-        <button id="settingsbtn" title="Settings (Ctrl+,)">⚙</button><button id="newtab" title="New tab (Ctrl+T)">+</button>
-      </span>
+      <button id="newtab" title="New tab (Ctrl+T)">+</button>
     </header>
     <div id="tablist"></div>
   </div>
@@ -513,18 +526,13 @@
     <input id="url" type="text" spellcheck="false"
            placeholder="Search or enter address">
     <button id="star" title="Bookmark this page (Ctrl+D)">☆</button>
-    <button id="bmtoggle" title="Bookmarks (Ctrl+B)">📚</button>
-    <button id="pwtoggle" title="Passwords (Ctrl+Shift+K)">🔐</button>
+    <button id="settingsbtn" title="Settings (Ctrl+Shift+S)">⚙</button>
     <div id="progress"></div>
   </div>
   <div id="bmpanel">
     <header>
       <span id="bmcount">Bookmarks</span>
-      <span>
-        <button id="bmmanage" title="Bookmark manager (Ctrl+Shift+B)">🗂</button>
-        <button id="pwimport" title="Import passwords (Firefox about:logins CSV export)">🔑</button>
-        <button id="bmimport" title="Import a Firefox bookmarks export">Import…</button>
-      </span>
+      <button id="bmmanage" title="Bookmark manager (Ctrl+Shift+B)">🗂</button>
     </header>
     <input id="bmsearch" type="text" placeholder="Search bookmarks" spellcheck="false">
     <div id="bmlist"></div>
@@ -642,6 +650,14 @@
       k.className = 'kbd';
       k.textContent = t.hotkey;
       el.appendChild(k);
+    } else if (t.favicon) { // #45
+      const ico = document.createElement('img');
+      ico.className = 'favicon';
+      ico.src = t.favicon;
+      ico.onerror = () => ico.replaceWith(dot());
+      el.appendChild(ico);
+    } else if (!t.pinned) {
+      el.appendChild(dot());
     }
     if (t.pinned) {
       const pin = document.createElement('span');
@@ -668,15 +684,33 @@
     el.appendChild(close);
 
     el.onclick = () => webforge.activateTab(t.id);
-    el.onauxclick = (e) => { if (e.button === 1) webforge.closeTab(t.id); };
+    // #48: middle-click closes. mousedown is the reliable path (auxclick can
+    // be swallowed, and preventDefault here also kills middle-click autoscroll).
+    el.onmousedown = (e) => {
+      if (e.button === 1) { e.preventDefault(); webforge.closeTab(t.id); }
+    };
+    el.onauxclick = (e) => { if (e.button === 1) e.preventDefault(); };
     el.oncontextmenu = (e) => { e.preventDefault(); webforge.togglePin(t.id); };
     return el;
   }
 
-  function groupHdr(label) {
+  function dot() { // #45: neutral placeholder when a site has no favicon
+    const d = document.createElement('span');
+    d.className = 'favdot';
+    return d;
+  }
+
+  function groupHdr(label, tabIds) { // #46: ✕ closes the whole group
     const h = document.createElement('div');
     h.className = 'grouphdr';
-    h.textContent = label;
+    h.appendChild(Object.assign(document.createElement('span'), { textContent: label }));
+    if (tabIds && tabIds.length) {
+      const x = Object.assign(document.createElement('button'), {
+        className: 'groupclose', textContent: '✕', title: `Close these ${tabIds.length} tabs`,
+      });
+      x.onclick = () => webforge.closeTabs(tabIds);
+      h.appendChild(x);
+    }
     return h;
   }
 
@@ -738,7 +772,10 @@
       const singles = [];
       for (const b of buckets.values()) {
         if (b.custom || b.tabs.length >= 2) {
-          nodes.push(groupHdr(`${b.name} (${b.tabs.length})`), ...b.tabs.map(makeTab));
+          nodes.push(
+            groupHdr(`${b.name} (${b.tabs.length})`, b.tabs.map((t) => t.id)), // #46
+            ...b.tabs.map(makeTab)
+          );
         } else {
           singles.push(b.tabs[0]);
         }
@@ -768,8 +805,6 @@
   const bmcount = document.getElementById('bmcount');
 
   star.onclick = () => webforge.toggleStar();
-  document.getElementById('bmtoggle').onclick = () => webforge.toggleBookmarksPanel();
-  document.getElementById('pwimport').onclick = () => webforge.importPasswords();
 
   // --- passwords panel (#26) ---
   const pwpanel = document.getElementById('pwpanel');
@@ -778,7 +813,6 @@
   let credsList = [];
   let pwEditing = null; // credential id, or 'new'
 
-  document.getElementById('pwtoggle').onclick = () => webforge.togglePwPanel();
   document.getElementById('pwadd').onclick = () => { pwEditing = 'new'; renderCreds(); };
   webforge.onPwPanel((open) => { pwpanel.classList.toggle('open', open); if (!open) pwEditing = null; });
   webforge.onCredsUpdated((list) => { credsList = list || []; pwEditing = null; renderCreds(); });
@@ -995,7 +1029,7 @@
 
   // --- settings (#24) ---
   const settingsEl = document.getElementById('settings');
-  document.getElementById('settingsbtn').onclick = () => webforge.toggleSettings();
+  document.getElementById('settingsbtn').onclick = () => webforge.toggleSettings(); // #47: now in the nav bar
   document.getElementById('settingsclose').onclick = () => webforge.toggleSettings();
   const themeBtns = [...document.querySelectorAll('.themeopt button')];
   for (const b of themeBtns) {
@@ -1043,13 +1077,6 @@
   // --- bookmark search (#27) ---
   const bmsearch = document.getElementById('bmsearch');
   bmsearch.addEventListener('input', () => renderBookmarks(lastBookmarks));
-  document.getElementById('bmimport').onclick = async () => {
-    const r = await webforge.importBookmarks();
-    if (!r) return;
-    bmcount.textContent = r.error
-      ? `Import failed: ${r.error}`
-      : `Imported ${r.added} (${r.skipped} dupes skipped)`;
-  };
 
   webforge.onBookmarksPanel((open) => {
     bmpanel.classList.toggle('open', open);

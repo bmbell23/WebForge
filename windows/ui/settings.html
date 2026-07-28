@@ -70,6 +70,23 @@
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
   td { padding: 6px 4px; border-bottom: 1px solid var(--hover); vertical-align: top; }
   td:first-child { width: 190px; font: 600 12px ui-monospace, monospace; color: var(--dim); }
+  .sub { font-size: 12px; color: var(--dim); margin-top: 8px; }
+  .credrow {
+    display: flex; align-items: center; gap: 10px;
+    padding: 7px 4px; border-bottom: 1px solid var(--hover); font-size: 13px;
+  }
+  .credrow .site { min-width: 230px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .credrow .user { flex: 1; color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .credrow .pw { font: 12px ui-monospace, monospace; color: var(--dim); min-width: 90px; }
+  .credrow input {
+    height: 28px; border: none; border-radius: 6px; padding: 0 8px;
+    background: var(--field); color: var(--field-text); font-size: 12px; outline: none;
+  }
+  .credrow button {
+    width: 26px; height: 26px; border: none; border-radius: 6px;
+    background: transparent; color: var(--text); cursor: pointer;
+  }
+  .credrow button:hover { background: var(--hover); }
 </style>
 </head>
 <body>
@@ -94,6 +111,22 @@
   <h2>Sync (bookmarks)</h2>
   <div class="card status" id="sync">Checking…</div>
 
+  <h2>Import</h2>
+  <div class="row">
+    <button class="choice" id="impbm">Import Firefox bookmarks…</button>
+    <button class="choice" id="imppw">Import Firefox passwords (CSV)…</button>
+  </div>
+  <div class="sub" id="impmsg"></div>
+
+  <h2>Saved logins</h2>
+  <div id="creds"></div>
+  <div class="addrow">
+    <input id="cOrigin" type="text" placeholder="https://site.com" spellcheck="false" style="flex:1">
+    <input id="cUser" type="text" placeholder="username" spellcheck="false" style="width:170px">
+    <input id="cPass" type="password" placeholder="password" style="width:150px">
+    <button id="cAdd">Add</button>
+  </div>
+
   <h2>Tab groups</h2>
   <div id="grouplist"></div>
   <div class="addrow">
@@ -114,15 +147,15 @@
     <tr><td>Ctrl+Shift+U</td><td>Duplicate tab</td></tr>
     <tr><td>Ctrl+Shift+P</td><td>Pin / unpin tab</td></tr>
     <tr><td>Ctrl+Shift+W</td><td>Close all normal tabs (spares pinned + hotkey tabs)</td></tr>
+    <tr><td>Ctrl+Shift+X</td><td>Close misc tabs — everything not pinned, hotkeyed, or in a tab group</td></tr>
     <tr><td>Ctrl+Shift+D</td><td>Detach hotkey tab into a normal tab</td></tr>
     <tr><td>Ctrl+L</td><td>Focus address bar</td></tr>
     <tr><td>Ctrl+R / F5</td><td>Reload</td></tr>
     <tr><td>F11</td><td>Toggle fullscreen (hover screen edges to reveal UI)</td></tr>
     <tr><td>Esc</td><td>Close dialog / panel / reveal</td></tr>
     <tr><td>Ctrl+B</td><td>Bookmarks side panel</td></tr>
-    <tr><td>Ctrl+Shift+B</td><td>Bookmark manager (this kind of tab)</td></tr>
+    <tr><td>Ctrl+Shift+B</td><td>Bookmark manager (opens as a tab)</td></tr>
     <tr><td>Ctrl+D</td><td>Bookmark this page (dialog)</td></tr>
-    <tr><td>Ctrl+Shift+K</td><td>Passwords panel</td></tr>
     <tr><td>Ctrl+Shift+S</td><td>Settings</td></tr>
     <tr><td>Ctrl+Shift+L</td><td>Lock WebForge</td></tr>
     <tr><td>Ctrl+Q</td><td>Quit</td></tr>
@@ -196,7 +229,84 @@
       `Last server update: ${when}`;
   }
 
+  // --- saved logins (#47) ---
+  let creds = [];
+  let editingCred = null;
+
+  function renderCreds() {
+    const box = document.getElementById('creds');
+    if (!creds.length) {
+      box.innerHTML = '<div class="sub">No saved logins yet. Import a Firefox CSV above, or add one below.</div>';
+      return;
+    }
+    box.replaceChildren(...creds.map((c) => {
+      const row = document.createElement('div');
+      row.className = 'credrow';
+      if (editingCred === c.id) {
+        const user = Object.assign(document.createElement('input'), { value: c.username || '', placeholder: 'username' });
+        const pass = Object.assign(document.createElement('input'), { value: c.password || '', placeholder: 'password' });
+        user.style.flex = '1'; pass.style.flex = '1';
+        row.append(
+          Object.assign(document.createElement('span'), { className: 'site', textContent: c.origin }),
+          user, pass
+        );
+        const ok = Object.assign(document.createElement('button'), { textContent: '✔', title: 'Save' });
+        ok.onclick = async () => {
+          await wf.saveCred({ id: c.id, origin: c.origin, username: user.value, password: pass.value });
+          editingCred = null; refreshCreds();
+        };
+        const no = Object.assign(document.createElement('button'), { textContent: '✕', title: 'Cancel' });
+        no.onclick = () => { editingCred = null; renderCreds(); };
+        row.append(ok, no);
+        return row;
+      }
+      const pw = Object.assign(document.createElement('span'), { className: 'pw', textContent: '••••••••' });
+      row.append(
+        Object.assign(document.createElement('span'), { className: 'site', textContent: c.origin.replace(/^https?:\/\//, '') }),
+        Object.assign(document.createElement('span'), { className: 'user', textContent: c.username || '(no username)' }),
+        pw
+      );
+      const eye = Object.assign(document.createElement('button'), { textContent: '👁', title: 'Show password' });
+      eye.onclick = () => { pw.textContent = pw.textContent === '••••••••' ? c.password : '••••••••'; };
+      const ed = Object.assign(document.createElement('button'), { textContent: '✎', title: 'Edit' });
+      ed.onclick = () => { editingCred = c.id; renderCreds(); };
+      const del = Object.assign(document.createElement('button'), { textContent: '🗑', title: 'Delete' });
+      del.onclick = async () => { await wf.deleteCred(c.id); refreshCreds(); };
+      row.append(eye, ed, del);
+      return row;
+    }));
+  }
+
+  async function refreshCreds() { creds = await wf.getCreds(); renderCreds(); }
+
+  document.getElementById('cAdd').onclick = async () => {
+    const origin = document.getElementById('cOrigin').value.trim();
+    const username = document.getElementById('cUser').value.trim();
+    const password = document.getElementById('cPass').value;
+    if (!origin || !password) return;
+    const ok = await wf.saveCred({ origin, username, password });
+    document.getElementById('impmsg').textContent = ok ? '' : 'Could not save — origin must be a full URL.';
+    if (ok) {
+      document.getElementById('cOrigin').value = '';
+      document.getElementById('cUser').value = '';
+      document.getElementById('cPass').value = '';
+      refreshCreds();
+    }
+  };
+
+  document.getElementById('impbm').onclick = async () => {
+    const r = await wf.importBookmarks();
+    const msg = document.getElementById('impmsg');
+    if (!r) return;
+    msg.textContent = r.error ? `Import failed: ${r.error}` : `Imported ${r.added} bookmarks (${r.skipped} duplicates skipped).`;
+  };
+  document.getElementById('imppw').onclick = () => {
+    wf.importPasswords();
+    setTimeout(refreshCreds, 1500); // the dialog + import happen in main
+  };
+
   async function load() {
+    refreshCreds();
     settings = await wf.getSettings();
     groups = settings.tabGroups || [];
     paint();

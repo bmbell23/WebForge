@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld('webforge', {
   closeTab: (id) => ipcRenderer.send('close-tab', id),
   activateTab: (id) => ipcRenderer.send('activate-tab', id),
   togglePin: (id) => ipcRenderer.send('toggle-pin', id),
+  closeTabs: (ids) => ipcRenderer.send('close-tabs', ids), // #46
   onTabsUpdated: (cb) => ipcRenderer.on('tabs-updated', (_e, state) => cb(state)),
   onFocusUrl: (cb) => ipcRenderer.on('focus-url', () => cb()),
   // bookmarks (#11)
