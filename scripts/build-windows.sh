@@ -15,9 +15,10 @@ VERSION="$(cat "$REPO_ROOT/version.txt")"
 echo "🔨 Building WebForge Windows installer (version: $VERSION)"
 
 npm install
-# package.json version is what electron-builder stamps into the installer and
-# latest.yml — sync it from the repo-root version.txt (single source of truth).
-npm version --no-git-tag-version --allow-same-version "$VERSION" > /dev/null
+# version.txt is the single source of truth. It's injected into the build with
+# electron-builder's extraMetadata rather than by rewriting package.json —
+# `npm version` left the repo permanently dirty after every build, and that
+# stray change got swept into the NEXT ticket's commit.
 
 # electron-builder needs wine to stamp Windows exe metadata; wine isn't
 # installed on this host, so the build step runs in the official
@@ -30,7 +31,7 @@ docker run --rm \
     -v "$HOME/.cache/electron-builder:/root/.cache/electron-builder" \
     -w /project/windows \
     electronuserland/builder:wine \
-    /bin/bash -c "npx electron-builder --win nsis"
+    /bin/bash -c "npx electron-builder --win nsis -c.extraMetadata.version=$VERSION"
 # The container runs as root — hand the outputs back to the host user.
 docker run --rm -v "$REPO_ROOT:/project" alpine \
     chown -R "$(id -u):$(id -g)" /project/windows/dist
