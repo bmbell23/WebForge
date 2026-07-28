@@ -28,6 +28,7 @@
       "preload.js",
       "bookmarks.js",
       "vault.js",
+      "credentials.js",
       "ui/**"
     ],
     "win": {

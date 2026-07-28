@@ -1,0 +1,101 @@
+// Password store (#12): lives entirely inside the vault (AES-GCM under the
+// master key — see vault.js), so it's only readable while unlocked and never
+// plaintext on disk. Import source: Firefox about:logins → "Export passwords"
+// CSV (header: url,username,password,httpRealm,formActionOrigin,...).
+const fs = require('fs');
+const vault = require('./vault');
+
+function load() {
+  const data = vault.readFile('credentials');
+  return Array.isArray(data?.creds) ? data.creds : [];
+}
+
+function save(creds) {
+  return vault.writeFile('credentials', { creds });
+}
+
+function count() {
+  return load().length;
+}
+
+function forOrigin(origin) {
+  return load().filter((c) => c.origin === origin);
+}
+
+// Minimal correct CSV: quoted fields, escaped quotes, commas/newlines inside
+// quotes, CRLF endings.
+function parseCsv(text) {
+  const rows = [];
+  let row = [];
+  let cur = '';
+  let inQuotes = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (text[i + 1] === '"') {
+          cur += '"';
+          i++;
+        } else inQuotes = false;
+      } else cur += ch;
+    } else if (ch === '"') {
+      inQuotes = true;
+    } else if (ch === ',') {
+      row.push(cur);
+      cur = '';
+    } else if (ch === '\n' || ch === '\r') {
+      if (ch === '\r' && text[i + 1] === '\n') i++;
+      row.push(cur);
+      if (row.length > 1 || row[0] !== '') rows.push(row);
+      row = [];
+      cur = '';
+    } else cur += ch;
+  }
+  row.push(cur);
+  if (row.length > 1 || row[0] !== '') rows.push(row);
+  return rows;
+}
+
+function importCsv(filePath) {
+  if (!vault.isUnlocked()) return { error: 'vault locked' };
+  const rows = parseCsv(fs.readFileSync(filePath, 'utf8'));
+  if (!rows.length) return { found: 0, added: 0, updated: 0 };
+  const header = rows[0].map((h) => h.trim().toLowerCase());
+  const col = (name) => header.indexOf(name);
+  const iUrl = col('url');
+  const iUser = col('username');
+  const iPass = col('password');
+  if (iUrl === -1 || iPass === -1) return { error: 'not a Firefox password CSV (missing url/password columns)' };
+
+  const creds = load();
+  let found = 0;
+  let added = 0;
+  let updated = 0;
+  for (const row of rows.slice(1)) {
+    const rawUrl = row[iUrl];
+    const password = row[iPass];
+    if (!rawUrl || !password) continue;
+    let origin;
+    try {
+      origin = new URL(rawUrl).origin;
+    } catch {
+      continue;
+    }
+    found++;
+    const username = iUser === -1 ? '' : row[iUser] ?? '';
+    const existing = creds.find((c) => c.origin === origin && c.username === username);
+    if (existing) {
+      if (existing.password !== password) {
+        existing.password = password;
+        updated++;
+      }
+    } else {
+      creds.push({ origin, username, password });
+      added++;
+    }
+  }
+  save(creds);
+  return { found, added, updated };
+}
+
+module.exports = { count, forOrigin, importCsv };

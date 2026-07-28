@@ -10,6 +10,7 @@ const path = require('path');
 const fs = require('fs');
 const bookmarks = require('./bookmarks');
 const vault = require('./vault');
+const credentials = require('./credentials');
 
 const HOME_URL = 'https://duckduckgo.com/';
 const SEARCH_URL = 'https://duckduckgo.com/?q=';
@@ -161,6 +162,7 @@ function createTab(url = HOME_URL, background = false) {
   ]) {
     wc.on(ev, pushState);
   }
+  wc.on('did-finish-load', () => tryAutofill(wc)); // #12
 
   win.contentView.addChildView(view);
   view.setVisible(false);
@@ -245,6 +247,65 @@ function createWindow() {
   showLock(); // #15: nothing exists until the vault opens
 }
 
+// #12: automatic login fill — user decision: "everything once I'm in".
+// Exact-origin match; fills the first saved login for the page's origin into
+// the first empty password form found. Silent no-op when locked or unmatched.
+function tryAutofill(wc) {
+  if (locked || wc.isDestroyed()) return;
+  let origin;
+  try {
+    origin = new URL(wc.getURL()).origin;
+  } catch {
+    return;
+  }
+  const match = credentials.forOrigin(origin)[0];
+  if (!match) return;
+  wc.executeJavaScript(
+    `(() => {
+      const pw = document.querySelector('input[type="password"]');
+      if (!pw || pw.value) return false;
+      const scope = pw.form || document;
+      const user = scope.querySelector(
+        'input[autocomplete="username"], input[type="email"], input[type="text"]'
+      );
+      const fire = (el) => {
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+      };
+      if (user && !user.value) { user.value = ${JSON.stringify(match.username)}; fire(user); }
+      pw.value = ${JSON.stringify(match.password)}; fire(pw);
+      return true;
+    })()`,
+    true
+  ).catch(() => {});
+}
+
+async function importPasswordsCsv() {
+  const { canceled, filePaths } = await dialog.showOpenDialog(win, {
+    title: 'Import Firefox passwords (about:logins → Export passwords)',
+    filters: [{ name: 'CSV', extensions: ['csv'] }],
+    properties: ['openFile'],
+  });
+  if (canceled || !filePaths[0]) return;
+  const result = credentials.importCsv(filePaths[0]);
+  if (result.error) {
+    dialog.showMessageBox(win, { type: 'error', message: `Import failed: ${result.error}` });
+    return;
+  }
+  const { response } = await dialog.showMessageBox(win, {
+    type: 'info',
+    message: `Imported ${result.added} logins (${result.updated} updated, ${credentials.count()} total).`,
+    detail: 'The CSV on disk is PLAINTEXT — delete it now that it lives in the encrypted vault?',
+    buttons: ['Delete the CSV (recommended)', 'Keep it'],
+    defaultId: 0,
+  });
+  if (response === 0) {
+    try {
+      fs.rmSync(filePaths[0], { force: true });
+    } catch {}
+  }
+}
+
 // --- #15: lock screen + session restore ---
 
 function showLock() {
@@ -317,6 +378,7 @@ function setupShortcuts() {
           { label: 'Bookmarks Panel', accelerator: 'CmdOrCtrl+B', click: () => locked || toggleBookmarksPanel() },
           { label: 'Bookmark This Page', accelerator: 'CmdOrCtrl+D', click: () => locked || toggleStarCurrent() },
           { label: 'Lock WebForge', accelerator: 'CmdOrCtrl+Shift+L', click: () => showLock() },
+          { label: 'Import Passwords (CSV)…', click: () => locked || importPasswordsCsv() },
           { label: 'Next Tab', accelerator: 'Control+Tab', click: () => cycleTab(1) },
           { label: 'Previous Tab', accelerator: 'Control+Shift+Tab', click: () => cycleTab(-1) },
           {
