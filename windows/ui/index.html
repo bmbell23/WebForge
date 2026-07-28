@@ -3,34 +3,35 @@
 <head>
 <meta charset="utf-8">
 <style>
-  /* #7: theme tokens — chrome follows the OS light/dark setting. */
+  /* #7: theme tokens — user-decided pure-black OLED dark (true black, minimal
+     contrast chrome, accent only on active elements) + a neutral light. */
   :root {
     color-scheme: light dark;
-    --bg: #dde3ec;          /* chrome background */
-    --surface: #cbd4e2;     /* nav bar */
-    --tab: #cfd7e3;         /* inactive tab */
-    --tab-active: #f6f8fb;  /* active tab */
-    --text: #1a2b4c;
-    --text-dim: #5a6b88;
-    --hover: rgba(0, 0, 0, 0.08);
+    --bg: #f2f2f4;          /* chrome background */
+    --surface: #e6e6e9;     /* nav bar */
+    --tab: #e6e6e9;         /* inactive tab */
+    --tab-active: #ffffff;  /* active tab */
+    --text: #1c1c1e;
+    --text-dim: #6e6e73;
+    --hover: rgba(0, 0, 0, 0.07);
     --field-bg: #ffffff;
     --field-text: #111111;
-    --accent: #2f6fd0;
-    --disabled: #9aa8bd;
+    --accent: #2f7cf6;
+    --disabled: #b0b0b5;
   }
   @media (prefers-color-scheme: dark) {
     :root {
-      --bg: #10203c;
-      --surface: #1a2b4c;
-      --tab: #182a4a;
-      --tab-active: #2c4370;
-      --text: #e3eaf5;
-      --text-dim: #9fb0c9;
-      --hover: rgba(255, 255, 255, 0.12);
-      --field-bg: #0d1830;
-      --field-text: #e3eaf5;
-      --accent: #7fb2ff;
-      --disabled: #6b7c99;
+      --bg: #000000;
+      --surface: #000000;
+      --tab: #000000;
+      --tab-active: #1c1c1e;
+      --text: #e8e8ea;
+      --text-dim: #7c7c82;
+      --hover: rgba(255, 255, 255, 0.09);
+      --field-bg: #131315;
+      --field-text: #e8e8ea;
+      --accent: #3d9bff;
+      --disabled: #48484c;
     }
   }
   * { box-sizing: border-box; }

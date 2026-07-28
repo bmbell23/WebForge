@@ -421,7 +421,7 @@ function createWindow() {
     height: 840,
     title: 'WebForge',
     // #7: match the chrome theme so resize flashes aren't white in dark mode.
-    backgroundColor: nativeTheme.shouldUseDarkColors ? '#10203c' : '#dde3ec',
+    backgroundColor: nativeTheme.shouldUseDarkColors ? '#000000' : '#f2f2f4',
   });
 
   chrome = new WebContentsView({
