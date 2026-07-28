@@ -1,13 +1,18 @@
-// WebForge Windows shell (#3, tabs in #4): a BaseWindow holding one chrome
-// WebContentsView (ui/index.html: tab strip + nav bar) and one content
-// WebContentsView per tab — only the active tab's view is visible. Full tab
-// state is broadcast to the chrome UI on every change; it re-renders from that.
+// WebForge Windows shell (#3, tabs #4, vertical tabs #8): a BaseWindow holding
+// one chrome WebContentsView (ui/index.html: left tab sidebar + top nav bar)
+// and one content WebContentsView per tab. The chrome view covers the WHOLE
+// window; content views are inset (right of the sidebar, below the nav bar)
+// and added after it, so they cover chrome's dead area. Only the active tab's
+// view is visible. Full tab state is broadcast to the chrome UI on every
+// change; it re-renders from that.
 const { app, BaseWindow, WebContentsView, ipcMain, dialog, Menu, nativeTheme } = require('electron');
 const path = require('path');
 
 const HOME_URL = 'https://duckduckgo.com/';
 const SEARCH_URL = 'https://duckduckgo.com/?q=';
-const CHROME_HEIGHT = 80; // 36px tab strip + 44px nav bar — keep in sync with ui/index.html
+// Keep in sync with ui/index.html's grid.
+const SIDEBAR_W = 240;
+const TOPBAR_H = 44;
 
 let win, chrome;
 const tabs = new Map(); // id -> WebContentsView
@@ -29,9 +34,16 @@ const activeWc = () => tabs.get(activeId)?.webContents;
 
 function layout() {
   const { width, height } = win.getContentBounds();
-  chrome.setBounds({ x: 0, y: 0, width, height: CHROME_HEIGHT });
+  chrome.setBounds({ x: 0, y: 0, width, height });
   const view = tabs.get(activeId);
-  if (view) view.setBounds({ x: 0, y: CHROME_HEIGHT, width, height: height - CHROME_HEIGHT });
+  if (view) {
+    view.setBounds({
+      x: SIDEBAR_W,
+      y: TOPBAR_H,
+      width: width - SIDEBAR_W,
+      height: height - TOPBAR_H,
+    });
+  }
 }
 
 function tabState() {

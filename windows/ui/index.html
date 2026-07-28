@@ -34,11 +34,15 @@
     }
   }
   * { box-sizing: border-box; }
+  /* #8: full-window chrome — left sidebar spans the height, nav bar tops the
+     content column; the rest is covered by the content WebContentsView.
+     Keep the 240px / 44px in sync with SIDEBAR_W / TOPBAR_H in main.js. */
+  html, body { height: 100%; }
   body {
     margin: 0;
-    height: 80px; /* keep in sync with CHROME_HEIGHT in main.js */
-    display: flex;
-    flex-direction: column;
+    display: grid;
+    grid-template-columns: 240px 1fr;
+    grid-template-rows: 44px 1fr;
     background: var(--bg);
     color: var(--text);
     font: 13px system-ui, sans-serif;
@@ -46,25 +50,47 @@
     overflow: hidden;
   }
 
-  /* --- tab strip --- */
-  #tabstrip {
-    height: 36px;
+  /* --- vertical tab sidebar --- */
+  #sidebar {
+    grid-column: 1;
+    grid-row: 1 / 3;
     display: flex;
-    align-items: flex-end;
+    flex-direction: column;
+    background: var(--bg);
+    min-height: 0;
+  }
+  #sidebar header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 10px 6px 12px;
+    font-weight: 600;
+    color: var(--text-dim);
+  }
+  #newtab {
+    width: 26px; height: 26px;
+    border: none; border-radius: 6px;
+    background: transparent; color: var(--text-dim);
+    font-size: 16px; cursor: pointer;
+  }
+  #newtab:hover { background: var(--hover); }
+  #tablist {
+    flex: 1;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    padding: 0 6px 8px 6px;
+    display: flex;
+    flex-direction: column;
     gap: 2px;
-    padding: 4px 6px 0 6px;
-    overflow-x: auto;
-    scrollbar-width: none;
   }
   .tab {
-    flex: 0 1 200px;
-    min-width: 90px;
+    flex: 0 0 auto;
     height: 32px;
     display: flex;
     align-items: center;
     gap: 6px;
-    padding: 0 6px 0 10px;
-    border-radius: 8px 8px 0 0;
+    padding: 0 4px 0 10px;
+    border-radius: 6px;
     background: var(--tab);
     color: var(--text-dim);
     cursor: default;
@@ -82,22 +108,17 @@
     background: transparent; color: inherit;
     font-size: 12px; line-height: 1;
     cursor: pointer;
+    visibility: hidden;
   }
+  .tab:hover .close { visibility: visible; }
   .tab .close:hover { background: var(--hover); }
   .tab .spinner { font-size: 11px; }
-  #newtab {
-    flex: 0 0 auto;
-    width: 26px; height: 26px;
-    margin: 0 0 3px 2px;
-    border: none; border-radius: 6px;
-    background: transparent; color: var(--text-dim);
-    font-size: 16px; cursor: pointer;
-  }
-  #newtab:hover { background: var(--hover); }
 
   /* --- nav bar --- */
   #nav {
-    height: 44px;
+    grid-column: 2;
+    grid-row: 1;
+    position: relative;
     display: flex;
     align-items: center;
     gap: 6px;
@@ -120,11 +141,11 @@
     font-size: 13px; outline: none;
   }
 
-  /* --- load progress (indeterminate) --- */
+  /* --- load progress (indeterminate), pinned to the nav bar's bottom --- */
   #progress {
+    position: absolute;
+    left: 0; right: 0; bottom: 0;
     height: 2px;
-    background: transparent;
-    position: relative;
     overflow: hidden;
   }
   #progress.loading::after {
@@ -141,17 +162,23 @@
 </style>
 </head>
 <body>
-  <div id="tabstrip"></div>
+  <div id="sidebar">
+    <header>
+      <span>WebForge</span>
+      <button id="newtab" title="New tab (Ctrl+T)">+</button>
+    </header>
+    <div id="tablist"></div>
+  </div>
   <div id="nav">
     <button id="back" title="Back">←</button>
     <button id="forward" title="Forward">→</button>
     <button id="reloadstop" title="Reload">⟳</button>
     <input id="url" type="text" spellcheck="false"
            placeholder="Search or enter address">
+    <div id="progress"></div>
   </div>
-  <div id="progress"></div>
 <script>
-  const tabstrip = document.getElementById('tabstrip');
+  const tablist = document.getElementById('tablist');
   const url = document.getElementById('url');
   const back = document.getElementById('back');
   const forward = document.getElementById('forward');
@@ -159,6 +186,7 @@
   const progress = document.getElementById('progress');
   let activeLoading = false;
 
+  document.getElementById('newtab').onclick = () => webforge.newTab();
   back.onclick = () => webforge.goBack();
   forward.onclick = () => webforge.goForward();
   reloadstop.onclick = () => (activeLoading ? webforge.stop() : webforge.reload());
@@ -197,15 +225,7 @@
   }
 
   webforge.onTabsUpdated((state) => {
-    tabstrip.replaceChildren(
-      ...state.map(makeTab),
-      Object.assign(document.createElement('button'), {
-        id: 'newtab',
-        textContent: '+',
-        title: 'New tab (Ctrl+T)',
-        onclick: () => webforge.newTab(),
-      })
-    );
+    tablist.replaceChildren(...state.map(makeTab));
     const active = state.find((t) => t.active);
     if (!active) return;
     if (document.activeElement !== url) url.value = active.url;
