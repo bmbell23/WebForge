@@ -207,6 +207,16 @@
     cancel.onclick = () => { editing = null; render(); };
     btns.append(save, cancel);
     f.append(title, url, folder, btns);
+    // Ctrl+Enter saves from any field (Enter alone does too, since these are
+    // single-line inputs); Esc cancels.
+    for (const input of [title, url, folder]) {
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); save.onclick(); }
+        if (e.key === 'Escape') { e.preventDefault(); cancel.onclick(); }
+        e.stopPropagation();
+      });
+    }
+    setTimeout(() => { title.focus(); title.select(); }, 0);
     return f;
   }
 

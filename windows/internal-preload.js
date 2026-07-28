@@ -17,7 +17,7 @@ contextBridge.exposeInMainWorld('wf', {
   // bookmarks
   getBookmarks: () => ipcRenderer.invoke('int:get-bookmarks'),
   getHotkeys: () => ipcRenderer.invoke('int:get-hotkeys'),
-  saveBookmark: (b) => ipcRenderer.invoke('int:save-bookmark'),
+  saveBookmark: (b) => ipcRenderer.invoke('int:save-bookmark', b),
   deleteBookmark: (id) => ipcRenderer.invoke('int:delete-bookmark', id),
   moveBookmarks: (ids, folder) => ipcRenderer.invoke('int:move-bookmarks', { ids, folder }),
   renameFolder: (from, to) => ipcRenderer.invoke('int:rename-folder', { from, to }),

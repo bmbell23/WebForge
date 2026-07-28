@@ -247,16 +247,25 @@ function applyTheme(theme) {
 // #40: internal pages (settings, bookmark manager) are ORDINARY TABS now.
 // Reuse the existing tab if one is already open rather than piling up copies.
 const managerOpen = false; // overlays retired; kept false for the layout guards
+const internalTabs = new Map(); // page -> tabId (authoritative; URLs race load)
 function openInternalTab(page) {
-  const target = fileUrl(INTERNAL_PAGES[page]);
+  const target = INTERNAL_PAGES[page] && fileUrl(INTERNAL_PAGES[page]);
   if (!target) return;
+  const known = internalTabs.get(page);
+  if (known != null && tabs.has(known)) {
+    activateTab(known);
+    return;
+  }
+  // Fallback for tabs restored from a previous session (no id recorded yet).
   for (const id of tabOrder) {
     if (tabs.get(id).webContents.getURL().startsWith(target)) {
+      internalTabs.set(page, id);
       activateTab(id);
       return;
     }
   }
-  createTab(target, false);
+  const id = createTab(target, false);
+  if (id !== null) internalTabs.set(page, id);
 }
 
 function toggleBmManager() {
@@ -508,6 +517,7 @@ function closeTab(id) {
   tabs.delete(id);
   hotkeyByTab.delete(id); // #16: the binding survives; only the open tab dies
   faviconByTab.delete(id);
+  for (const [page, tid] of internalTabs) if (tid === id) internalTabs.delete(page);
   tabOrder = tabOrder.filter((t) => t !== id);
   win.contentView.removeChildView(view);
   view.webContents.close();
