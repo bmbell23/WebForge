@@ -353,6 +353,17 @@ function createTab(url = HOME_URL, background = false) {
     openOrFocus(popupUrl, false);
     return { action: 'deny' };
   });
+  // #33: hotkey tabs are STICKY — page-initiated navigation (link clicks)
+  // opens elsewhere instead of navigating the hotkey tab away. Programmatic
+  // loads (hotkey go-home, address bar, bookmarks) don't fire will-navigate,
+  // so they still steer this tab. Known caveat: form submissions are
+  // indistinguishable from link clicks here.
+  wc.on('will-navigate', (event, navUrl) => {
+    if (hotkeyByTab.has(id)) {
+      event.preventDefault();
+      openOrFocus(navUrl, false);
+    }
+  });
   for (const ev of [
     'did-navigate',
     'did-navigate-in-page',
