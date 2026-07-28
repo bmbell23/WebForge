@@ -79,9 +79,16 @@ const activeWc = () => tabs.get(activeId)?.webContents;
 
 function layout() {
   const { width, height } = win.getContentBounds();
-  chrome.setBounds({ x: 0, y: 0, width, height });
   lockView?.setBounds({ x: 0, y: 0, width, height });
   const view = tabs.get(activeId);
+  if (fullscreen) {
+    // #14: the page owns every pixel; chrome collapses to the revealed
+    // hover region (or nothing).
+    view?.setBounds({ x: 0, y: 0, width, height });
+    chrome.setBounds(fsRegionBounds());
+    return;
+  }
+  chrome.setBounds({ x: 0, y: 0, width, height });
   if (view) {
     view.setBounds({
       x: SIDEBAR_W,
@@ -90,6 +97,74 @@ function layout() {
       height: height - TOPBAR_H,
     });
   }
+}
+
+// --- #14: true fullscreen with hover-reveal edges ---
+let fullscreen = false;
+let fsRevealed = null; // 'tabs' | 'nav' | 'bookmarks' | null
+let fsPollTimer = null;
+
+function fsRegionBounds() {
+  const { width, height } = win.getContentBounds();
+  switch (fsRevealed) {
+    case 'tabs':
+      return { x: 0, y: 0, width: SIDEBAR_W, height };
+    case 'nav':
+      return { x: 0, y: 0, width, height: TOPBAR_H + 2 };
+    case 'bookmarks':
+      return { x: width - BM_PANEL_W, y: 0, width: BM_PANEL_W, height };
+    default:
+      return { x: 0, y: 0, width: 0, height: 0 };
+  }
+}
+
+function fsPoll() {
+  if (!fullscreen || locked) return;
+  const { screen } = require('electron');
+  const pt = screen.getCursorScreenPoint();
+  const wb = win.getBounds();
+  const x = pt.x - wb.x;
+  const y = pt.y - wb.y;
+  const { width, height } = win.getContentBounds();
+  const inWindow = x >= 0 && y >= 0 && x <= width && y <= height;
+  let want = null;
+  if (fsRevealed && inWindow) {
+    // Stay open while the cursor is on (or near) the revealed panel.
+    const r = fsRegionBounds();
+    const S = 24;
+    if (x >= r.x - S && x <= r.x + r.width + S && y >= r.y - S && y <= r.y + r.height + S) {
+      want = fsRevealed;
+    }
+  }
+  if (!want && inWindow) {
+    if (x <= 2) want = 'tabs';
+    if (y <= 2) want = 'nav'; // top edge wins the corners
+    if (x >= width - 2) want = 'bookmarks';
+  }
+  if (want !== fsRevealed) {
+    fsRevealed = want;
+    if (want) {
+      win.contentView.addChildView(chrome); // re-add = raise above the page
+      if (want === 'bookmarks') pushBookmarks();
+    }
+    chrome.webContents.send('fs-mode', want);
+    layout();
+  }
+}
+
+function setFullscreenMode(on) {
+  if (locked || on === fullscreen) return;
+  fullscreen = on;
+  fsRevealed = null;
+  chrome.webContents.send('fs-mode', null);
+  win.setFullScreen(on);
+  if (on) {
+    fsPollTimer = setInterval(fsPoll, 150);
+  } else {
+    clearInterval(fsPollTimer);
+    fsPollTimer = null;
+  }
+  layout();
 }
 
 // #11: bookmarks panel + star state.
@@ -391,7 +466,8 @@ async function importPasswordsCsv() {
 
 function showLock() {
   if (lockView) return;
-  locked ? null : saveSessionNow();
+  if (!locked) saveSessionNow();
+  if (fullscreen) setFullscreenMode(false); // lock screen is never chromeless
   locked = true;
   vault.lock();
   // Tear the whole session down — nothing sensitive stays rendered or mapped.
@@ -473,6 +549,7 @@ function setupShortcuts() {
           },
           { label: 'Reload', accelerator: 'CmdOrCtrl+R', click: () => activeWc()?.reload() },
           { label: 'Reload', accelerator: 'F5', visible: false, click: () => activeWc()?.reload() },
+          { label: 'Full Screen', accelerator: 'F11', click: () => setFullscreenMode(!fullscreen) },
           { type: 'separator' },
           { label: 'Quit', accelerator: 'CmdOrCtrl+Q', role: 'quit' },
         ],

@@ -19,6 +19,7 @@ contextBridge.exposeInMainWorld('webforge', {
   removeBookmark: (id) => ipcRenderer.send('remove-bookmark', id),
   importBookmarks: () => ipcRenderer.invoke('import-bookmarks'),
   onBookmarksPanel: (cb) => ipcRenderer.on('bookmarks-panel', (_e, open) => cb(open)),
+  onFsMode: (cb) => ipcRenderer.on('fs-mode', (_e, mode) => cb(mode)), // #14
   onBookmarksUpdated: (cb) => ipcRenderer.on('bookmarks-updated', (_e, list) => cb(list)),
   // vault (#15)
   vaultStatus: () => ipcRenderer.invoke('vault-status'),
