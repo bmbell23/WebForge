@@ -822,7 +822,12 @@ fandom.com##.fandom-video-ad
 async function setupAdblock() {
   try {
     const { ElectronBlocker } = require('@ghostery/adblocker-electron');
-    const blocker = await ElectronBlocker.fromPrebuiltFull(fetch, {
+    // Off-VPN / corporate-proxy safety: the filter-list CDN may be blocked or
+    // black-holed, and a bare fetch would hang indefinitely. The cached engine
+    // in userData is used first, so this only matters on a cold cache.
+    const timedFetch = (url, opts = {}) =>
+      fetch(url, { ...opts, signal: AbortSignal.timeout(20000) });
+    const blocker = await ElectronBlocker.fromPrebuiltFull(timedFetch, {
       path: path.join(app.getPath('userData'), 'adblock-engine.bin'),
       read: fs.promises.readFile,
       write: fs.promises.writeFile,
