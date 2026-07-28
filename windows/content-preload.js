@@ -18,7 +18,13 @@ document.addEventListener(
   (e) => {
     if (!sticky || e.defaultPrevented) return;
     if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-    const a = e.target?.closest?.('a[href]');
+    // Gerrit (PolyGerrit) and other web-component apps put their links inside
+    // shadow roots, so e.target is retargeted to the shadow HOST and
+    // closest('a') finds nothing — which is why interception silently missed.
+    // composedPath() walks INTO the shadow trees.
+    const a =
+      e.composedPath?.().find((n) => n?.tagName === 'A' && n.getAttribute?.('href')) ||
+      e.target?.closest?.('a[href]');
     if (!a) return;
     const href = a.href;
     // Same-page anchors and script hrefs aren't navigation — leave them be.

@@ -8,6 +8,15 @@
 const { app, BaseWindow, WebContentsView, ipcMain, dialog, Menu, nativeTheme, session } = require('electron');
 const path = require('path');
 const fs = require('fs');
+
+// #38: two-finger back/forward on a precision touchpad is Chromium's
+// "overscroll history navigation", which Electron ships DISABLED — that's why
+// the gesture did nothing while mouse buttons and Alt+arrows worked. Must be
+// set before app ready.
+app.commandLine.appendSwitch(
+  'enable-features',
+  'OverscrollHistoryNavigation,TouchpadOverscrollHistoryNavigation'
+);
 const bookmarks = require('./bookmarks');
 const vault = require('./vault');
 const credentials = require('./credentials');
@@ -412,10 +421,30 @@ function createTab(url = null, background = false) {
       openOrFocus(navUrl, false);
     }
   });
-  // #33 round 3: the in-page "bounce back" heuristic is gone — it fought SPA
-  // routers and just flickered. Link clicks are now cancelled at the source
-  // by content-preload.js (see 'open-in-new-tab' below); will-navigate above
-  // stays as the backup for non-anchor navigations.
+  // #33 round 4 — the invariant the user actually asked for: a hotkey tab is
+  // ONLY ever its own site. Clicks are cancelled at the source by
+  // content-preload.js and will-navigate covers plain navigations, but SPA
+  // routers can still slip a pushState past both. This is the last line of
+  // defence: any drift off home gets re-homed and the destination becomes its
+  // own tab. Guarded so the re-home can't re-trigger itself.
+  let reHoming = false;
+  const enforceHome = (navUrl, isMainFrame) => {
+    if (isMainFrame === false || reHoming || locked) return;
+    const keyId = hotkeyByTab.get(id);
+    if (!keyId) return;
+    const home = hotkeys.get(keyId)?.url;
+    if (!home) return;
+    const norm = (u) => String(u).replace(/\/+$/, '');
+    if (norm(navUrl) === norm(home)) return;
+    reHoming = true;
+    openOrFocus(navUrl, false);
+    wc.loadURL(home); // deterministic — goBack() looped on SPA histories
+    setTimeout(() => {
+      reHoming = false;
+    }, 800);
+  };
+  wc.on('did-navigate', (_e2, navUrl) => enforceHome(navUrl, true));
+  wc.on('did-navigate-in-page', (_e2, navUrl, isMainFrame) => enforceHome(navUrl, isMainFrame));
   for (const ev of [
     'did-navigate',
     'did-navigate-in-page',

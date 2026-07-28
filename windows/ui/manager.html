@@ -91,7 +91,7 @@
 <body>
 <div class="inner">
   <h1>Bookmarks</h1>
-  <div class="sub">Drag a bookmark onto a folder to move it. Folders start collapsed; click to open.</div>
+  <div class="sub">Drag bookmarks or whole folders onto a folder to move them; drop on empty space for top level. Folders start collapsed.</div>
   <div class="toolbar">
     <input id="filter" type="text" placeholder="Search bookmarks" spellcheck="false">
     <button id="newfolder">New folder</button>
@@ -158,9 +158,12 @@
     el.style.marginLeft = `${depth * 18}px`;
     el.draggable = true;
     el.ondragstart = (e) => {
-      e.dataTransfer.setData('text/plain', b.id);
+      e.dataTransfer.setData('text/plain', `bm:${b.id}`);
       e.dataTransfer.effectAllowed = 'move';
     };
+    // Dropping ONTO a bookmark means "into that bookmark's folder" — before,
+    // the drop fell through to the root container and dumped it at top level.
+    dropTarget(el, b.folder || '');
     const bound = keyForUrl(b.url);
     if (bound) {
       el.appendChild(Object.assign(document.createElement('span'), { className: 'kbd', textContent: bound }));
@@ -221,7 +224,7 @@
         const id = (e.ctrlKey ? 'Ctrl+' : '') + (e.altKey ? 'Alt+' : '') + e.key;
         await wf.setHotkey(id, b.url, b.title);
       }
-      sub.textContent = 'Drag a bookmark onto a folder to move it. Folders start collapsed; click to open.';
+      sub.textContent = 'Drag bookmarks or whole folders onto a folder to move them; drop on empty space for top level. Folders start collapsed.';
       load();
     };
     window.addEventListener('keydown', onKey, true);
@@ -234,9 +237,19 @@
       e.preventDefault();
       e.stopPropagation();
       el.classList.remove('dropping');
-      const id = e.dataTransfer.getData('text/plain');
-      if (!id) return;
-      await wf.moveBookmarks([id], folderPath);
+      const payload = e.dataTransfer.getData('text/plain');
+      if (!payload) return;
+      if (payload.startsWith('bm:')) {
+        await wf.moveBookmarks([payload.slice(3)], folderPath);
+      } else if (payload.startsWith('folder:')) {
+        // Move a whole folder: re-parent it (and everything under it).
+        const src = payload.slice(7);
+        const name = src.split('/').pop();
+        const dest = folderPath ? `${folderPath}/${name}` : name;
+        // Refuse no-ops and dropping a folder into its own subtree.
+        if (src === dest || dest === src || dest.startsWith(`${src}/`)) return;
+        await wf.renameFolder(src, dest);
+      }
       pendingFolders.delete(folderPath);
       load();
     };
@@ -277,6 +290,12 @@
         row.className = 'folder';
         row.style.marginLeft = `${depth * 18}px`;
         row.onclick = () => { open ? expanded.delete(subPath) : expanded.add(subPath); render(); };
+        row.draggable = true; // folders move too — drag one onto another to nest
+        row.ondragstart = (e) => {
+          e.stopPropagation();
+          e.dataTransfer.setData('text/plain', `folder:${subPath}`);
+          e.dataTransfer.effectAllowed = 'move';
+        };
         row.append(
           Object.assign(document.createElement('span'), { textContent: open ? '▾ 📂' : '▸ 📁' }),
           Object.assign(document.createElement('span'), { textContent: name }),

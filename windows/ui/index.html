@@ -692,8 +692,12 @@
   });
 
   function matchPattern(url, pattern) {
-    if (!pattern) return false;
-    return pattern.endsWith('*') ? url.startsWith(pattern.slice(0, -1)) : url === pattern;
+    if (!pattern || !url) return false;
+    // Always a prefix match. Requiring an exact URL when the pattern had no
+    // trailing '*' meant a perfectly reasonable pattern like
+    // "https://host.example.com" never matched anything (#34 round 2).
+    const p = String(pattern).trim().replace(/\*+$/, '').toLowerCase();
+    return p ? url.toLowerCase().startsWith(p) : false;
   }
   function bucketFor(url) {
     const custom = tabGroups.find((g) => matchPattern(url, g.pattern));
