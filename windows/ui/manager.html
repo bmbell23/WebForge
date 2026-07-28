@@ -111,6 +111,8 @@
   let keys = {};              // keyId -> {url,title}
   const expanded = new Set(); // folder paths currently open (start empty)
   let editing = null;         // bookmark id being edited
+  let renaming = null;        // folder path being renamed (inline)
+  let creating = false;       // inline "new folder" row is showing
 
   const keyForUrl = (url) => Object.keys(keys).find((k) => keys[k].url === url);
 
@@ -125,15 +127,10 @@
   document.getElementById('filter').addEventListener('input', render);
   document.getElementById('collapse').onclick = () => { expanded.clear(); render(); };
   document.getElementById('import').onclick = async () => { await wf.importBookmarks(); load(); };
-  document.getElementById('newfolder').onclick = async () => {
-    const name = prompt('New folder name (use / to nest, e.g. Work/CI):');
-    if (!name) return;
-    // A folder exists only where a bookmark lives, so seed it by moving
-    // nothing — instead remember it as expanded and let the user drop into it.
-    pendingFolders.add(name.trim());
-    expanded.add(name.trim());
-    render();
-  };
+  // window.prompt() is unimplemented in Electron — it silently returns null,
+  // which is why renaming and creating folders appeared to do nothing. All of
+  // it is inline now.
+  document.getElementById('newfolder').onclick = () => { creating = true; render(); };
   const pendingFolders = new Set();
 
   function tree(list) {
@@ -236,6 +233,33 @@
     window.addEventListener('keydown', onKey, true);
   }
 
+  // Inline name editor used by both rename and create.
+  function folderInput({ depth = 0, value = '', label, onSave, onCancel }) {
+    const box = document.createElement('div');
+    box.className = 'editform';
+    box.style.marginLeft = `${depth * 18}px`;
+    const lbl = document.createElement('div');
+    lbl.className = 'sub';
+    lbl.style.margin = '0';
+    lbl.textContent = label;
+    const input = Object.assign(document.createElement('input'), { value, spellcheck: false });
+    const btns = document.createElement('div');
+    btns.className = 'btns';
+    const save = Object.assign(document.createElement('button'), { textContent: 'Save' });
+    save.onclick = () => onSave(input.value.trim());
+    const cancel = Object.assign(document.createElement('button'), { textContent: 'Cancel', className: 'cancel' });
+    cancel.onclick = onCancel;
+    btns.append(save, cancel);
+    box.append(lbl, input, btns);
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') onSave(input.value.trim());
+      if (e.key === 'Escape') onCancel();
+      e.stopPropagation();
+    });
+    setTimeout(() => { input.focus(); input.select(); }, 0);
+    return box;
+  }
+
   function dropTarget(el, folderPath) {
     el.ondragover = (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; el.classList.add('dropping'); };
     el.ondragleave = () => el.classList.remove('dropping');
@@ -288,10 +312,38 @@
       return;
     }
 
+    if (creating) {
+      root.appendChild(folderInput({
+        value: '',
+        label: 'New folder name (use / to nest, e.g. Work/CI)',
+        onSave: (name) => {
+          creating = false;
+          if (name) { pendingFolders.add(name); expanded.add(name); }
+          render();
+        },
+        onCancel: () => { creating = false; render(); },
+      }));
+    }
+
     const t = tree(list);
     const emit = (node, path, depth, target) => {
       for (const [name, sub] of [...node.subs.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
         const subPath = path ? `${path}/${name}` : name;
+        if (renaming === subPath) {
+          target.appendChild(folderInput({
+            depth,
+            value: subPath,
+            label: 'Rename folder (use / to nest)',
+            onSave: async (to) => {
+              renaming = null;
+              if (to && to !== subPath) await wf.renameFolder(subPath, to);
+              load();
+            },
+            onCancel: () => { renaming = null; render(); },
+          }));
+          if (expanded.has(subPath)) emit(sub, subPath, depth + 1, target);
+          continue;
+        }
         const open = expanded.has(subPath);
         const row = document.createElement('div');
         row.className = 'folder';
@@ -311,10 +363,10 @@
         const acts = document.createElement('div');
         acts.className = 'acts';
         const ren = Object.assign(document.createElement('button'), { className: 'iconbtn', textContent: '✎', title: 'Rename folder' });
-        ren.onclick = async (e) => {
+        ren.onclick = (e) => {
           e.stopPropagation();
-          const to = prompt('Rename folder to:', subPath);
-          if (to && to !== subPath) { await wf.renameFolder(subPath, to.trim()); load(); }
+          renaming = subPath;
+          render();
         };
         const del = Object.assign(document.createElement('button'), { className: 'iconbtn', textContent: '✕', title: 'Delete folder (bookmarks move up)' });
         del.onclick = async (e) => {
