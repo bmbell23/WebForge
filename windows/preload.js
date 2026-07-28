@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld('webforge', {
   newTab: () => ipcRenderer.send('new-tab'),
   closeTab: (id) => ipcRenderer.send('close-tab', id),
   activateTab: (id) => ipcRenderer.send('activate-tab', id),
+  togglePin: (id) => ipcRenderer.send('toggle-pin', id),
   onTabsUpdated: (cb) => ipcRenderer.on('tabs-updated', (_e, state) => cb(state)),
   onFocusUrl: (cb) => ipcRenderer.on('focus-url', () => cb()),
 });

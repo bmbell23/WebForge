@@ -7,6 +7,7 @@
 // change; it re-renders from that.
 const { app, BaseWindow, WebContentsView, ipcMain, dialog, Menu, nativeTheme } = require('electron');
 const path = require('path');
+const fs = require('fs');
 
 const HOME_URL = 'https://duckduckgo.com/';
 const SEARCH_URL = 'https://duckduckgo.com/?q=';
@@ -16,9 +17,35 @@ const TOPBAR_H = 44;
 
 let win, chrome;
 const tabs = new Map(); // id -> WebContentsView
-let tabOrder = [];      // ids in tab-strip order
+let tabOrder = [];      // ids in sidebar order (pinned group first)
 let activeId = null;
 let nextTabId = 1;
+const pinnedIds = new Set(); // #9
+
+// #9: pinned tabs survive restarts — their URLs live in userData/pinned.json,
+// saved (debounced) on every state change and restored at launch.
+const pinnedFile = () => path.join(app.getPath('userData'), 'pinned.json');
+let savePinnedTimer = null;
+function savePinnedSoon() {
+  clearTimeout(savePinnedTimer);
+  savePinnedTimer = setTimeout(() => {
+    try {
+      const urls = tabOrder
+        .filter((id) => pinnedIds.has(id))
+        .map((id) => tabs.get(id).webContents.getURL())
+        .filter(Boolean);
+      fs.writeFileSync(pinnedFile(), JSON.stringify(urls));
+    } catch {}
+  }, 500);
+}
+function loadPinnedUrls() {
+  try {
+    const urls = JSON.parse(fs.readFileSync(pinnedFile(), 'utf8'));
+    return Array.isArray(urls) ? urls.filter((u) => typeof u === 'string') : [];
+  } catch {
+    return [];
+  }
+}
 
 // Address-bar input → URL. Same rules as the Android shell: explicit scheme
 // passes through; something host-shaped gets https://; anything else searches.
@@ -55,6 +82,7 @@ function tabState() {
       url: wc.getURL(),
       loading: wc.isLoading(),
       active: id === activeId,
+      pinned: pinnedIds.has(id),
       canGoBack: wc.navigationHistory.canGoBack(),
       canGoForward: wc.navigationHistory.canGoForward(),
     };
@@ -67,6 +95,7 @@ function pushState() {
   const wc = activeWc();
   const title = wc?.getTitle();
   win.setTitle(title ? `${title} — WebForge` : 'WebForge');
+  savePinnedSoon();
 }
 
 function createTab(url = HOME_URL, background = false) {
@@ -112,6 +141,7 @@ function activateTab(id) {
 function closeTab(id) {
   const view = tabs.get(id);
   if (!view) return;
+  if (pinnedIds.has(id)) return; // #9: pinned tabs don't close — unpin first
   const idx = tabOrder.indexOf(id);
   tabs.delete(id);
   tabOrder = tabOrder.filter((t) => t !== id);
@@ -130,6 +160,24 @@ function cycleTab(dir) {
   if (tabOrder.length < 2) return;
   const idx = tabOrder.indexOf(activeId);
   activateTab(tabOrder[(idx + dir + tabOrder.length) % tabOrder.length]);
+}
+
+// #9: pinned tabs.
+function togglePin(id) {
+  if (!tabs.has(id)) return;
+  if (pinnedIds.has(id)) pinnedIds.delete(id);
+  else pinnedIds.add(id);
+  // Keep the pinned group at the top of the sidebar (stable within groups).
+  tabOrder = [
+    ...tabOrder.filter((t) => pinnedIds.has(t)),
+    ...tabOrder.filter((t) => !pinnedIds.has(t)),
+  ];
+  pushState();
+}
+
+function purgeUnpinned() {
+  const doomed = tabOrder.filter((id) => !pinnedIds.has(id));
+  for (const id of doomed) closeTab(id); // closeTab handles activation/last-tab
 }
 
 function createWindow() {
@@ -153,7 +201,11 @@ function createWindow() {
   win.on('maximize', layout);
   win.on('unmaximize', layout);
 
-  createTab(HOME_URL);
+  // #9: bring back pinned tabs from the previous session, then land on Home.
+  const pinnedUrls = loadPinnedUrls();
+  for (const u of pinnedUrls) pinnedIds.add(createTab(u, true));
+  if (pinnedUrls.length) activateTab(tabOrder[0]);
+  else createTab(HOME_URL);
 }
 
 // Keyboard shortcuts via a hidden application menu — accelerators fire no
@@ -166,6 +218,8 @@ function setupShortcuts() {
         submenu: [
           { label: 'New Tab', accelerator: 'CmdOrCtrl+T', click: () => createTab() },
           { label: 'Close Tab', accelerator: 'CmdOrCtrl+W', click: () => closeTab(activeId) },
+          { label: 'Pin/Unpin Tab', accelerator: 'CmdOrCtrl+Shift+P', click: () => togglePin(activeId) },
+          { label: 'Close Unpinned Tabs', accelerator: 'CmdOrCtrl+Shift+W', click: () => purgeUnpinned() },
           { label: 'Next Tab', accelerator: 'Control+Tab', click: () => cycleTab(1) },
           { label: 'Previous Tab', accelerator: 'Control+Shift+Tab', click: () => cycleTab(-1) },
           {
@@ -197,6 +251,7 @@ ipcMain.on('stop', () => activeWc()?.stop());
 ipcMain.on('new-tab', () => createTab());
 ipcMain.on('close-tab', (_e, id) => closeTab(id));
 ipcMain.on('activate-tab', (_e, id) => activateTab(id));
+ipcMain.on('toggle-pin', (_e, id) => togglePin(id));
 
 // Self-update: electron-updater against the generic HTTP provider on
 // dockerhost (releases/windows/ behind nginx :8012 — see docker-compose.yml).

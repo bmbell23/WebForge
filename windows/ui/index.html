@@ -113,6 +113,8 @@
   .tab:hover .close { visibility: visible; }
   .tab .close:hover { background: var(--hover); }
   .tab .spinner { font-size: 11px; }
+  .tab .pin { font-size: 10px; }
+  .tab.pinned .close { display: none; } /* #9: unpin to close */
 
   /* --- nav bar --- */
   #nav {
@@ -198,9 +200,15 @@
 
   function makeTab(t) {
     const el = document.createElement('div');
-    el.className = 'tab' + (t.active ? ' active' : '');
+    el.className = 'tab' + (t.active ? ' active' : '') + (t.pinned ? ' pinned' : '');
     el.title = t.url;
 
+    if (t.pinned) {
+      const pin = document.createElement('span');
+      pin.className = 'pin';
+      pin.textContent = '📌';
+      el.appendChild(pin);
+    }
     if (t.loading) {
       const spin = document.createElement('span');
       spin.className = 'spinner';
@@ -221,6 +229,7 @@
 
     el.onclick = () => webforge.activateTab(t.id);
     el.onauxclick = (e) => { if (e.button === 1) webforge.closeTab(t.id); };
+    el.oncontextmenu = (e) => { e.preventDefault(); webforge.togglePin(t.id); };
     return el;
   }
 
