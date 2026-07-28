@@ -1,0 +1,55 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    height: 44px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 8px;
+    background: #1a2b4c;
+    font: 14px system-ui, sans-serif;
+    -webkit-user-select: none;
+  }
+  button {
+    width: 30px; height: 30px;
+    border: none; border-radius: 6px;
+    background: transparent; color: #cdd6e4;
+    font-size: 16px; cursor: pointer;
+  }
+  button:hover { background: rgba(255, 255, 255, 0.12); }
+  #url {
+    flex: 1; height: 30px;
+    border: none; border-radius: 15px;
+    padding: 0 14px;
+    background: #ffffff; color: #111;
+    font-size: 13px; outline: none;
+  }
+</style>
+</head>
+<body>
+  <button id="back" title="Back">←</button>
+  <button id="forward" title="Forward">→</button>
+  <button id="reload" title="Reload">⟳</button>
+  <input id="url" type="text" spellcheck="false"
+         placeholder="Search or enter address">
+<script>
+  const url = document.getElementById('url');
+  document.getElementById('back').onclick = () => webforge.goBack();
+  document.getElementById('forward').onclick = () => webforge.goForward();
+  document.getElementById('reload').onclick = () => webforge.reload();
+  url.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { webforge.navigate(url.value); url.blur(); }
+  });
+  url.addEventListener('focus', () => url.select());
+  webforge.onUrlChanged((u) => {
+    if (document.activeElement !== url) url.value = u;
+  });
+</script>
+</body>
+</html>

@@ -4,6 +4,10 @@ android/build/
 android/app/build/
 android/local.properties
 
+# Electron / node
+windows/node_modules/
+windows/dist/
+
 # Build artifacts are staged here for the release server — not tracked
 releases/*
 !releases/.gitkeep

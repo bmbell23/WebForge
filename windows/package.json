@@ -1,0 +1,44 @@
+{
+  "name": "webforge",
+  "productName": "WebForge",
+  "description": "WebForge browser — Windows shell",
+  "version": "0.1.1",
+  "main": "main.js",
+  "author": "Brandon Bell",
+  "license": "UNLICENSED",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win nsis"
+  },
+  "dependencies": {
+    "electron-updater": "^6.3.9"
+  },
+  "devDependencies": {
+    "electron": "^34.0.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.webforge.browser",
+    "productName": "WebForge",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "ui/**"
+    ],
+    "win": {
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "deleteAppDataOnUninstall": false
+    },
+    "publish": {
+      "provider": "generic",
+      "url": "http://100.69.184.113:8012/windows"
+    }
+  }
+}
