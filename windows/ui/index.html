@@ -115,6 +115,31 @@
   .tab .spinner { font-size: 11px; }
   .tab .pin { font-size: 10px; }
   .tab.pinned .close { display: none; } /* #9: unpin to close */
+  /* #16: hotkey group */
+  .grouphdr {
+    padding: 8px 6px 3px;
+    font-size: 10px; font-weight: 700;
+    color: var(--text-dim);
+    text-transform: uppercase; letter-spacing: 0.06em;
+  }
+  .kbd {
+    flex: 0 0 auto;
+    min-width: 16px; height: 16px;
+    padding: 0 3px;
+    border-radius: 4px;
+    background: var(--accent); color: var(--tab-active);
+    font: 700 10px ui-monospace, monospace;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+  .bm .setkey {
+    width: 20px; height: 18px;
+    border: none; border-radius: 4px;
+    background: transparent; color: inherit;
+    font-size: 11px; cursor: pointer;
+    visibility: hidden;
+  }
+  .bm:hover .setkey { visibility: visible; }
+  .bm .setkey:hover { background: var(--hover); }
 
   /* --- nav bar --- */
   #nav {
@@ -280,6 +305,12 @@
     el.className = 'tab' + (t.active ? ' active' : '') + (t.pinned ? ' pinned' : '');
     el.title = t.url;
 
+    if (t.hotkey) {
+      const k = document.createElement('span');
+      k.className = 'kbd';
+      k.textContent = t.hotkey;
+      el.appendChild(k);
+    }
     if (t.pinned) {
       const pin = document.createElement('span');
       pin.className = 'pin';
@@ -310,8 +341,26 @@
     return el;
   }
 
+  function groupHdr(label) {
+    const h = document.createElement('div');
+    h.className = 'grouphdr';
+    h.textContent = label;
+    return h;
+  }
+
   webforge.onTabsUpdated((state) => {
-    tablist.replaceChildren(...state.map(makeTab));
+    // #16: sidebar sections — Hotkeys, Pinned, then normal tabs.
+    const hot = state.filter((t) => t.hotkey);
+    const pin = state.filter((t) => !t.hotkey && t.pinned);
+    const rest = state.filter((t) => !t.hotkey && !t.pinned);
+    const nodes = [];
+    if (hot.length) nodes.push(groupHdr('Hotkeys'), ...hot.map(makeTab));
+    if (pin.length) nodes.push(groupHdr('Pinned'), ...pin.map(makeTab));
+    if (rest.length) {
+      if (nodes.length) nodes.push(groupHdr('Tabs'));
+      nodes.push(...rest.map(makeTab));
+    }
+    tablist.replaceChildren(...nodes);
     const active = state.find((t) => t.active);
     if (!active) return;
     if (document.activeElement !== url) url.value = active.url;
@@ -345,7 +394,53 @@
     if (mode) document.body.dataset.fs = mode;
     else delete document.body.dataset.fs;
   });
+
+  // --- #16: hotkeys — chrome-side firing, bookmark ⌨ assignment ---
+  let hotkeysMap = {}; // keyId -> {url, title}
+  let lastBookmarks = [];
+  let capture = null;  // {url, title} while waiting for a key press
+  const keyIdOf = (e) => (e.ctrlKey ? 'Ctrl+' : '') + (e.altKey ? 'Alt+' : '') + e.key;
+  const keyForUrl = (url) => Object.keys(hotkeysMap).find((k) => hotkeysMap[k].url === url);
+
+  window.addEventListener('keydown', (e) => {
+    if (capture) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.key === 'Escape') {
+        capture = null;
+      } else if (e.key === 'Delete' || e.key === 'Backspace') {
+        const k = keyForUrl(capture.url);
+        if (k) webforge.removeHotkey(k);
+        capture = null;
+      } else if (e.key.length === 1 && !e.metaKey) {
+        webforge.setHotkey(keyIdOf(e), capture.url, capture.title);
+        capture = null;
+      }
+      if (!capture) bmcount.textContent = `Bookmarks (${lastBookmarks.length})`;
+      return;
+    }
+    // Fire hotkeys when chrome has focus too (sidebar/panel clicks focus us).
+    const t = e.target;
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) return;
+    if (e.repeat || e.metaKey || e.key.length !== 1) return;
+    const id = keyIdOf(e);
+    if (hotkeysMap[id]) {
+      e.preventDefault();
+      webforge.sendKey(id);
+    }
+  }, true);
+
+  webforge.onHotkeysUpdated((map) => {
+    hotkeysMap = map || {};
+    renderBookmarks(lastBookmarks); // refresh key badges
+  });
+
   webforge.onBookmarksUpdated((list) => {
+    lastBookmarks = list;
+    renderBookmarks(list);
+  });
+
+  function renderBookmarks(list) {
     bmcount.textContent = `Bookmarks (${list.length})`;
     if (!list.length) {
       bmlist.replaceChildren(
@@ -373,10 +468,29 @@
         const el = document.createElement('div');
         el.className = 'bm';
         el.title = b.url;
+        const bound = keyForUrl(b.url);
+        if (bound) {
+          const k = document.createElement('span');
+          k.className = 'kbd';
+          k.textContent = bound;
+          el.appendChild(k);
+        }
         const t = document.createElement('span');
         t.className = 'title';
         t.textContent = b.title;
         el.appendChild(t);
+        const setkey = document.createElement('button');
+        setkey.className = 'setkey';
+        setkey.textContent = '⌨';
+        setkey.title = bound
+          ? `Hotkey: ${bound} — press a new key, Del to unbind, Esc to cancel`
+          : 'Set a hotkey for this bookmark';
+        setkey.onclick = (e) => {
+          e.stopPropagation();
+          capture = { url: b.url, title: b.title };
+          bmcount.textContent = `Press a key for "${b.title}" (Del unbinds, Esc cancels)`;
+        };
+        el.appendChild(setkey);
         const rm = document.createElement('button');
         rm.className = 'rm';
         rm.textContent = '✕';
@@ -389,7 +503,7 @@
       }
     }
     bmlist.replaceChildren(...nodes);
-  });
+  }
 </script>
 </body>
 </html>

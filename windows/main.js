@@ -11,6 +11,7 @@ const fs = require('fs');
 const bookmarks = require('./bookmarks');
 const vault = require('./vault');
 const credentials = require('./credentials');
+const hotkeys = require('./hotkeys');
 
 const HOME_URL = 'https://duckduckgo.com/';
 const SEARCH_URL = 'https://duckduckgo.com/?q=';
@@ -26,7 +27,14 @@ let tabOrder = [];      // ids in sidebar order (pinned group first)
 let activeId = null;
 let nextTabId = 1;
 const pinnedIds = new Set(); // #9
+const hotkeyByTab = new Map(); // #16: tabId -> keyId (a tab per bound hotkey)
 let locked = true;           // #15: the app is a brick until the vault unlocks
+
+// #16: sidebar ordering — hotkey group first, then pinned, then normal.
+function sortTabOrder() {
+  const weight = (id) => (hotkeyByTab.has(id) ? 0 : pinnedIds.has(id) ? 1 : 2);
+  tabOrder = [...tabOrder].sort((a, b) => weight(a) - weight(b));
+}
 
 // #15: the whole session (tabs + pinned flags + active tab) persists
 // AES-encrypted in the vault, saved (debounced) on every state change and
@@ -39,6 +47,7 @@ function sessionSnapshot() {
       .map((id) => ({
         url: tabs.get(id).webContents.getURL(),
         pinned: pinnedIds.has(id),
+        hotkey: hotkeyByTab.get(id) || null,
       }))
       .filter((t) => t.url),
     active: Math.max(0, tabOrder.indexOf(activeId)),
@@ -207,6 +216,7 @@ function tabState() {
       loading: wc.isLoading(),
       active: id === activeId,
       pinned: pinnedIds.has(id),
+      hotkey: hotkeyByTab.get(id) || null,
       starred: bookmarks.has(wc.getURL()),
       canGoBack: wc.navigationHistory.canGoBack(),
       canGoForward: wc.navigationHistory.canGoForward(),
@@ -226,7 +236,10 @@ function pushState() {
 function createTab(url = HOME_URL, background = false) {
   if (locked) return null; // #15
   const id = nextTabId++;
-  const view = new WebContentsView();
+  const view = new WebContentsView({
+    // #16: hotkey capture inside pages (editability-aware, bound keys only).
+    webPreferences: { preload: path.join(__dirname, 'content-preload.js') },
+  });
   tabs.set(id, view);
   tabOrder.push(id);
 
@@ -247,6 +260,7 @@ function createTab(url = HOME_URL, background = false) {
     wc.on(ev, pushState);
   }
   wc.on('did-finish-load', () => tryAutofill(wc)); // #12
+  wc.on('dom-ready', () => wc.send('hotkey-keys', hotkeys.keyIds())); // #16
 
   win.contentView.addChildView(view);
   view.setVisible(false);
@@ -271,6 +285,7 @@ function closeTab(id) {
   if (pinnedIds.has(id)) return; // #9: pinned tabs don't close — unpin first
   const idx = tabOrder.indexOf(id);
   tabs.delete(id);
+  hotkeyByTab.delete(id); // #16: the binding survives; only the open tab dies
   tabOrder = tabOrder.filter((t) => t !== id);
   win.contentView.removeChildView(view);
   view.webContents.close();
@@ -294,17 +309,58 @@ function togglePin(id) {
   if (!tabs.has(id)) return;
   if (pinnedIds.has(id)) pinnedIds.delete(id);
   else pinnedIds.add(id);
-  // Keep the pinned group at the top of the sidebar (stable within groups).
-  tabOrder = [
-    ...tabOrder.filter((t) => pinnedIds.has(t)),
-    ...tabOrder.filter((t) => !pinnedIds.has(t)),
-  ];
+  sortTabOrder();
   pushState();
 }
 
-function purgeUnpinned() {
-  const doomed = tabOrder.filter((id) => !pinnedIds.has(id));
+// #16 redefinition of #9's purge: "normal" = neither pinned nor hotkey.
+function closeNormalTabs() {
+  const doomed = tabOrder.filter((id) => !pinnedIds.has(id) && !hotkeyByTab.has(id));
   for (const id of doomed) closeTab(id); // closeTab handles activation/last-tab
+}
+
+// --- #16: hotkey tabs ---
+
+function broadcastHotkeys() {
+  const keys = hotkeys.keyIds();
+  for (const view of tabs.values()) view.webContents.send('hotkey-keys', keys);
+  chrome?.webContents.send('hotkeys-updated', hotkeys.all());
+}
+
+function tabForHotkey(keyId) {
+  for (const [tid, kid] of hotkeyByTab) if (kid === keyId) return tid;
+  return null;
+}
+
+function handleHotkeyPress(keyId) {
+  if (locked) return;
+  const entry = hotkeys.get(keyId);
+  if (!entry) return;
+  const tabId = tabForHotkey(keyId);
+  if (tabId !== null && tabs.has(tabId)) {
+    if (activeId === tabId) {
+      // Already in the hotkey tab → the hotkey means "take me home".
+      tabs.get(tabId).webContents.loadURL(entry.url);
+    } else {
+      activateTab(tabId);
+    }
+  } else {
+    const newId = createTab(entry.url);
+    if (newId !== null) {
+      hotkeyByTab.set(newId, keyId);
+      sortTabOrder();
+      pushState();
+    }
+  }
+}
+
+// Ctrl+Shift+D: current hotkey tab keeps its page but becomes a normal tab;
+// the next hotkey press opens a fresh hotkey tab at home.
+function detachActiveHotkeyTab() {
+  if (locked || !hotkeyByTab.has(activeId)) return;
+  hotkeyByTab.delete(activeId);
+  sortTabOrder();
+  pushState();
 }
 
 function createWindow() {
@@ -513,8 +569,11 @@ function onUnlocked() {
   if (session?.tabs?.length) {
     for (const t of session.tabs) {
       const id = createTab(t.url, true);
-      if (t.pinned && id !== null) pinnedIds.add(id);
+      if (id === null) continue;
+      if (t.pinned) pinnedIds.add(id);
+      if (t.hotkey && hotkeys.get(t.hotkey)) hotkeyByTab.set(id, t.hotkey); // #16
     }
+    sortTabOrder();
     activateTab(tabOrder[Math.min(session.active ?? 0, tabOrder.length - 1)]);
   } else {
     const legacy = loadLegacyPinned();
@@ -526,6 +585,7 @@ function onUnlocked() {
     else activateTab(tabOrder[0]);
   }
   pushState();
+  broadcastHotkeys(); // #16: chrome badges + per-tab bound-key lists
   syncBookmarks(); // #13: catch up whenever a session starts
 }
 
@@ -540,7 +600,8 @@ function setupShortcuts() {
           { label: 'New Tab', accelerator: 'CmdOrCtrl+T', click: () => createTab() },
           { label: 'Close Tab', accelerator: 'CmdOrCtrl+W', click: () => closeTab(activeId) },
           { label: 'Pin/Unpin Tab', accelerator: 'CmdOrCtrl+Shift+P', click: () => togglePin(activeId) },
-          { label: 'Close Unpinned Tabs', accelerator: 'CmdOrCtrl+Shift+W', click: () => purgeUnpinned() },
+          { label: 'Close Normal Tabs', accelerator: 'CmdOrCtrl+Shift+W', click: () => closeNormalTabs() },
+          { label: 'Detach Hotkey Tab', accelerator: 'CmdOrCtrl+Shift+D', click: () => detachActiveHotkeyTab() },
           { label: 'Bookmarks Panel', accelerator: 'CmdOrCtrl+B', click: () => locked || toggleBookmarksPanel() },
           { label: 'Bookmark This Page', accelerator: 'CmdOrCtrl+D', click: () => locked || toggleStarCurrent() },
           { label: 'Lock WebForge', accelerator: 'CmdOrCtrl+Shift+L', click: () => showLock() },
@@ -578,6 +639,24 @@ ipcMain.on('new-tab', () => createTab());
 ipcMain.on('close-tab', (_e, id) => closeTab(id));
 ipcMain.on('activate-tab', (_e, id) => activateTab(id));
 ipcMain.on('toggle-pin', (_e, id) => togglePin(id));
+
+// #16: hotkey IPC — key presses arrive from content preloads AND the chrome UI.
+ipcMain.on('webforge-key', (_e, keyId) => handleHotkeyPress(String(keyId)));
+ipcMain.on('set-hotkey', (_e, { keyId, url, title }) => {
+  if (locked) return;
+  hotkeys.set(String(keyId), { url, title });
+  broadcastHotkeys();
+  pushState();
+});
+ipcMain.on('remove-hotkey', (_e, keyId) => {
+  if (locked) return;
+  const tabId = tabForHotkey(String(keyId));
+  if (tabId !== null) hotkeyByTab.delete(tabId); // open tab becomes normal
+  hotkeys.remove(String(keyId));
+  broadcastHotkeys();
+  sortTabOrder();
+  pushState();
+});
 
 // #11: bookmarks IPC.
 ipcMain.on('toggle-bookmarks-panel', () => toggleBookmarksPanel());

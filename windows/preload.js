@@ -20,6 +20,11 @@ contextBridge.exposeInMainWorld('webforge', {
   importBookmarks: () => ipcRenderer.invoke('import-bookmarks'),
   onBookmarksPanel: (cb) => ipcRenderer.on('bookmarks-panel', (_e, open) => cb(open)),
   onFsMode: (cb) => ipcRenderer.on('fs-mode', (_e, mode) => cb(mode)), // #14
+  // hotkeys (#16)
+  sendKey: (keyId) => ipcRenderer.send('webforge-key', keyId),
+  setHotkey: (keyId, url, title) => ipcRenderer.send('set-hotkey', { keyId, url, title }),
+  removeHotkey: (keyId) => ipcRenderer.send('remove-hotkey', keyId),
+  onHotkeysUpdated: (cb) => ipcRenderer.on('hotkeys-updated', (_e, map) => cb(map)),
   onBookmarksUpdated: (cb) => ipcRenderer.on('bookmarks-updated', (_e, list) => cb(list)),
   // vault (#15)
   vaultStatus: () => ipcRenderer.invoke('vault-status'),

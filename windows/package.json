@@ -30,6 +30,8 @@
       "bookmarks.js",
       "vault.js",
       "credentials.js",
+      "hotkeys.js",
+      "content-preload.js",
       "ui/**"
     ],
     "win": {
