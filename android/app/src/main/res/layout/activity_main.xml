@@ -1,26 +1,83 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<!-- #51: the page owns the screen. One 48dp bar pinned to the very bottom is
+     the only chrome; panels (tabs / menu / bookmarks / settings) slide over
+     everything as full-screen overlays. -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/root"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:orientation="vertical"
-    android:fitsSystemWindows="true">
+    android:background="@android:color/black">
 
-    <EditText
-        android:id="@+id/urlBar"
+    <FrameLayout
+        android:id="@+id/webContainer"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:inputType="textUri"
-        android:imeOptions="actionGo"
-        android:maxLines="1"
-        android:hint="Search or enter address"
-        android:paddingHorizontal="12dp"
-        android:paddingVertical="8dp"
-        android:selectAllOnFocus="true"
-        android:importantForAutofill="no" />
+        android:layout_height="match_parent"
+        android:layout_marginBottom="48dp" />
 
-    <WebView
-        android:id="@+id/webView"
+    <!-- progress hairline sits just above the bottom bar -->
+    <ProgressBar
+        android:id="@+id/progress"
+        style="?android:attr/progressBarStyleHorizontal"
         android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:layout_weight="1" />
-</LinearLayout>
+        android:layout_height="3dp"
+        android:layout_gravity="bottom"
+        android:layout_marginBottom="48dp"
+        android:max="100"
+        android:visibility="gone" />
+
+    <LinearLayout
+        android:id="@+id/bottomBar"
+        android:layout_width="match_parent"
+        android:layout_height="48dp"
+        android:layout_gravity="bottom"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:paddingHorizontal="8dp"
+        android:background="#0A0A0C">
+
+        <EditText
+            android:id="@+id/urlBar"
+            android:layout_width="0dp"
+            android:layout_height="36dp"
+            android:layout_weight="1"
+            android:background="@drawable/urlbar_bg"
+            android:hint="Search or enter address"
+            android:textColorHint="#7C7C82"
+            android:textColor="#E8E8EA"
+            android:textSize="14sp"
+            android:paddingHorizontal="14dp"
+            android:inputType="textUri"
+            android:imeOptions="actionGo"
+            android:maxLines="1"
+            android:selectAllOnFocus="true"
+            android:importantForAutofill="no" />
+
+        <TextView
+            android:id="@+id/tabsBtn"
+            android:layout_width="42dp"
+            android:layout_height="36dp"
+            android:gravity="center"
+            android:text="1"
+            android:textColor="#E8E8EA"
+            android:textSize="13sp"
+            android:textStyle="bold"
+            android:background="@drawable/tabcount_bg" />
+
+        <TextView
+            android:id="@+id/menuBtn"
+            android:layout_width="42dp"
+            android:layout_height="36dp"
+            android:gravity="center"
+            android:text="☰"
+            android:textColor="#E8E8EA"
+            android:textSize="19sp" />
+    </LinearLayout>
+
+    <!-- Overlay host for the tab sheet, menu, bookmarks and settings. -->
+    <FrameLayout
+        android:id="@+id/overlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#000000"
+        android:visibility="gone" />
+</FrameLayout>
