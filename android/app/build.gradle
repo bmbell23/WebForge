@@ -1,0 +1,47 @@
+plugins {
+    id 'com.android.application'
+    id 'org.jetbrains.kotlin.android'
+}
+
+// Single source of truth for the app version: ../../version.txt at the repo
+// root, bumped by `gvc`. versionName mirrors the file; versionCode is derived
+// so it monotonically increases as long as semver is followed.
+//   1.2.1  ->  10201   (major*10000 + minor*100 + patch)
+def versionFile  = file('../../version.txt')
+def appSemver    = versionFile.exists() ? versionFile.text.trim() : '0.0.0'
+def semverParts  = appSemver.tokenize('.').collect { it.toInteger() }
+while (semverParts.size() < 3) { semverParts << 0 }
+def appVersionCode = semverParts[0] * 10000 + semverParts[1] * 100 + semverParts[2]
+
+android {
+    compileSdk 34
+    namespace 'com.webforge.browser'
+
+    defaultConfig {
+        applicationId "com.webforge.browser"
+        minSdk 26
+        targetSdk 34
+        versionCode appVersionCode
+        versionName appSemver
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+        }
+    }
+
+    buildFeatures {
+        // BuildConfig.VERSION_NAME is what the self-updater compares against
+        // the server's version.txt (AGP 8 turns BuildConfig off by default).
+        buildConfig true
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    kotlinOptions {
+        jvmTarget = '17'
+    }
+}

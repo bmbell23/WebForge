@@ -1,0 +1,13 @@
+# WebForge release server — static nginx serving ./releases on :8012
+# (port claimed per the .augment-guidelines inventory; 8012 = next after
+# chess_app's 8011). Installed apps poll /version.txt and download
+# /webforge.apk (Android) — Windows artifacts land here too (#3).
+services:
+  webforge_releases:
+    image: nginx:alpine
+    container_name: webforge_releases
+    restart: unless-stopped
+    ports:
+      - "8012:80"
+    volumes:
+      - ./releases:/usr/share/nginx/html:ro

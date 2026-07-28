@@ -1,0 +1,12 @@
+# Android / Gradle
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+
+# Build artifacts are staged here for the release server — not tracked
+releases/*
+!releases/.gitkeep
+
+# Secrets
+.env

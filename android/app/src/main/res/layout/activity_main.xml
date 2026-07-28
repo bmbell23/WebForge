@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:fitsSystemWindows="true">
+
+    <EditText
+        android:id="@+id/urlBar"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:inputType="textUri"
+        android:imeOptions="actionGo"
+        android:maxLines="1"
+        android:hint="Search or enter address"
+        android:paddingHorizontal="12dp"
+        android:paddingVertical="8dp"
+        android:selectAllOnFocus="true"
+        android:importantForAutofill="no" />
+
+    <WebView
+        android:id="@+id/webView"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1" />
+</LinearLayout>
