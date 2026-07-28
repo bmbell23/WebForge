@@ -405,6 +405,20 @@
     return h;
   }
 
+  // #17: bucket key for a tab — registrable-ish base domain (heuristic: last
+  // two labels, or three when the TLD looks two-part like co.uk).
+  function baseDomain(url) {
+    try {
+      const host = new URL(url).hostname.replace(/^www\./, '');
+      const parts = host.split('.');
+      if (parts.length <= 2) return host;
+      const twoPart = parts.slice(-2).join('.');
+      return twoPart.length <= 5 ? parts.slice(-3).join('.') : twoPart;
+    } catch {
+      return '';
+    }
+  }
+
   webforge.onTabsUpdated((state) => {
     // #16: sidebar sections — Hotkeys, Pinned, then normal tabs.
     const hot = state.filter((t) => t.hotkey);
@@ -414,8 +428,26 @@
     if (hot.length) nodes.push(groupHdr('Hotkeys'), ...hot.map(makeTab));
     if (pin.length) nodes.push(groupHdr('Pinned'), ...pin.map(makeTab));
     if (rest.length) {
-      if (nodes.length) nodes.push(groupHdr('Tabs'));
-      nodes.push(...rest.map(makeTab));
+      // #17: auto-group normal tabs by site — buckets (with a domain header)
+      // when a domain holds ≥2 tabs; singletons render flat at the end.
+      const buckets = new Map(); // domain -> tabs, insertion-ordered
+      for (const t of rest) {
+        const d = baseDomain(t.url) || '(local)';
+        if (!buckets.has(d)) buckets.set(d, []);
+        buckets.get(d).push(t);
+      }
+      const singles = [];
+      for (const [domain, group] of buckets) {
+        if (group.length >= 2) {
+          nodes.push(groupHdr(`${domain} (${group.length})`), ...group.map(makeTab));
+        } else {
+          singles.push(group[0]);
+        }
+      }
+      if (singles.length) {
+        if (nodes.length) nodes.push(groupHdr('Tabs'));
+        nodes.push(...singles.map(makeTab));
+      }
     }
     tablist.replaceChildren(...nodes);
     const active = state.find((t) => t.active);
