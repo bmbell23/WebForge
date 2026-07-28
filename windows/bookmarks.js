@@ -67,6 +67,18 @@ function add({ title, url, folder = '' }) {
   return true;
 }
 
+// #29: edit title/url/folder in place; bumps timestamps so #13 sync carries it.
+function update(id, fields) {
+  const b = load().find((x) => x.id === id);
+  if (!b) return false;
+  if (fields.title) b.title = fields.title;
+  if (fields.url) b.url = fields.url;
+  if (fields.folder !== undefined) b.folder = fields.folder;
+  b.updatedAt = Date.now();
+  save();
+  return true;
+}
+
 function remove(idOrUrl) {
   const list = load();
   const idx = list.findIndex((b) => b.id === idOrUrl || b.url === idOrUrl);
@@ -134,4 +146,4 @@ function importFile(filePath) {
   return { found: parsed.length, added, skipped: parsed.length - added };
 }
 
-module.exports = { all, has, add, remove, importFile, meta, replaceAll };
+module.exports = { all, has, add, update, remove, importFile, meta, replaceAll };

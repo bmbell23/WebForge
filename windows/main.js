@@ -254,14 +254,44 @@ function togglePwPanel() {
   layout();
 }
 
-function toggleStarCurrent() {
-  const url = activeWc()?.getURL();
+// #29: starring opens a dialog (title + folder picker) instead of instantly
+// toggling; re-starring an existing bookmark opens it prefilled for editing.
+let bmDialogOpen = false;
+function setChromeRaised(on) {
+  if (on) {
+    win.contentView.addChildView(chrome);
+  } else {
+    const view = tabs.get(activeId);
+    if (view) win.contentView.addChildView(view);
+  }
+}
+
+function openBookmarkDialog(prefill) {
+  bmDialogOpen = true;
+  setChromeRaised(true);
+  pushBookmarks(); // dialog needs the folder list
+  chrome.webContents.send('bm-edit', prefill);
+}
+
+function closeBookmarkDialog() {
+  if (!bmDialogOpen) return;
+  bmDialogOpen = false;
+  if (!settingsOpen) setChromeRaised(false);
+  chrome.webContents.send('bm-edit', null);
+}
+
+function starCurrent() {
+  const wc = activeWc();
+  const url = wc?.getURL();
   if (!url) return;
-  if (bookmarks.has(url)) bookmarks.remove(url);
-  else bookmarks.add({ title: activeWc().getTitle(), url });
-  pushBookmarks();
-  pushState(); // star state rides on tab state
-  scheduleSyncSoon();
+  const existing = bookmarks.all().find((b) => b.url === url);
+  openBookmarkDialog({
+    id: existing?.id || null,
+    title: existing?.title || wc.getTitle() || url,
+    url,
+    folder: existing?.folder || '',
+    exists: Boolean(existing),
+  });
 }
 
 function tabState() {
@@ -728,7 +758,7 @@ function menuTemplate() {
           { label: 'Bookmarks Panel', accelerator: 'CmdOrCtrl+B', click: () => locked || toggleBookmarksPanel() },
           { label: 'Passwords Panel', accelerator: 'CmdOrCtrl+Shift+K', click: () => locked || togglePwPanel() },
           { label: 'Settings', accelerator: 'CmdOrCtrl+,', click: () => locked || toggleSettings() },
-          { label: 'Bookmark This Page', accelerator: 'CmdOrCtrl+D', click: () => locked || toggleStarCurrent() },
+          { label: 'Bookmark This Page', accelerator: 'CmdOrCtrl+D', click: () => locked || starCurrent() },
           { label: 'Lock WebForge', accelerator: 'CmdOrCtrl+Shift+L', click: () => showLock() },
           { label: 'Import Passwords (CSV)…', click: () => locked || importPasswordsCsv() },
           { label: 'Next Tab', accelerator: 'Control+Tab', click: () => cycleTab(1) },
@@ -784,7 +814,24 @@ ipcMain.on('remove-hotkey', (_e, keyId) => {
 
 // #11: bookmarks IPC.
 ipcMain.on('toggle-bookmarks-panel', () => toggleBookmarksPanel());
-ipcMain.on('toggle-star', () => toggleStarCurrent());
+ipcMain.on('toggle-star', () => locked || starCurrent());
+
+// #29: bookmark edit dialog IPC.
+ipcMain.on('bm-edit-request', (_e, id) => {
+  if (locked) return;
+  const b = bookmarks.all().find((x) => x.id === id);
+  if (b) openBookmarkDialog({ id: b.id, title: b.title, url: b.url, folder: b.folder || '', exists: true });
+});
+ipcMain.on('bm-save', (_e, { id, title, url, folder }) => {
+  if (locked) return;
+  if (id) bookmarks.update(id, { title, url, folder });
+  else bookmarks.add({ title, url, folder });
+  closeBookmarkDialog();
+  pushBookmarks();
+  pushState();
+  scheduleSyncSoon();
+});
+ipcMain.on('bm-close', () => closeBookmarkDialog());
 ipcMain.on('open-bookmark', (_e, { url, background }) => {
   // #31: an already-open copy of the bookmark wins over navigating/spawning.
   const existing = findTabByUrl(url);
@@ -797,6 +844,7 @@ ipcMain.on('open-bookmark', (_e, { url, background }) => {
 });
 ipcMain.on('remove-bookmark', (_e, id) => {
   bookmarks.remove(id);
+  closeBookmarkDialog(); // no-op unless the dialog's Remove triggered this
   pushBookmarks();
   pushState();
   scheduleSyncSoon();

@@ -288,6 +288,41 @@
     border-left: none;
   }
 
+  /* --- bookmark edit dialog (#29): centered popup; main raises chrome --- */
+  #bmdialog {
+    position: absolute;
+    inset: 0;
+    display: none;
+    place-items: center;
+    background: rgba(0, 0, 0, 0.45);
+    z-index: 30;
+  }
+  #bmdialog.open { display: grid; }
+  #bmdialog .card {
+    width: 380px;
+    padding: 18px;
+    border-radius: 12px;
+    background: var(--bg);
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  #bmdialog h3 { margin: 0 0 4px; font-size: 15px; }
+  #bmdialog input, #bmdialog select {
+    height: 32px;
+    border: none; border-radius: 8px;
+    padding: 0 12px;
+    background: var(--field-bg); color: var(--field-text);
+    font-size: 13px; outline: none;
+  }
+  #bmdialog .btnrow { display: flex; gap: 8px; margin-top: 6px; }
+  #bmdialog .btnrow button {
+    flex: 1; height: 32px;
+    border: none; border-radius: 8px;
+    background: var(--accent); color: #fff;
+    font-size: 13px; font-weight: 600; cursor: pointer;
+  }
+  #bmdialog .btnrow button.cancel { background: var(--surface); color: var(--text); }
+  #bmdialog .btnrow button.danger { background: #a13030; }
+
   /* --- settings overlay (#24): full-cover; main raises the chrome view --- */
   #settings {
     position: absolute;
@@ -385,6 +420,21 @@
       <button id="pwadd" title="Add a login">＋</button>
     </header>
     <div id="pwlist"></div>
+  </div>
+  <div id="bmdialog">
+    <div class="card">
+      <h3 id="bmdlgtitle">Bookmark</h3>
+      <input id="bmdlgname" type="text" placeholder="Title" spellcheck="false">
+      <input id="bmdlgurl" type="text" placeholder="URL" spellcheck="false">
+      <select id="bmdlgfolder"></select>
+      <input id="bmdlgnewfolder" type="text" placeholder="New folder name (use / to nest)"
+             spellcheck="false" style="display:none">
+      <div class="btnrow">
+        <button id="bmdlgsave">Save</button>
+        <button id="bmdlgremove" class="danger">Remove</button>
+        <button id="bmdlgcancel" class="cancel">Cancel</button>
+      </div>
+    </div>
   </div>
   <div id="settings">
     <div class="inner">
@@ -621,6 +671,61 @@
     pwlist.replaceChildren(...nodes);
   }
 
+  // --- bookmark edit dialog (#29) ---
+  const bmdialog = document.getElementById('bmdialog');
+  const bmdlgname = document.getElementById('bmdlgname');
+  const bmdlgurl = document.getElementById('bmdlgurl');
+  const bmdlgfolder = document.getElementById('bmdlgfolder');
+  const bmdlgnewfolder = document.getElementById('bmdlgnewfolder');
+  let bmdlgId = null;
+
+  bmdlgfolder.onchange = () => {
+    bmdlgnewfolder.style.display = bmdlgfolder.value === '__new__' ? '' : 'none';
+    if (bmdlgfolder.value === '__new__') bmdlgnewfolder.focus();
+  };
+  document.getElementById('bmdlgcancel').onclick = () => webforge.closeBookmarkDialog();
+  document.getElementById('bmdlgremove').onclick = () => {
+    if (bmdlgId) webforge.removeBookmark(bmdlgId);
+    else webforge.closeBookmarkDialog();
+  };
+  document.getElementById('bmdlgsave').onclick = () => {
+    const folder =
+      bmdlgfolder.value === '__new__' ? bmdlgnewfolder.value.trim() : bmdlgfolder.value;
+    if (!bmdlgurl.value.trim()) return;
+    webforge.saveBookmark({
+      id: bmdlgId,
+      title: bmdlgname.value.trim() || bmdlgurl.value.trim(),
+      url: bmdlgurl.value.trim(),
+      folder,
+    });
+  };
+  bmdialog.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && e.target !== bmdlgfolder) document.getElementById('bmdlgsave').click();
+    if (e.key === 'Escape') webforge.closeBookmarkDialog();
+    e.stopPropagation(); // typing in the dialog must never fire hotkeys
+  });
+
+  webforge.onBookmarkEdit((data) => {
+    bmdialog.classList.toggle('open', data !== null);
+    if (!data) return;
+    bmdlgId = data.id;
+    document.getElementById('bmdlgtitle').textContent = data.exists ? 'Edit bookmark' : 'Add bookmark';
+    document.getElementById('bmdlgremove').style.display = data.exists ? '' : 'none';
+    bmdlgname.value = data.title || '';
+    bmdlgurl.value = data.url || '';
+    const folders = [...new Set(lastBookmarks.map((b) => b.folder).filter(Boolean))].sort();
+    bmdlgfolder.replaceChildren(
+      new Option('(no folder)', ''),
+      ...folders.map((f) => new Option(f, f)),
+      new Option('＋ New folder…', '__new__')
+    );
+    bmdlgfolder.value = folders.includes(data.folder) ? data.folder : '';
+    bmdlgnewfolder.style.display = 'none';
+    bmdlgnewfolder.value = '';
+    bmdlgname.focus();
+    bmdlgname.select();
+  });
+
   // --- settings (#24) ---
   const settingsEl = document.getElementById('settings');
   document.getElementById('settingsbtn').onclick = () => webforge.toggleSettings();
@@ -697,7 +802,7 @@
     }
     // Fire hotkeys when chrome has focus too (sidebar/panel clicks focus us).
     const t = e.target;
-    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) return;
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT')) return;
     if (e.repeat || e.metaKey || e.key.length !== 1) return;
     const id = keyIdOf(e);
     if (hotkeysMap[id]) {
@@ -767,6 +872,13 @@
         t.className = 'title';
         t.textContent = b.title;
         el.appendChild(t);
+        const edit = Object.assign(document.createElement('button'), {
+          className: 'setkey',
+          textContent: '✎',
+          title: 'Edit bookmark',
+        });
+        edit.onclick = (e) => { e.stopPropagation(); webforge.editBookmark(b.id); };
+        el.appendChild(edit);
         const setkey = document.createElement('button');
         setkey.className = 'setkey';
         setkey.textContent = '⌨';
