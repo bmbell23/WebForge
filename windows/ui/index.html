@@ -345,6 +345,60 @@
   #bmdialog .btnrow button.cancel { background: var(--surface); color: var(--text); }
   #bmdialog .btnrow button.danger { background: #a13030; }
 
+  /* --- bookmark manager overlay (#29) --- */
+  #bmmanager {
+    position: absolute;
+    inset: 0;
+    display: none;
+    background: var(--bg);
+    z-index: 22;
+    overflow-y: auto;
+    scrollbar-width: none;
+  }
+  #bmmanager::-webkit-scrollbar { display: none; }
+  #bmmanager.open { display: block; }
+  #bmmanager .inner { max-width: 860px; margin: 0 auto; padding: 24px 20px 40px; }
+  #bmmanager h1 { font-size: 18px; display: flex; justify-content: space-between; }
+  #bmmclose {
+    width: 28px; height: 28px;
+    border: none; border-radius: 6px;
+    background: transparent; color: var(--text);
+    font-size: 15px; cursor: pointer;
+  }
+  #bmmclose:hover { background: var(--hover); }
+  .bmmtoolbar { display: flex; gap: 8px; margin: 10px 0 14px; flex-wrap: wrap; }
+  .bmmtoolbar select, .bmmtoolbar input, .bmmtoolbar button {
+    height: 30px; border: none; border-radius: 8px;
+    padding: 0 10px; font-size: 12px; outline: none;
+  }
+  .bmmtoolbar select, .bmmtoolbar input { background: var(--field-bg); color: var(--field-text); }
+  #bmmfilter { flex: 1; min-width: 120px; }
+  .bmmtoolbar button { background: var(--surface); color: var(--text); cursor: pointer; }
+  .bmmtoolbar button:hover { background: var(--hover); }
+  .bmmtoolbar button.danger { background: #a13030; color: #fff; }
+  .bmmrow {
+    display: flex; align-items: center; gap: 10px;
+    padding: 6px 4px;
+    border-bottom: 1px solid var(--hover);
+    font-size: 13px;
+  }
+  .bmmrow:hover { background: var(--hover); }
+  .bmmrow .t { min-width: 220px; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .bmmrow .t:hover { cursor: pointer; color: var(--accent); }
+  .bmmrow .u {
+    flex: 1;
+    font: 11px ui-monospace, monospace; color: var(--text-dim);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .bmmrow .f { min-width: 140px; font-size: 11px; color: var(--text-dim); }
+  .bmmrow button {
+    width: 22px; height: 22px;
+    border: none; border-radius: 4px;
+    background: transparent; color: var(--text);
+    cursor: pointer;
+  }
+  .bmmrow button:hover { background: var(--hover); }
+
   /* --- settings overlay (#24): full-cover; main raises the chrome view --- */
   #settings {
     position: absolute;
@@ -463,6 +517,7 @@
     <header>
       <span id="bmcount">Bookmarks</span>
       <span>
+        <button id="bmmanage" title="Bookmark manager (Ctrl+Shift+B)">🗂</button>
         <button id="pwimport" title="Import passwords (Firefox about:logins CSV export)">🔑</button>
         <button id="bmimport" title="Import a Firefox bookmarks export">Import…</button>
       </span>
@@ -493,6 +548,26 @@
         <button id="bmdlgremove" class="danger">Remove</button>
         <button id="bmdlgcancel" class="cancel">Cancel</button>
       </div>
+    </div>
+  </div>
+  <div id="bmmanager">
+    <div class="inner">
+      <h1>Bookmarks <button id="bmmclose" title="Close (Ctrl+Shift+B)">✕</button></h1>
+      <div class="bmmtoolbar">
+        <select id="bmmsort">
+          <option value="title">Sort: Title</option>
+          <option value="url">Sort: URL</option>
+          <option value="folder">Sort: Folder</option>
+          <option value="added">Sort: Recently added</option>
+          <option value="key">Sort: Hotkey</option>
+        </select>
+        <input id="bmmfilter" type="text" placeholder="Filter" spellcheck="false">
+        <button id="bmmall">Select all</button>
+        <button id="bmmdelete" class="danger">Delete selected</button>
+        <select id="bmmmovefolder"></select>
+        <button id="bmmmove">Move selected</button>
+      </div>
+      <div id="bmmlist"></div>
     </div>
   </div>
   <div id="settings">
@@ -810,6 +885,104 @@
     bmdlgname.select();
   });
 
+  // --- bookmark manager (#29) ---
+  const bmmanager = document.getElementById('bmmanager');
+  const bmmlist = document.getElementById('bmmlist');
+  const bmmsort = document.getElementById('bmmsort');
+  const bmmfilter = document.getElementById('bmmfilter');
+  const bmmmovefolder = document.getElementById('bmmmovefolder');
+  let bmmOpen = false;
+  const bmmSelected = new Set();
+
+  document.getElementById('bmmanage').onclick = () => webforge.toggleBmManager();
+  document.getElementById('bmmclose').onclick = () => webforge.toggleBmManager();
+  bmmsort.onchange = renderManager;
+  bmmfilter.addEventListener('input', renderManager);
+  document.getElementById('bmmall').onclick = () => {
+    const visible = managerRows();
+    const allSelected = visible.every((b) => bmmSelected.has(b.id));
+    visible.forEach((b) => (allSelected ? bmmSelected.delete(b.id) : bmmSelected.add(b.id)));
+    renderManager();
+  };
+  document.getElementById('bmmdelete').onclick = () => {
+    for (const id of bmmSelected) webforge.removeBookmark(id);
+    bmmSelected.clear();
+  };
+  document.getElementById('bmmmove').onclick = () => {
+    const folder = bmmmovefolder.value === '__none__' ? '' : bmmmovefolder.value;
+    for (const id of bmmSelected) {
+      const b = lastBookmarks.find((x) => x.id === id);
+      if (b) webforge.saveBookmark({ id: b.id, title: b.title, url: b.url, folder });
+    }
+    bmmSelected.clear();
+  };
+
+  webforge.onBmManager((open) => {
+    bmmOpen = open;
+    bmmanager.classList.toggle('open', open);
+    if (open) {
+      bmmSelected.clear();
+      renderManager();
+    }
+  });
+
+  function managerRows() {
+    const q = bmmfilter.value.trim().toLowerCase();
+    let rows = q
+      ? lastBookmarks.filter((b) =>
+          (b.title || '').toLowerCase().includes(q) ||
+          (b.url || '').toLowerCase().includes(q) ||
+          (b.folder || '').toLowerCase().includes(q))
+      : [...lastBookmarks];
+    const key = bmmsort.value;
+    const cmp = {
+      title: (a, b) => (a.title || '').localeCompare(b.title || '', undefined, { numeric: true }),
+      url: (a, b) => (a.url || '').localeCompare(b.url || ''),
+      folder: (a, b) =>
+        (a.folder || '').localeCompare(b.folder || '') ||
+        (a.title || '').localeCompare(b.title || ''),
+      added: (a, b) => (b.addedAt || 0) - (a.addedAt || 0),
+      key: (a, b) =>
+        (keyForUrl(a.url) || '￿').localeCompare(keyForUrl(b.url) || '￿', undefined, { numeric: true }),
+    }[key];
+    return rows.sort(cmp);
+  }
+
+  function renderManager() {
+    if (!bmmOpen) return;
+    const folders = [...new Set(lastBookmarks.map((b) => b.folder).filter(Boolean))].sort();
+    bmmmovefolder.replaceChildren(
+      new Option('(no folder)', '__none__'),
+      ...folders.map((f) => new Option(f, f))
+    );
+    bmmlist.replaceChildren(
+      ...managerRows().map((b) => {
+        const row = document.createElement('div');
+        row.className = 'bmmrow';
+        const cb = Object.assign(document.createElement('input'), { type: 'checkbox' });
+        cb.checked = bmmSelected.has(b.id);
+        cb.onchange = () => (cb.checked ? bmmSelected.add(b.id) : bmmSelected.delete(b.id));
+        row.appendChild(cb);
+        const bound = keyForUrl(b.url);
+        if (bound) {
+          const k = document.createElement('span');
+          k.className = 'kbd';
+          k.textContent = bound;
+          row.appendChild(k);
+        }
+        const t = Object.assign(document.createElement('span'), { className: 't', textContent: b.title, title: 'Open' });
+        t.onclick = () => webforge.openBookmark(b.url, false);
+        row.appendChild(t);
+        row.appendChild(Object.assign(document.createElement('span'), { className: 'u', textContent: b.url }));
+        row.appendChild(Object.assign(document.createElement('span'), { className: 'f', textContent: b.folder || '—' }));
+        const edit = Object.assign(document.createElement('button'), { textContent: '✎', title: 'Edit' });
+        edit.onclick = () => webforge.editBookmark(b.id);
+        row.appendChild(edit);
+        return row;
+      })
+    );
+  }
+
   // --- settings (#24) ---
   const settingsEl = document.getElementById('settings');
   document.getElementById('settingsbtn').onclick = () => webforge.toggleSettings();
@@ -936,6 +1109,7 @@
   webforge.onBookmarksUpdated((list) => {
     lastBookmarks = list;
     renderBookmarks(list);
+    renderManager(); // #29: keep the manager live while it's open
   });
 
   function renderBookmarks(fullList) {

@@ -97,7 +97,7 @@ function layout() {
     // settings) is open — then chrome needs the full window to show it.
     view?.setBounds({ x: 0, y: 0, width, height });
     chrome.setBounds(
-      bmDialogOpen || settingsOpen ? { x: 0, y: 0, width, height } : fsRegionBounds()
+      bmDialogOpen || settingsOpen || managerOpen ? { x: 0, y: 0, width, height } : fsRegionBounds()
     );
     return;
   }
@@ -187,7 +187,7 @@ function setFullscreenMode(on) {
     // #32: exiting fullscreen must put the page back above the full-window
     // chrome view, or the sidebar-less area renders as blank chrome.
     const view = tabs.get(activeId);
-    if (view && !bmDialogOpen && !settingsOpen) win.contentView.addChildView(view);
+    if (view && !bmDialogOpen && !settingsOpen && !managerOpen) win.contentView.addChildView(view);
   }
   layout();
 }
@@ -214,6 +214,24 @@ function applyTheme(theme) {
   // nativeTheme.themeSource drives prefers-color-scheme in every webContents,
   // so the chrome CSS reacts with no further wiring.
   nativeTheme.themeSource = ['light', 'dark'].includes(theme) ? theme : 'system';
+}
+
+// #29: bookmark manager overlay (same raise mechanics as settings).
+let managerOpen = false;
+function toggleBmManager() {
+  managerOpen = !managerOpen;
+  if (managerOpen) {
+    clearFsReveal();
+    win.contentView.addChildView(chrome);
+    pushBookmarks();
+  } else {
+    const view = tabs.get(activeId);
+    if (view && !settingsOpen) win.contentView.addChildView(view);
+  }
+  chrome.webContents.send('bm-manager', managerOpen);
+  layout();
+  if (managerOpen) chrome.webContents.focus();
+  else activeWc()?.focus();
 }
 
 let settingsOpen = false;
@@ -297,7 +315,7 @@ function openBookmarkDialog(prefill) {
 function closeBookmarkDialog() {
   if (!bmDialogOpen) return;
   bmDialogOpen = false;
-  if (!settingsOpen) setChromeRaised(false);
+  if (!settingsOpen && !managerOpen) setChromeRaised(false);
   chrome.webContents.send('bm-edit', null);
   layout(); // #32: re-collapse chrome if we're fullscreen
   activeWc()?.focus();
@@ -434,7 +452,7 @@ function activateTab(id) {
   // #32: overlay raises leave chrome stacked above content, whose empty
   // region then covers the page ("black tabs"). Keep the active view on top
   // whenever no chrome overlay is meant to be showing.
-  if (!fsRevealed && !bmDialogOpen && !settingsOpen) {
+  if (!fsRevealed && !bmDialogOpen && !settingsOpen && !managerOpen) {
     win.contentView.addChildView(view);
   }
   layout();
@@ -844,6 +862,7 @@ function menuTemplate() {
           { label: 'Close Normal Tabs', accelerator: 'CmdOrCtrl+Shift+W', click: () => closeNormalTabs() },
           { label: 'Detach Hotkey Tab', accelerator: 'CmdOrCtrl+Shift+D', click: () => detachActiveHotkeyTab() },
           { label: 'Bookmarks Panel', accelerator: 'CmdOrCtrl+B', click: () => locked || toggleBookmarksPanel() },
+          { label: 'Bookmark Manager', accelerator: 'CmdOrCtrl+Shift+B', click: () => locked || toggleBmManager() },
           { label: 'Passwords Panel', accelerator: 'CmdOrCtrl+Shift+K', click: () => locked || togglePwPanel() },
           { label: 'Settings', accelerator: 'CmdOrCtrl+,', click: () => locked || toggleSettings() },
           { label: 'Bookmark This Page', accelerator: 'CmdOrCtrl+D', click: () => locked || starCurrent() },
@@ -962,6 +981,9 @@ ipcMain.on('lock-now', () => showLock());
 ipcMain.on('import-passwords', () => {
   if (!locked) importPasswordsCsv();
 });
+
+// #29: bookmark manager IPC.
+ipcMain.on('toggle-bm-manager', () => locked || toggleBmManager());
 
 // #24: settings IPC.
 ipcMain.on('toggle-settings', () => locked || toggleSettings());

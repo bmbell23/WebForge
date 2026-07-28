@@ -25,6 +25,9 @@ contextBridge.exposeInMainWorld('webforge', {
   deleteCred: (id) => ipcRenderer.invoke('creds-delete', id),
   onPwPanel: (cb) => ipcRenderer.on('pw-panel', (_e, open) => cb(open)),
   onCredsUpdated: (cb) => ipcRenderer.on('creds-updated', (_e, list) => cb(list)),
+  // bookmark manager (#29)
+  toggleBmManager: () => ipcRenderer.send('toggle-bm-manager'),
+  onBmManager: (cb) => ipcRenderer.on('bm-manager', (_e, open) => cb(open)),
   // bookmark edit dialog (#29)
   editBookmark: (id) => ipcRenderer.send('bm-edit-request', id),
   saveBookmark: (b) => ipcRenderer.send('bm-save', b),
