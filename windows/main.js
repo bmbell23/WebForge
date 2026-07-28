@@ -72,7 +72,14 @@ function setupAutoUpdate() {
   if (!app.isPackaged) return;
   const { autoUpdater } = require('electron-updater');
   autoUpdater.autoDownload = true;
+  autoUpdater.on('error', () => {});
+
+  // #5: don't re-prompt a version the user already declined — the downloaded
+  // update still applies on next quit (electron-updater's autoInstallOnAppQuit).
+  let promptedVersion = null;
   autoUpdater.on('update-downloaded', (info) => {
+    if (info.version === promptedVersion) return;
+    promptedVersion = info.version;
     dialog
       .showMessageBox(win, {
         type: 'info',
@@ -85,8 +92,20 @@ function setupAutoUpdate() {
         if (response === 0) autoUpdater.quitAndInstall();
       });
   });
-  // Off the tailnet / server down → check just fails quietly.
-  autoUpdater.checkForUpdates().catch(() => {});
+
+  // Off the tailnet / server down → checks just fail quietly.
+  const check = () => autoUpdater.checkForUpdates().catch(() => {});
+
+  // #5: a long-running window must notice releases staged after launch —
+  // startup + every 4h + on window focus (throttled to one check per 10 min).
+  check();
+  setInterval(check, 4 * 60 * 60 * 1000);
+  let lastFocusCheck = Date.now();
+  win.on('focus', () => {
+    if (Date.now() - lastFocusCheck < 10 * 60 * 1000) return;
+    lastFocusCheck = Date.now();
+    check();
+  });
 }
 
 app.whenReady().then(() => {

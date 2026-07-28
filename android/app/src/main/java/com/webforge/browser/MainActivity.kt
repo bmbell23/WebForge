@@ -68,10 +68,17 @@ class MainActivity : Activity() {
 
         if (savedInstanceState == null) {
             webView.loadUrl(HOME_URL)
-            UpdateManager(this).checkForUpdate()
         } else {
             webView.restoreState(savedInstanceState)
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // #5: check on EVERY foreground, not just cold launch — a resumed app
+        // must notice releases staged while it sat in recents. UpdateManager
+        // guards against parallel checks and re-prompting a declined version.
+        UpdateManager(this).checkForUpdate()
     }
 
     private fun navigateTo(input: String) {

@@ -27,14 +27,26 @@ class UpdateManager(private val activity: Activity) {
         private const val BASE_URL = "http://100.69.184.113:8012"
         private const val VERSION_URL = "$BASE_URL/version.txt"
         private const val APK_URL = "$BASE_URL/webforge.apk"
+
+        // Process-wide (#5): checkForUpdate() runs on every onResume, so these
+        // guards keep one check/dialog/download at a time and stop a declined
+        // version from re-prompting on every app switch (until next cold start).
+        @Volatile private var busy = false
+        @Volatile private var dismissedVersion: String? = null
     }
 
     fun checkForUpdate() {
+        if (busy) return
+        busy = true
         Thread {
-            val remote = fetchRemoteVersion() ?: return@Thread
-            if (isNewer(remote, BuildConfig.VERSION_NAME)) {
-                activity.runOnUiThread { offerUpdate(remote) }
+            val remote = fetchRemoteVersion()
+            if (remote == null || remote == dismissedVersion ||
+                !isNewer(remote, BuildConfig.VERSION_NAME)
+            ) {
+                busy = false
+                return@Thread
             }
+            activity.runOnUiThread { offerUpdate(remote) }
         }.start()
     }
 
@@ -64,12 +76,24 @@ class UpdateManager(private val activity: Activity) {
     }
 
     private fun offerUpdate(remote: String) {
-        if (activity.isFinishing) return
+        if (activity.isFinishing) {
+            busy = false
+            return
+        }
+        var accepted = false
         AlertDialog.Builder(activity)
             .setTitle("Update available")
             .setMessage("WebForge v$remote is available (you have v${BuildConfig.VERSION_NAME}). Install now?")
-            .setPositiveButton("Update") { _, _ -> download(remote) }
-            .setNegativeButton("Later", null)
+            .setPositiveButton("Update") { _, _ ->
+                accepted = true
+                download(remote)
+            }
+            .setNegativeButton("Later") { _, _ -> dismissedVersion = remote }
+            .setOnDismissListener {
+                // Covers Later, back-button, and touch-outside; on Update the
+                // download keeps `busy` held until it finishes or fails.
+                if (!accepted) busy = false
+            }
             .show()
     }
 
@@ -88,6 +112,7 @@ class UpdateManager(private val activity: Activity) {
                 val id = intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1)
                 if (id != downloadId) return
                 context.unregisterReceiver(this)
+                busy = false
                 val apkUri = dm.getUriForDownloadedFile(downloadId)
                 if (apkUri == null) {
                     Toast.makeText(context, "Update download failed", Toast.LENGTH_LONG).show()
