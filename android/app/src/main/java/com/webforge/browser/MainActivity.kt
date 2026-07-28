@@ -3,8 +3,10 @@ package com.webforge.browser
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.graphics.Bitmap
+import android.net.http.SslError
 import android.os.Build
 import android.os.Bundle
+import android.os.Message
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
@@ -14,8 +16,10 @@ import android.view.WindowInsetsController
 import android.view.WindowManager
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
+import android.webkit.SslErrorHandler
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
+import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.EditText
@@ -61,6 +65,7 @@ class MainActivity : Activity() {
         progress = findViewById(R.id.progress)
 
         goFullscreen()
+        applyInsets()
 
         urlBar.setOnEditorActionListener { _, actionId, event ->
             val enter = event?.keyCode == KeyEvent.KEYCODE_ENTER && event.action == KeyEvent.ACTION_DOWN
@@ -77,12 +82,12 @@ class MainActivity : Activity() {
         UpdateManager(this).checkForUpdate()
     }
 
-    // --- #51: truly fullscreen — no status bar, no navigation bar ----------
+    // --- #58: status bar VISIBLE above our bar; navigation bar hidden ------
     private fun goFullscreen() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            window.setDecorFitsSystemWindows(false)
+            window.setDecorFitsSystemWindows(false) // we position around insets
             window.insetsController?.apply {
-                hide(WindowInsets.Type.systemBars())
+                hide(WindowInsets.Type.navigationBars())
                 systemBarsBehavior = WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
             }
         } else {
@@ -90,16 +95,36 @@ class MainActivity : Activity() {
             window.decorView.systemUiVisibility =
                 View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
                     View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or
-                    View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
                     View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
-                    View.SYSTEM_UI_FLAG_FULLSCREEN or
                     View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
         }
-        // Draw into the display cutout too — every pixel is ours.
+        // Draw behind the cutout, then pad for it below so the bar clears the
+        // camera instead of hiding under it.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             window.attributes.layoutInDisplayCutoutMode =
                 WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
         }
+    }
+
+    /** Pad the top strip to the real status-bar/cutout height (#58). */
+    private fun applyInsets() {
+        val root = findViewById<View>(R.id.root)
+        root.setOnApplyWindowInsetsListener { v, insets ->
+            val top = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                val bars = insets.getInsets(WindowInsets.Type.statusBars())
+                val cutout = insets.getInsets(WindowInsets.Type.displayCutout())
+                maxOf(bars.top, cutout.top)
+            } else {
+                @Suppress("DEPRECATION")
+                insets.systemWindowInsetTop
+            }
+            findViewById<View>(R.id.statusSpacer).layoutParams =
+                LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, top)
+            // Panels must clear the status bar too.
+            overlay.setPadding(0, top, 0, 0)
+            insets
+        }
+        root.requestApplyInsets()
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
@@ -122,6 +147,8 @@ class MainActivity : Activity() {
             displayZoomControls = false
             setSupportMultipleWindows(true)
             javaScriptCanOpenWindowsAutomatically = true
+            // Self-hosted services are often plain HTTP behind an HTTPS page.
+            mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
         }
         val tab = Tab(nextTabId++, wv)
 
@@ -134,6 +161,25 @@ class MainActivity : Activity() {
                     return true
                 }
                 return false
+            }
+
+            // Self-hosted HTTPS usually means a self-signed cert; WebView
+            // cancels by default and shows a blank page. Ask instead.
+            override fun onReceivedSslError(
+                view: WebView,
+                handler: SslErrorHandler,
+                error: SslError
+            ) {
+                android.app.AlertDialog.Builder(this@MainActivity)
+                    .setTitle("Certificate not trusted")
+                    .setMessage(
+                        "${error.url}\n\nThis site's certificate isn't trusted " +
+                            "(self-signed or expired). Continue anyway?"
+                    )
+                    .setPositiveButton("Continue") { _, _ -> handler.proceed() }
+                    .setNegativeButton("Cancel") { _, _ -> handler.cancel() }
+                    .setOnCancelListener { handler.cancel() }
+                    .show()
             }
 
             override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
@@ -153,6 +199,22 @@ class MainActivity : Activity() {
 
             override fun onReceivedTitle(view: WebView, title: String) {
                 if (tab === active) syncChrome()
+            }
+
+            // #59: with setSupportMultipleWindows(true) and NO handler here,
+            // WebView silently DROPS every target=_blank / window.open link —
+            // which is why links to self-hosted services did nothing.
+            override fun onCreateWindow(
+                view: WebView,
+                isDialog: Boolean,
+                isUserGesture: Boolean,
+                resultMsg: Message
+            ): Boolean {
+                val opened = newTab("about:blank")
+                val transport = resultMsg.obj as WebView.WebViewTransport
+                transport.webView = opened.webView
+                resultMsg.sendToTarget()
+                return true
             }
         }
 

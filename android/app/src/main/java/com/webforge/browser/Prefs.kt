@@ -30,11 +30,16 @@ object Prefs {
 
     fun searchUrl(c: Context) = ENGINES[engineKey(c)]!!.second
 
+    // A bare IP (optionally with a port) is a LAN/tailnet box, which is
+    // almost always plain HTTP — defaulting those to https:// just fails (#59).
+    private val RAW_HOST = Regex("""^\d{1,3}(\.\d{1,3}){3}(:\d+)?(/.*)?$""")
+
     /** Same resolution rules as the Windows address bar. */
     fun resolveInput(c: Context, raw: String): String? {
         val t = raw.trim()
         if (t.isEmpty()) return null
         if (t.startsWith("http://") || t.startsWith("https://")) return t
+        if (RAW_HOST.matches(t)) return "http://$t"
         if (!t.contains(' ') && t.contains('.')) return "https://$t"
         return searchUrl(c) + android.net.Uri.encode(t)
     }
