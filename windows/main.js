@@ -18,8 +18,9 @@ const SEARCH_URL = 'https://duckduckgo.com/?q=';
 // Keep in sync with ui/index.html's grid.
 const SIDEBAR_W = 240;
 const TOPBAR_H = 44;
-const BM_PANEL_W = 280; // #11 bookmarks panel, right side
+const BM_PANEL_W = 280; // #11 bookmarks panel / #26 passwords panel, right side
 let bmPanelOpen = false;
+let pwPanelOpen = false; // #26 — shares the right-panel slot with bookmarks
 
 let win, chrome, lockView;
 const tabs = new Map(); // id -> WebContentsView
@@ -102,7 +103,7 @@ function layout() {
     view.setBounds({
       x: SIDEBAR_W,
       y: TOPBAR_H,
-      width: width - SIDEBAR_W - (bmPanelOpen ? BM_PANEL_W : 0),
+      width: width - SIDEBAR_W - (bmPanelOpen || pwPanelOpen ? BM_PANEL_W : 0),
       height: height - TOPBAR_H,
     });
   }
@@ -191,8 +192,28 @@ function pushBookmarks() {
 
 function toggleBookmarksPanel() {
   bmPanelOpen = !bmPanelOpen;
+  if (bmPanelOpen && pwPanelOpen) {
+    pwPanelOpen = false;
+    chrome?.webContents.send('pw-panel', false);
+  }
   chrome?.webContents.send('bookmarks-panel', bmPanelOpen);
   if (bmPanelOpen) pushBookmarks();
+  layout();
+}
+
+// #26: passwords panel — same right-hand slot as bookmarks.
+function pushCreds() {
+  chrome?.webContents.send('creds-updated', locked ? [] : credentials.list());
+}
+
+function togglePwPanel() {
+  pwPanelOpen = !pwPanelOpen;
+  if (pwPanelOpen && bmPanelOpen) {
+    bmPanelOpen = false;
+    chrome?.webContents.send('bookmarks-panel', false);
+  }
+  chrome?.webContents.send('pw-panel', pwPanelOpen);
+  if (pwPanelOpen) pushCreds();
   layout();
 }
 
@@ -611,6 +632,7 @@ function menuTemplate() {
           { label: 'Close Normal Tabs', accelerator: 'CmdOrCtrl+Shift+W', click: () => closeNormalTabs() },
           { label: 'Detach Hotkey Tab', accelerator: 'CmdOrCtrl+Shift+D', click: () => detachActiveHotkeyTab() },
           { label: 'Bookmarks Panel', accelerator: 'CmdOrCtrl+B', click: () => locked || toggleBookmarksPanel() },
+          { label: 'Passwords Panel', accelerator: 'CmdOrCtrl+Shift+K', click: () => locked || togglePwPanel() },
           { label: 'Bookmark This Page', accelerator: 'CmdOrCtrl+D', click: () => locked || toggleStarCurrent() },
           { label: 'Lock WebForge', accelerator: 'CmdOrCtrl+Shift+L', click: () => showLock() },
           { label: 'Import Passwords (CSV)…', click: () => locked || importPasswordsCsv() },
@@ -702,6 +724,21 @@ ipcMain.on('lock-now', () => showLock());
 // #23: password import must be reachable from the UI, not just the menu.
 ipcMain.on('import-passwords', () => {
   if (!locked) importPasswordsCsv();
+});
+
+// #26: credentials manager IPC.
+ipcMain.on('toggle-pw-panel', () => locked || togglePwPanel());
+ipcMain.handle('creds-save', (_e, cred) => {
+  if (locked) return false;
+  const ok = credentials.upsert(cred || {});
+  if (ok) pushCreds();
+  return ok;
+});
+ipcMain.handle('creds-delete', (_e, id) => {
+  if (locked) return false;
+  const ok = credentials.removeById(String(id));
+  if (ok) pushCreds();
+  return ok;
 });
 
 ipcMain.handle('import-bookmarks', async () => {

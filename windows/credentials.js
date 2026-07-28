@@ -3,11 +3,23 @@
 // plaintext on disk. Import source: Firefox about:logins → "Export passwords"
 // CSV (header: url,username,password,httpRealm,formActionOrigin,...).
 const fs = require('fs');
+const crypto = require('crypto');
 const vault = require('./vault');
 
 function load() {
   const data = vault.readFile('credentials');
-  return Array.isArray(data?.creds) ? data.creds : [];
+  const creds = Array.isArray(data?.creds) ? data.creds : [];
+  // #26: stable ids so the manager UI can address entries; migrates
+  // pre-#26 imports in place on first unlocked read.
+  let migrated = false;
+  for (const c of creds) {
+    if (!c.id) {
+      c.id = crypto.randomUUID();
+      migrated = true;
+    }
+  }
+  if (migrated) save(creds);
+  return creds;
 }
 
 function save(creds) {
@@ -90,7 +102,7 @@ function importCsv(filePath) {
         updated++;
       }
     } else {
-      creds.push({ origin, username, password });
+      creds.push({ id: crypto.randomUUID(), origin, username, password });
       added++;
     }
   }
@@ -98,4 +110,42 @@ function importCsv(filePath) {
   return { found, added, updated };
 }
 
-module.exports = { count, forOrigin, importCsv };
+// --- #26: credentials manager ---
+
+function list() {
+  return load();
+}
+
+// With an id: update that entry; without: add a new one. Origin is normalized
+// to a real origin so autofill's exact-origin match keeps working.
+function upsert({ id, origin, username, password }) {
+  if (!vault.isUnlocked()) return false;
+  let normOrigin;
+  try {
+    normOrigin = new URL(origin).origin;
+  } catch {
+    return false;
+  }
+  if (!password) return false;
+  const creds = load();
+  const existing = id ? creds.find((c) => c.id === id) : null;
+  if (existing) {
+    existing.origin = normOrigin;
+    existing.username = username ?? '';
+    existing.password = password;
+  } else {
+    creds.push({ id: crypto.randomUUID(), origin: normOrigin, username: username ?? '', password });
+  }
+  return save(creds);
+}
+
+function removeById(id) {
+  if (!vault.isUnlocked()) return false;
+  const creds = load();
+  const idx = creds.findIndex((c) => c.id === id);
+  if (idx === -1) return false;
+  creds.splice(idx, 1);
+  return save(creds);
+}
+
+module.exports = { count, forOrigin, importCsv, list, upsert, removeById };

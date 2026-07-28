@@ -168,8 +168,8 @@
     font-size: 13px; outline: none;
   }
 
-  /* --- bookmarks panel (#11), right side under the nav bar --- */
-  #bmpanel {
+  /* --- right-side panels: bookmarks (#11) and passwords (#26) --- */
+  #bmpanel, #pwpanel {
     position: absolute;
     top: 44px; right: 0; bottom: 0;
     width: 280px;
@@ -179,7 +179,51 @@
     border-left: 1px solid var(--hover);
     z-index: 5;
   }
-  #bmpanel.open { display: flex; }
+  #bmpanel.open, #pwpanel.open { display: flex; }
+  #pwpanel header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 10px;
+    font-weight: 600;
+    color: var(--text-dim);
+  }
+  #pwlist { flex: 1; overflow-y: auto; scrollbar-width: thin; padding: 0 6px 10px; }
+  #pwadd {
+    width: 26px; height: 26px;
+    border: none; border-radius: 6px;
+    background: var(--surface); color: var(--text);
+    font-size: 14px; cursor: pointer;
+  }
+  #pwadd:hover { background: var(--hover); }
+  .credpw { font: 11px ui-monospace, monospace; color: var(--text-dim); }
+  .credform {
+    display: flex; flex-direction: column; gap: 6px;
+    padding: 8px; margin: 4px 0;
+    background: var(--tab); border-radius: 8px;
+  }
+  .credform input {
+    height: 28px; border: none; border-radius: 6px;
+    padding: 0 10px;
+    background: var(--field-bg); color: var(--field-text);
+    font-size: 12px; outline: none;
+  }
+  .credform .btnrow { display: flex; gap: 6px; }
+  .credform .btnrow button {
+    flex: 1; height: 26px;
+    border: none; border-radius: 6px;
+    background: var(--accent); color: #fff;
+    font-size: 12px; cursor: pointer;
+  }
+  .credform .btnrow button.cancel { background: var(--surface); color: var(--text); }
+  /* #27: bookmark search */
+  #bmsearch {
+    margin: 0 8px 6px; height: 26px;
+    border: none; border-radius: 13px;
+    padding: 0 12px;
+    background: var(--field-bg); color: var(--field-text);
+    font-size: 12px; outline: none;
+  }
   #bmpanel header {
     display: flex;
     align-items: center;
@@ -272,6 +316,7 @@
            placeholder="Search or enter address">
     <button id="star" title="Bookmark this page (Ctrl+D)">☆</button>
     <button id="bmtoggle" title="Bookmarks (Ctrl+B)">📚</button>
+    <button id="pwtoggle" title="Passwords (Ctrl+Shift+K)">🔐</button>
     <div id="progress"></div>
   </div>
   <div id="bmpanel">
@@ -282,7 +327,15 @@
         <button id="bmimport" title="Import a Firefox bookmarks export">Import…</button>
       </span>
     </header>
+    <input id="bmsearch" type="text" placeholder="Search bookmarks" spellcheck="false">
     <div id="bmlist"></div>
+  </div>
+  <div id="pwpanel">
+    <header>
+      <span id="pwcount">Passwords</span>
+      <button id="pwadd" title="Add a login">＋</button>
+    </header>
+    <div id="pwlist"></div>
   </div>
 <script>
   const tablist = document.getElementById('tablist');
@@ -385,6 +438,79 @@
   star.onclick = () => webforge.toggleStar();
   document.getElementById('bmtoggle').onclick = () => webforge.toggleBookmarksPanel();
   document.getElementById('pwimport').onclick = () => webforge.importPasswords();
+
+  // --- passwords panel (#26) ---
+  const pwpanel = document.getElementById('pwpanel');
+  const pwlist = document.getElementById('pwlist');
+  const pwcount = document.getElementById('pwcount');
+  let credsList = [];
+  let pwEditing = null; // credential id, or 'new'
+
+  document.getElementById('pwtoggle').onclick = () => webforge.togglePwPanel();
+  document.getElementById('pwadd').onclick = () => { pwEditing = 'new'; renderCreds(); };
+  webforge.onPwPanel((open) => { pwpanel.classList.toggle('open', open); if (!open) pwEditing = null; });
+  webforge.onCredsUpdated((list) => { credsList = list || []; pwEditing = null; renderCreds(); });
+
+  function credForm(c) {
+    const f = document.createElement('div');
+    f.className = 'credform';
+    const mk = (ph, val, type = 'text') =>
+      Object.assign(document.createElement('input'), { placeholder: ph, value: val || '', type, spellcheck: false });
+    const fOrigin = mk('https://site.com', c.origin);
+    const fUser = mk('username', c.username);
+    const fPass = mk('password', c.password);
+    f.append(fOrigin, fUser, fPass);
+    const row = document.createElement('div');
+    row.className = 'btnrow';
+    const save = Object.assign(document.createElement('button'), { textContent: 'Save' });
+    save.onclick = async () => {
+      const ok = await webforge.saveCred({ id: c.id, origin: fOrigin.value, username: fUser.value, password: fPass.value });
+      if (!ok) pwcount.textContent = 'Save failed — origin must be a URL, password required';
+    };
+    const cancel = Object.assign(document.createElement('button'), { textContent: 'Cancel', className: 'cancel' });
+    cancel.onclick = () => { pwEditing = null; renderCreds(); };
+    row.append(save, cancel);
+    f.appendChild(row);
+    return f;
+  }
+
+  function renderCreds() {
+    pwcount.textContent = `Passwords (${credsList.length})`;
+    const nodes = [];
+    if (pwEditing === 'new') nodes.push(credForm({}));
+    for (const c of credsList) {
+      if (pwEditing === c.id) { nodes.push(credForm(c)); continue; }
+      const el = document.createElement('div');
+      el.className = 'bm';
+      el.title = c.origin;
+      const t = document.createElement('span');
+      t.className = 'title';
+      t.textContent = `${c.origin.replace(/^https?:\/\//, '')} — ${c.username || '(no user)'}`;
+      el.appendChild(t);
+      const pw = document.createElement('span');
+      pw.className = 'credpw';
+      el.appendChild(pw);
+      const eye = Object.assign(document.createElement('button'), { className: 'rm', textContent: '👁', title: 'Show password' });
+      eye.onclick = (e) => { e.stopPropagation(); pw.textContent = pw.textContent ? '' : c.password; };
+      el.appendChild(eye);
+      const rm = Object.assign(document.createElement('button'), { className: 'rm', textContent: '✕', title: 'Delete login' });
+      rm.onclick = (e) => { e.stopPropagation(); webforge.deleteCred(c.id); };
+      el.appendChild(rm);
+      el.onclick = () => { pwEditing = c.id; renderCreds(); };
+      nodes.push(el);
+    }
+    if (!nodes.length) {
+      nodes.push(Object.assign(document.createElement('div'), {
+        id: 'bmempty',
+        textContent: 'No saved logins. Import a Firefox CSV (🔑 in Bookmarks) or add one with ＋.',
+      }));
+    }
+    pwlist.replaceChildren(...nodes);
+  }
+
+  // --- bookmark search (#27) ---
+  const bmsearch = document.getElementById('bmsearch');
+  bmsearch.addEventListener('input', () => renderBookmarks(lastBookmarks));
   document.getElementById('bmimport').onclick = async () => {
     const r = await webforge.importBookmarks();
     if (!r) return;
@@ -444,8 +570,18 @@
     renderBookmarks(list);
   });
 
-  function renderBookmarks(list) {
-    bmcount.textContent = `Bookmarks (${list.length})`;
+  function renderBookmarks(fullList) {
+    // #27: live search over title/url/folder.
+    const q = (document.getElementById('bmsearch')?.value || '').trim().toLowerCase();
+    const list = q
+      ? fullList.filter((b) =>
+          (b.title || '').toLowerCase().includes(q) ||
+          (b.url || '').toLowerCase().includes(q) ||
+          (b.folder || '').toLowerCase().includes(q))
+      : fullList;
+    bmcount.textContent = q
+      ? `Bookmarks (${list.length}/${fullList.length})`
+      : `Bookmarks (${fullList.length})`;
     if (!list.length) {
       bmlist.replaceChildren(
         Object.assign(document.createElement('div'), {

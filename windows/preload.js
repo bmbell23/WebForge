@@ -19,6 +19,12 @@ contextBridge.exposeInMainWorld('webforge', {
   removeBookmark: (id) => ipcRenderer.send('remove-bookmark', id),
   importBookmarks: () => ipcRenderer.invoke('import-bookmarks'),
   importPasswords: () => ipcRenderer.send('import-passwords'), // #23
+  // credentials manager (#26)
+  togglePwPanel: () => ipcRenderer.send('toggle-pw-panel'),
+  saveCred: (cred) => ipcRenderer.invoke('creds-save', cred),
+  deleteCred: (id) => ipcRenderer.invoke('creds-delete', id),
+  onPwPanel: (cb) => ipcRenderer.on('pw-panel', (_e, open) => cb(open)),
+  onCredsUpdated: (cb) => ipcRenderer.on('creds-updated', (_e, list) => cb(list)),
   onBookmarksPanel: (cb) => ipcRenderer.on('bookmarks-panel', (_e, open) => cb(open)),
   onFsMode: (cb) => ipcRenderer.on('fs-mode', (_e, mode) => cb(mode)), // #14
   // hotkeys (#16)
