@@ -75,6 +75,13 @@
     font-size: 16px; cursor: pointer;
   }
   #newtab:hover { background: var(--hover); }
+  #settingsbtn {
+    width: 26px; height: 26px;
+    border: none; border-radius: 6px;
+    background: transparent; color: var(--text-dim);
+    font-size: 13px; cursor: pointer;
+  }
+  #settingsbtn:hover { background: var(--hover); }
   #tablist {
     flex: 1;
     overflow-y: auto;
@@ -281,6 +288,45 @@
     border-left: none;
   }
 
+  /* --- settings overlay (#24): full-cover; main raises the chrome view --- */
+  #settings {
+    position: absolute;
+    inset: 0;
+    display: none;
+    background: var(--bg);
+    z-index: 20;
+    overflow-y: auto;
+  }
+  #settings.open { display: block; }
+  #settings .inner { max-width: 640px; margin: 0 auto; padding: 24px 20px 40px; }
+  #settings h1 { font-size: 18px; display: flex; justify-content: space-between; }
+  #settings h2 {
+    font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em;
+    color: var(--text-dim); margin: 26px 0 8px;
+  }
+  #settingsclose {
+    width: 28px; height: 28px;
+    border: none; border-radius: 6px;
+    background: transparent; color: var(--text);
+    font-size: 15px; cursor: pointer;
+  }
+  #settingsclose:hover { background: var(--hover); }
+  .themeopt { display: flex; gap: 8px; }
+  .themeopt button {
+    flex: 1; height: 34px;
+    border: none; border-radius: 8px;
+    background: var(--tab-active); color: var(--text);
+    font-size: 13px; cursor: pointer;
+  }
+  .themeopt button.sel { background: var(--accent); color: #fff; }
+  #settings table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  #settings td { padding: 5px 4px; border-bottom: 1px solid var(--hover); }
+  #settings td:first-child {
+    width: 170px;
+    font: 600 12px ui-monospace, monospace;
+    color: var(--text-dim);
+  }
+
   /* --- load progress (indeterminate), pinned to the nav bar's bottom --- */
   #progress {
     position: absolute;
@@ -305,7 +351,9 @@
   <div id="sidebar">
     <header>
       <span>WebForge</span>
-      <button id="newtab" title="New tab (Ctrl+T)">+</button>
+      <span>
+        <button id="settingsbtn" title="Settings (Ctrl+,)">⚙</button><button id="newtab" title="New tab (Ctrl+T)">+</button>
+      </span>
     </header>
     <div id="tablist"></div>
   </div>
@@ -337,6 +385,38 @@
       <button id="pwadd" title="Add a login">＋</button>
     </header>
     <div id="pwlist"></div>
+  </div>
+  <div id="settings">
+    <div class="inner">
+      <h1>Settings <button id="settingsclose" title="Close (Ctrl+,)">✕</button></h1>
+      <h2>Appearance</h2>
+      <div class="themeopt">
+        <button data-theme="system">System</button>
+        <button data-theme="light">Light</button>
+        <button data-theme="dark">Dark (OLED)</button>
+      </div>
+      <h2>Keybindings</h2>
+      <table>
+        <tr><td>Ctrl+T</td><td>New tab</td></tr>
+        <tr><td>Ctrl+W / Ctrl+F4</td><td>Close tab</td></tr>
+        <tr><td>Ctrl+Tab / Ctrl+Shift+Tab</td><td>Next / previous tab</td></tr>
+        <tr><td>Ctrl+PgDn / Ctrl+PgUp</td><td>Next / previous tab</td></tr>
+        <tr><td>Ctrl+Shift+U</td><td>Duplicate tab</td></tr>
+        <tr><td>Ctrl+Shift+P</td><td>Pin / unpin tab</td></tr>
+        <tr><td>Ctrl+Shift+W</td><td>Close all normal tabs (spares pinned + hotkey)</td></tr>
+        <tr><td>Ctrl+Shift+D</td><td>Detach hotkey tab to a normal tab</td></tr>
+        <tr><td>Ctrl+L</td><td>Focus address bar</td></tr>
+        <tr><td>Ctrl+R / F5</td><td>Reload</td></tr>
+        <tr><td>F11</td><td>True fullscreen (hover edges reveal UI)</td></tr>
+        <tr><td>Ctrl+B</td><td>Bookmarks panel</td></tr>
+        <tr><td>Ctrl+D</td><td>Bookmark / unbookmark this page</td></tr>
+        <tr><td>Ctrl+Shift+K</td><td>Passwords panel</td></tr>
+        <tr><td>Ctrl+Shift+L</td><td>Lock WebForge</td></tr>
+        <tr><td>Ctrl+,</td><td>Settings</td></tr>
+        <tr><td>Ctrl+Q</td><td>Quit</td></tr>
+        <tr><td>your hotkeys</td><td>Bind via ⌨ on a bookmark — single keys (a, B, !, Ctrl+j) jump to that site's tab; press again inside it to go home</td></tr>
+      </table>
+    </div>
   </div>
 <script>
   const tablist = document.getElementById('tablist');
@@ -540,6 +620,25 @@
     }
     pwlist.replaceChildren(...nodes);
   }
+
+  // --- settings (#24) ---
+  const settingsEl = document.getElementById('settings');
+  document.getElementById('settingsbtn').onclick = () => webforge.toggleSettings();
+  document.getElementById('settingsclose').onclick = () => webforge.toggleSettings();
+  const themeBtns = [...document.querySelectorAll('.themeopt button')];
+  for (const b of themeBtns) {
+    b.onclick = () => {
+      webforge.setTheme(b.dataset.theme);
+      themeBtns.forEach((x) => x.classList.toggle('sel', x === b));
+    };
+  }
+  webforge.onSettings((s) => {
+    settingsEl.classList.toggle('open', s !== null);
+    if (s) {
+      const cur = s.theme || 'system';
+      themeBtns.forEach((x) => x.classList.toggle('sel', x.dataset.theme === cur));
+    }
+  });
 
   // --- bookmark search (#27) ---
   const bmsearch = document.getElementById('bmsearch');

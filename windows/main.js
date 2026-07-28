@@ -185,6 +185,43 @@ function setFullscreenMode(on) {
   layout();
 }
 
+// #24: app settings — plain JSON in userData (sync-ready shape).
+const settingsFile = () => path.join(app.getPath('userData'), 'settings.json');
+let settingsCache = null;
+function getSettings() {
+  if (!settingsCache) {
+    try {
+      settingsCache = JSON.parse(fs.readFileSync(settingsFile(), 'utf8'));
+    } catch {
+      settingsCache = {};
+    }
+  }
+  return settingsCache;
+}
+function saveSettings() {
+  try {
+    fs.writeFileSync(settingsFile(), JSON.stringify(settingsCache));
+  } catch {}
+}
+function applyTheme(theme) {
+  // nativeTheme.themeSource drives prefers-color-scheme in every webContents,
+  // so the chrome CSS reacts with no further wiring.
+  nativeTheme.themeSource = ['light', 'dark'].includes(theme) ? theme : 'system';
+}
+
+let settingsOpen = false;
+function toggleSettings() {
+  settingsOpen = !settingsOpen;
+  if (settingsOpen) {
+    win.contentView.addChildView(chrome); // raise chrome above the page
+  } else {
+    const view = tabs.get(activeId);
+    if (view) win.contentView.addChildView(view); // re-raise content
+  }
+  chrome.webContents.send('settings', settingsOpen ? getSettings() : null);
+  layout();
+}
+
 // #11: bookmarks panel + star state.
 function pushBookmarks() {
   chrome?.webContents.send('bookmarks-updated', bookmarks.all());
@@ -690,6 +727,7 @@ function menuTemplate() {
           { label: 'Detach Hotkey Tab', accelerator: 'CmdOrCtrl+Shift+D', click: () => detachActiveHotkeyTab() },
           { label: 'Bookmarks Panel', accelerator: 'CmdOrCtrl+B', click: () => locked || toggleBookmarksPanel() },
           { label: 'Passwords Panel', accelerator: 'CmdOrCtrl+Shift+K', click: () => locked || togglePwPanel() },
+          { label: 'Settings', accelerator: 'CmdOrCtrl+,', click: () => locked || toggleSettings() },
           { label: 'Bookmark This Page', accelerator: 'CmdOrCtrl+D', click: () => locked || toggleStarCurrent() },
           { label: 'Lock WebForge', accelerator: 'CmdOrCtrl+Shift+L', click: () => showLock() },
           { label: 'Import Passwords (CSV)…', click: () => locked || importPasswordsCsv() },
@@ -789,6 +827,14 @@ ipcMain.on('import-passwords', () => {
   if (!locked) importPasswordsCsv();
 });
 
+// #24: settings IPC.
+ipcMain.on('toggle-settings', () => locked || toggleSettings());
+ipcMain.on('set-theme', (_e, theme) => {
+  getSettings().theme = String(theme);
+  saveSettings();
+  applyTheme(String(theme));
+});
+
 // #26: credentials manager IPC.
 ipcMain.on('toggle-pw-panel', () => locked || togglePwPanel());
 ipcMain.handle('creds-save', (_e, cred) => {
@@ -868,6 +914,7 @@ function setupAutoUpdate() {
 }
 
 app.whenReady().then(() => {
+  applyTheme(getSettings().theme); // #24: before any view paints
   setupAdblock(); // async — engine attaches to the session when ready
   createWindow();
   setupShortcuts();

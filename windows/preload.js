@@ -25,6 +25,10 @@ contextBridge.exposeInMainWorld('webforge', {
   deleteCred: (id) => ipcRenderer.invoke('creds-delete', id),
   onPwPanel: (cb) => ipcRenderer.on('pw-panel', (_e, open) => cb(open)),
   onCredsUpdated: (cb) => ipcRenderer.on('creds-updated', (_e, list) => cb(list)),
+  // settings (#24)
+  toggleSettings: () => ipcRenderer.send('toggle-settings'),
+  setTheme: (theme) => ipcRenderer.send('set-theme', theme),
+  onSettings: (cb) => ipcRenderer.on('settings', (_e, s) => cb(s)),
   onBookmarksPanel: (cb) => ipcRenderer.on('bookmarks-panel', (_e, open) => cb(open)),
   onFsMode: (cb) => ipcRenderer.on('fs-mode', (_e, mode) => cb(mode)), // #14
   // hotkeys (#16)
