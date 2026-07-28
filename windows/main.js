@@ -2,7 +2,7 @@
 // WebContentsView (ui/index.html: tab strip + nav bar) and one content
 // WebContentsView per tab — only the active tab's view is visible. Full tab
 // state is broadcast to the chrome UI on every change; it re-renders from that.
-const { app, BaseWindow, WebContentsView, ipcMain, dialog, Menu } = require('electron');
+const { app, BaseWindow, WebContentsView, ipcMain, dialog, Menu, nativeTheme } = require('electron');
 const path = require('path');
 
 const HOME_URL = 'https://duckduckgo.com/';
@@ -121,7 +121,13 @@ function cycleTab(dir) {
 }
 
 function createWindow() {
-  win = new BaseWindow({ width: 1280, height: 840, title: 'WebForge' });
+  win = new BaseWindow({
+    width: 1280,
+    height: 840,
+    title: 'WebForge',
+    // #7: match the chrome theme so resize flashes aren't white in dark mode.
+    backgroundColor: nativeTheme.shouldUseDarkColors ? '#10203c' : '#dde3ec',
+  });
 
   chrome = new WebContentsView({
     webPreferences: { preload: path.join(__dirname, 'preload.js') },

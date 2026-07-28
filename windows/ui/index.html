@@ -3,14 +3,44 @@
 <head>
 <meta charset="utf-8">
 <style>
-  :root { color-scheme: light dark; }
+  /* #7: theme tokens — chrome follows the OS light/dark setting. */
+  :root {
+    color-scheme: light dark;
+    --bg: #dde3ec;          /* chrome background */
+    --surface: #cbd4e2;     /* nav bar */
+    --tab: #cfd7e3;         /* inactive tab */
+    --tab-active: #f6f8fb;  /* active tab */
+    --text: #1a2b4c;
+    --text-dim: #5a6b88;
+    --hover: rgba(0, 0, 0, 0.08);
+    --field-bg: #ffffff;
+    --field-text: #111111;
+    --accent: #2f6fd0;
+    --disabled: #9aa8bd;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #10203c;
+      --surface: #1a2b4c;
+      --tab: #182a4a;
+      --tab-active: #2c4370;
+      --text: #e3eaf5;
+      --text-dim: #9fb0c9;
+      --hover: rgba(255, 255, 255, 0.12);
+      --field-bg: #0d1830;
+      --field-text: #e3eaf5;
+      --accent: #7fb2ff;
+      --disabled: #6b7c99;
+    }
+  }
   * { box-sizing: border-box; }
   body {
     margin: 0;
     height: 80px; /* keep in sync with CHROME_HEIGHT in main.js */
     display: flex;
     flex-direction: column;
-    background: #1a2b4c;
+    background: var(--bg);
+    color: var(--text);
     font: 13px system-ui, sans-serif;
     -webkit-user-select: none;
     overflow: hidden;
@@ -35,12 +65,12 @@
     gap: 6px;
     padding: 0 6px 0 10px;
     border-radius: 8px 8px 0 0;
-    background: #10203c;
-    color: #9fb0c9;
+    background: var(--tab);
+    color: var(--text-dim);
     cursor: default;
     white-space: nowrap;
   }
-  .tab.active { background: #2c4370; color: #fff; }
+  .tab.active { background: var(--tab-active); color: var(--text); }
   .tab .title {
     flex: 1;
     overflow: hidden;
@@ -53,17 +83,17 @@
     font-size: 12px; line-height: 1;
     cursor: pointer;
   }
-  .tab .close:hover { background: rgba(255, 255, 255, 0.2); }
+  .tab .close:hover { background: var(--hover); }
   .tab .spinner { font-size: 11px; }
   #newtab {
     flex: 0 0 auto;
     width: 26px; height: 26px;
     margin: 0 0 3px 2px;
     border: none; border-radius: 6px;
-    background: transparent; color: #cdd6e4;
+    background: transparent; color: var(--text-dim);
     font-size: 16px; cursor: pointer;
   }
-  #newtab:hover { background: rgba(255, 255, 255, 0.12); }
+  #newtab:hover { background: var(--hover); }
 
   /* --- nav bar --- */
   #nav {
@@ -72,21 +102,21 @@
     align-items: center;
     gap: 6px;
     padding: 0 8px;
-    background: #2c4370;
+    background: var(--surface);
   }
   #nav button {
     width: 30px; height: 30px;
     border: none; border-radius: 6px;
-    background: transparent; color: #e3eaf5;
+    background: transparent; color: var(--text);
     font-size: 16px; cursor: pointer;
   }
-  #nav button:hover:not(:disabled) { background: rgba(255, 255, 255, 0.12); }
-  #nav button:disabled { color: #6b7c99; cursor: default; }
+  #nav button:hover:not(:disabled) { background: var(--hover); }
+  #nav button:disabled { color: var(--disabled); cursor: default; }
   #url {
     flex: 1; height: 30px;
     border: none; border-radius: 15px;
     padding: 0 14px;
-    background: #ffffff; color: #111;
+    background: var(--field-bg); color: var(--field-text);
     font-size: 13px; outline: none;
   }
 
@@ -102,7 +132,7 @@
     position: absolute;
     top: 0; left: -30%;
     width: 30%; height: 100%;
-    background: #7fb2ff;
+    background: var(--accent);
     animation: slide 1s linear infinite;
   }
   @keyframes slide {
