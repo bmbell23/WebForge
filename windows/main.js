@@ -119,6 +119,14 @@ function fsRegionBounds() {
 }
 
 function fsPoll() {
+  // #20: the window can die (quit while fullscreen) with this interval still
+  // scheduled — every tick then threw "Object has been destroyed" and
+  // Electron's modal error dialog respawned 6×/second, bricking the app.
+  if (!win || win.isDestroyed()) {
+    clearInterval(fsPollTimer);
+    fsPollTimer = null;
+    return;
+  }
   if (!fullscreen || locked) return;
   const { screen } = require('electron');
   const pt = screen.getCursorScreenPoint();
@@ -676,5 +684,15 @@ app.whenReady().then(() => {
   setInterval(syncBookmarks, 10 * 60 * 1000); // #13: periodic catch-up
 });
 
-app.on('before-quit', () => saveSessionNow()); // flush any pending debounce
+app.on('before-quit', () => {
+  clearInterval(fsPollTimer); // #20: never let the poll outlive the window
+  fsPollTimer = null;
+  saveSessionNow(); // flush any pending debounce
+});
 app.on('window-all-closed', () => app.quit());
+
+// #20: a stray throw must never brick the browser in a modal-dialog storm —
+// log it and keep running instead of Electron's default uncaught dialog.
+process.on('uncaughtException', (err) => {
+  console.error('webforge: uncaught exception', err);
+});
