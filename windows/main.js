@@ -284,6 +284,7 @@ function createTab(url = HOME_URL, background = false) {
   }
   wc.on('did-finish-load', () => tryAutofill(wc)); // #12
   wc.on('dom-ready', () => wc.send('hotkey-keys', hotkeys.keyIds())); // #16
+  wireChords(wc); // #22
 
   win.contentView.addChildView(view);
   view.setVisible(false);
@@ -353,6 +354,29 @@ function cycleTab(dir) {
   if (tabOrder.length < 2) return;
   const idx = tabOrder.indexOf(activeId);
   activateTab(tabOrder[(idx + dir + tabOrder.length) % tabOrder.length]);
+}
+
+// #22: navigation-critical chords intercepted at the input level on every
+// webContents — menu accelerators are unreliable for Ctrl+Tab on Windows,
+// and this works regardless of which view has focus.
+function wireChords(wc) {
+  wc.on('before-input-event', (event, input) => {
+    if (input.type !== 'keyDown' || !input.control || input.alt || input.meta) return;
+    const key = (input.key || '').toLowerCase();
+    if (key === 'tab') {
+      event.preventDefault();
+      cycleTab(input.shift ? -1 : 1);
+    } else if (key === 'f4') {
+      event.preventDefault();
+      closeTab(activeId);
+    } else if (key === 'pagedown') {
+      event.preventDefault();
+      cycleTab(1);
+    } else if (key === 'pageup') {
+      event.preventDefault();
+      cycleTab(-1);
+    }
+  });
 }
 
 // #9: pinned tabs.
@@ -431,6 +455,7 @@ function createWindow() {
   chrome.webContents.loadFile(path.join(__dirname, 'ui', 'index.html'));
   // Chrome renders from pushed state; re-push once it's ready to receive.
   chrome.webContents.on('did-finish-load', pushState);
+  wireChords(chrome.webContents); // #22
 
   win.on('resize', layout);
   win.on('maximize', layout);
