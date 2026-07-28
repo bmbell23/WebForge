@@ -514,13 +514,56 @@ function cycleTab(dir) {
 // non-modifier key fires its hotkey binding. Replaces bare-key firing.
 let leaderUntil = 0;
 
+// #41 round 2: arm the leader from a globalShortcut while our window is
+// focused. before-input-event only reaches a view that HAS keyboard focus, so
+// when focus sat nowhere (chrome dead space, overlay just closed) the chord
+// was silently missed. Registered on focus / released on blur so it never
+// takes Ctrl+Space away from other apps.
+function armLeader() {
+  if (locked) return;
+  leaderUntil = leaderUntil > Date.now() ? 0 : Date.now() + 3000; // toggle
+  // Make sure SOMETHING focused hears the next key.
+  if (leaderUntil) (managerOpen || settingsOpen ? chrome.webContents : activeWc())?.focus();
+}
+
+function wireLeaderShortcut() {
+  const { globalShortcut } = require('electron');
+  const register = () => {
+    try {
+      if (!globalShortcut.isRegistered('Control+Space')) {
+        globalShortcut.register('Control+Space', armLeader);
+      }
+    } catch {}
+  };
+  const release = () => {
+    try {
+      globalShortcut.unregister('Control+Space');
+    } catch {}
+  };
+  win.on('focus', register);
+  win.on('blur', release);
+  app.on('will-quit', release);
+  if (win.isFocused()) register();
+}
+
+// #42: Esc closes the topmost open thing, from wherever focus happens to be.
+function handleEscape() {
+  if (bmDialogOpen) return closeBookmarkDialog();
+  if (bmPanelOpen) return toggleBookmarksPanel();
+  if (pwPanelOpen) return togglePwPanel();
+  if (fsRevealed) {
+    clearFsReveal();
+    layout();
+  }
+}
+
 function wireChords(wc) {
   wc.on('before-input-event', (event, input) => {
     if (input.type !== 'keyDown') return;
     const rawKey = input.key || '';
     if (input.control && !input.alt && !input.meta && (rawKey === ' ' || rawKey.toLowerCase() === 'space')) {
       event.preventDefault();
-      leaderUntil = leaderUntil > Date.now() ? 0 : Date.now() + 3000; // toggle
+      armLeader(); // globalShortcut usually beats us here; harmless either way
       return;
     }
     if (leaderUntil > Date.now()) {
@@ -534,13 +577,37 @@ function wireChords(wc) {
     }
     // #32: F11 at the input level — the menu accelerator only fired reliably
     // on a maximized window.
-    if ((input.key || '').toLowerCase() === 'f11' && !input.control && !input.alt && !input.meta) {
+    if (rawKey.toLowerCase() === 'f11' && !input.control && !input.alt && !input.meta) {
       event.preventDefault();
       if (!locked) setFullscreenMode(!fullscreen);
       return;
     }
+    if (rawKey.toLowerCase() === 'escape' && !input.control && !input.alt && !input.meta) {
+      if (!locked) handleEscape(); // #42 — don't preventDefault: pages use Esc too
+      return;
+    }
+    // #38: Alt+Left/Right — the browser-standard back/forward I never wired.
+    if (input.alt && !input.control && !input.meta) {
+      const k = rawKey.toLowerCase();
+      if (k === 'arrowleft') {
+        event.preventDefault();
+        activeWc()?.navigationHistory.goBack();
+      } else if (k === 'arrowright') {
+        event.preventDefault();
+        activeWc()?.navigationHistory.goForward();
+      }
+      return;
+    }
     if (!input.control || input.alt || input.meta) return;
-    const key = (input.key || '').toLowerCase();
+    const key = rawKey.toLowerCase();
+    // #38: Ctrl+Shift+Left/Right back/forward (user request).
+    if (input.shift && (key === 'arrowleft' || key === 'arrowright')) {
+      event.preventDefault();
+      const h = activeWc()?.navigationHistory;
+      if (key === 'arrowleft') h?.goBack();
+      else h?.goForward();
+      return;
+    }
     if (key === 'tab') {
       event.preventDefault();
       cycleTab(input.shift ? -1 : 1);
@@ -635,6 +702,7 @@ function createWindow() {
     if (cmd === 'browser-backward') activeWc()?.navigationHistory.goBack();
     if (cmd === 'browser-forward') activeWc()?.navigationHistory.goForward();
   });
+  wireLeaderShortcut(); // #41
 
   chrome = new WebContentsView({
     webPreferences: { preload: path.join(__dirname, 'preload.js') },
