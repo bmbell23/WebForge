@@ -2,6 +2,7 @@ package com.webforge.browser
 
 import android.annotation.SuppressLint
 import android.app.Activity
+import android.graphics.Color
 import android.graphics.Bitmap
 import android.net.http.SslError
 import android.os.Build
@@ -20,6 +21,7 @@ import android.webkit.SslErrorHandler
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
+import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.EditText
@@ -56,6 +58,7 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        CrashLog.install(applicationContext) // #60: capture crashes for Settings
         setContentView(R.layout.activity_main)
 
         webContainer = findViewById(R.id.webContainer)
@@ -89,6 +92,8 @@ class MainActivity : Activity() {
             window.insetsController?.apply {
                 hide(WindowInsets.Type.navigationBars())
                 systemBarsBehavior = WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                // Clear the light-status-bar flag so icons stay white on black.
+                setSystemBarsAppearance(0, WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS)
             }
         } else {
             @Suppress("DEPRECATION")
@@ -97,6 +102,16 @@ class MainActivity : Activity() {
                     View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or
                     View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
                     View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+        }
+        // #60: with decorFitsSystemWindows(false) Android paints a translucent
+        // CONTRAST SCRIM behind the status bar — that's the "gray" over our
+        // black strip. Turn it off and make the bar itself transparent so our
+        // own padding colour is what shows.
+        @Suppress("DEPRECATION")
+        window.statusBarColor = Color.TRANSPARENT
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            window.isStatusBarContrastEnforced = false
+            window.isNavigationBarContrastEnforced = false
         }
         // Draw behind the cutout, then pad for it below so the bar clears the
         // camera instead of hiding under it.
@@ -118,10 +133,13 @@ class MainActivity : Activity() {
                 @Suppress("DEPRECATION")
                 insets.systemWindowInsetTop
             }
+            // #60: the raw inset sat too tall; 75% still clears the icons and
+            // the camera on the user's device.
+            val padded = (top * 0.75f).toInt()
             findViewById<View>(R.id.statusSpacer).layoutParams =
-                LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, top)
+                LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, padded)
             // Panels must clear the status bar too.
-            overlay.setPadding(0, top, 0, 0)
+            overlay.setPadding(0, padded, 0, 0)
             insets
         }
         root.requestApplyInsets()
@@ -134,7 +152,7 @@ class MainActivity : Activity() {
 
     // --- tabs ---------------------------------------------------------------
     @SuppressLint("SetJavaScriptEnabled")
-    private fun newTab(url: String, background: Boolean = false): Tab {
+    private fun newTab(url: String?, background: Boolean = false): Tab {
         val wv = WebView(this)
         wv.settings.apply {
             javaScriptEnabled = true
@@ -189,6 +207,31 @@ class MainActivity : Activity() {
             override fun onPageFinished(view: WebView, url: String) {
                 if (tab === active) syncChrome()
             }
+
+            // #60: if a renderer dies (OOM with several tabs alive, or a page
+            // taking it down) the OS default is to kill the WHOLE APP. Handle
+            // it: drop the dead view, put a live one in its place, stay up.
+            override fun onRenderProcessGone(
+                view: WebView,
+                detail: RenderProcessGoneDetail?
+            ): Boolean {
+                val idx = tabs.indexOf(tab)
+                val lastUrl = tab.url
+                (view.parent as? ViewGroup)?.removeView(view)
+                view.destroy()
+                if (idx >= 0) tabs.removeAt(idx)
+                runOnUiThread {
+                    android.widget.Toast
+                        .makeText(this@MainActivity, "Tab reloaded (renderer restarted)", android.widget.Toast.LENGTH_SHORT)
+                        .show()
+                    if (tabs.isEmpty()) newTab(lastUrl)
+                    else {
+                        activeIndex = activeIndex.coerceAtMost(tabs.size - 1)
+                        activateTab(activeIndex)
+                    }
+                }
+                return true // handled — do NOT kill the process
+            }
         }
         wv.webChromeClient = object : WebChromeClient() {
             override fun onProgressChanged(view: WebView, newProgress: Int) {
@@ -210,7 +253,7 @@ class MainActivity : Activity() {
                 isUserGesture: Boolean,
                 resultMsg: Message
             ): Boolean {
-                val opened = newTab("about:blank")
+                val opened = newTab(null) // must be unloaded for the transport
                 val transport = resultMsg.obj as WebView.WebViewTransport
                 transport.webView = opened.webView
                 resultMsg.sendToTarget()
@@ -219,7 +262,9 @@ class MainActivity : Activity() {
         }
 
         tabs.add(tab)
-        wv.loadUrl(url)
+        // url == null means "hand this to a window transport" — WebView
+        // requires such a view to have had NO content loaded yet (#60).
+        if (url != null) wv.loadUrl(url)
         if (!background) activateTab(tabs.size - 1) else syncChrome()
         return tab
     }
@@ -457,6 +502,17 @@ class MainActivity : Activity() {
                 }
             }
         }
+        CrashLog.last(this)?.let { trace ->
+            header(col, "LAST CRASH")
+            col.addView(TextView(this).apply {
+                text = trace.take(1800)
+                setTextColor(0xFFC04040.toInt())
+                textSize = 10f
+                setTextIsSelectable(true)
+            })
+            row(col, "Clear crash report") { CrashLog.clear(this); showSettings() }
+        }
+
         header(col, "ABOUT")
         row(col, "Version ${BuildConfig.VERSION_NAME}", "Tap to check for updates") {
             UpdateManager(this).checkForUpdate()
