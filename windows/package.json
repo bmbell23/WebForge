@@ -2,7 +2,7 @@
   "name": "webforge",
   "productName": "WebForge",
   "description": "WebForge browser — Windows shell",
-  "version": "0.1.17",
+  "version": "0.1.19",
   "main": "main.js",
   "author": "Brandon Bell",
   "license": "UNLICENSED",

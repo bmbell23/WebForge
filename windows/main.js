@@ -265,10 +265,11 @@ function createTab(url = HOME_URL, background = false) {
   tabOrder.push(id);
 
   const wc = view.webContents;
-  // Popups (window.open / target=_blank) land in a background tab (#4)
-  // instead of hijacking the current view or spawning an OS window.
+  // Popups (window.open / target=_blank) become tabs, never OS windows.
+  // #30: they open FOREGROUND — clicking a link that spawns a tab should put
+  // you in that tab (matches every mainstream browser; reverses #4's call).
   wc.setWindowOpenHandler(({ url: popupUrl }) => {
-    createTab(popupUrl, true);
+    createTab(popupUrl, false);
     return { action: 'deny' };
   });
   for (const ev of [
@@ -295,8 +296,12 @@ function activateTab(id) {
   if (!tabs.has(id)) return;
   tabs.get(activeId)?.setVisible(false);
   activeId = id;
-  tabs.get(id).setVisible(true);
+  const view = tabs.get(id);
+  view.setVisible(true);
   layout();
+  // #30: keyboard focus MUST follow activation — if it stays on a hidden view
+  // (or nothing), key events vanish and hotkey swapping "stops working".
+  view.webContents.focus();
   pushState();
 }
 
@@ -362,6 +367,7 @@ function handleHotkeyPress(keyId) {
     if (activeId === tabId) {
       // Already in the hotkey tab → the hotkey means "take me home".
       tabs.get(tabId).webContents.loadURL(entry.url);
+      tabs.get(tabId).webContents.focus(); // #30
     } else {
       activateTab(tabId);
     }
