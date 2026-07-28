@@ -93,9 +93,12 @@ function layout() {
   const view = tabs.get(activeId);
   if (fullscreen) {
     // #14: the page owns every pixel; chrome collapses to the revealed
-    // hover region (or nothing).
+    // hover region (or nothing). #32: unless an overlay (bookmark dialog /
+    // settings) is open — then chrome needs the full window to show it.
     view?.setBounds({ x: 0, y: 0, width, height });
-    chrome.setBounds(fsRegionBounds());
+    chrome.setBounds(
+      bmDialogOpen || settingsOpen ? { x: 0, y: 0, width, height } : fsRegionBounds()
+    );
     return;
   }
   chrome.setBounds({ x: 0, y: 0, width, height });
@@ -181,6 +184,10 @@ function setFullscreenMode(on) {
   } else {
     clearInterval(fsPollTimer);
     fsPollTimer = null;
+    // #32: exiting fullscreen must put the page back above the full-window
+    // chrome view, or the sidebar-less area renders as blank chrome.
+    const view = tabs.get(activeId);
+    if (view && !bmDialogOpen && !settingsOpen) win.contentView.addChildView(view);
   }
   layout();
 }
@@ -219,7 +226,9 @@ function toggleSettings() {
     if (view) win.contentView.addChildView(view); // re-raise content
   }
   chrome.webContents.send('settings', settingsOpen ? getSettings() : null);
-  layout();
+  layout(); // #32: expands/collapses chrome correctly in fullscreen too
+  if (settingsOpen) chrome.webContents.focus();
+  else activeWc()?.focus();
 }
 
 // #11: bookmarks panel + star state.
@@ -271,6 +280,8 @@ function openBookmarkDialog(prefill) {
   setChromeRaised(true);
   pushBookmarks(); // dialog needs the folder list
   chrome.webContents.send('bm-edit', prefill);
+  layout(); // #32: in fullscreen, chrome must expand to show the dialog
+  chrome.webContents.focus();
 }
 
 function closeBookmarkDialog() {
@@ -278,6 +289,8 @@ function closeBookmarkDialog() {
   bmDialogOpen = false;
   if (!settingsOpen) setChromeRaised(false);
   chrome.webContents.send('bm-edit', null);
+  layout(); // #32: re-collapse chrome if we're fullscreen
+  activeWc()?.focus();
 }
 
 function starCurrent() {
@@ -367,6 +380,12 @@ function activateTab(id) {
   activeId = id;
   const view = tabs.get(id);
   view.setVisible(true);
+  // #32: overlay raises leave chrome stacked above content, whose empty
+  // region then covers the page ("black tabs"). Keep the active view on top
+  // whenever no chrome overlay is meant to be showing.
+  if (!fsRevealed && !bmDialogOpen && !settingsOpen) {
+    win.contentView.addChildView(view);
+  }
   layout();
   // #30: keyboard focus MUST follow activation — if it stays on a hidden view
   // (or nothing), key events vanish and hotkey swapping "stops working".
@@ -428,7 +447,15 @@ function cycleTab(dir) {
 // and this works regardless of which view has focus.
 function wireChords(wc) {
   wc.on('before-input-event', (event, input) => {
-    if (input.type !== 'keyDown' || !input.control || input.alt || input.meta) return;
+    if (input.type !== 'keyDown') return;
+    // #32: F11 at the input level — the menu accelerator only fired reliably
+    // on a maximized window.
+    if ((input.key || '').toLowerCase() === 'f11' && !input.control && !input.alt && !input.meta) {
+      event.preventDefault();
+      if (!locked) setFullscreenMode(!fullscreen);
+      return;
+    }
+    if (!input.control || input.alt || input.meta) return;
     const key = (input.key || '').toLowerCase();
     if (key === 'tab') {
       event.preventDefault();

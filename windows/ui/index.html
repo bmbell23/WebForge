@@ -306,6 +306,12 @@
     display: flex; flex-direction: column; gap: 8px;
   }
   #bmdialog h3 { margin: 0 0 4px; font-size: 15px; }
+  .dlglabel {
+    font-size: 11px; font-weight: 600;
+    color: var(--text-dim);
+    text-transform: uppercase; letter-spacing: 0.04em;
+    margin-bottom: -4px;
+  }
   #bmdialog input, #bmdialog select {
     height: 32px;
     border: none; border-radius: 8px;
@@ -424,8 +430,11 @@
   <div id="bmdialog">
     <div class="card">
       <h3 id="bmdlgtitle">Bookmark</h3>
+      <label class="dlglabel">Title</label>
       <input id="bmdlgname" type="text" placeholder="Title" spellcheck="false">
-      <input id="bmdlgurl" type="text" placeholder="URL" spellcheck="false">
+      <label class="dlglabel">URL</label>
+      <input id="bmdlgurl" type="text" placeholder="https://…" spellcheck="false">
+      <label class="dlglabel">Folder</label>
       <select id="bmdlgfolder"></select>
       <input id="bmdlgnewfolder" type="text" placeholder="New folder name (use / to nest)"
              spellcheck="false" style="display:none">
