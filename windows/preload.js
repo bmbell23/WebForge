@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld('webforge', {
   openBookmark: (url, background) => ipcRenderer.send('open-bookmark', { url, background }),
   removeBookmark: (id) => ipcRenderer.send('remove-bookmark', id),
   importBookmarks: () => ipcRenderer.invoke('import-bookmarks'),
+  importPasswords: () => ipcRenderer.send('import-passwords'), // #23
   onBookmarksPanel: (cb) => ipcRenderer.on('bookmarks-panel', (_e, open) => cb(open)),
   onFsMode: (cb) => ipcRenderer.on('fs-mode', (_e, mode) => cb(mode)), // #14
   // hotkeys (#16)

@@ -592,8 +592,16 @@ function onUnlocked() {
 // Keyboard shortcuts via a hidden application menu — accelerators fire no
 // matter which webContents (page or chrome UI) has keyboard focus.
 function setupShortcuts() {
-  Menu.setApplicationMenu(
-    Menu.buildFromTemplate([
+  const menu = Menu.buildFromTemplate(menuTemplate());
+  Menu.setApplicationMenu(menu);
+  // #23: Menu.setApplicationMenu alone doesn't reliably attach a menu bar to
+  // a BaseWindow on Windows — without this, the menu (and every accelerator)
+  // can silently not exist in the packaged app.
+  win.setMenu(menu);
+}
+
+function menuTemplate() {
+  return [
       {
         label: 'WebForge',
         submenu: [
@@ -623,8 +631,7 @@ function setupShortcuts() {
           { label: 'Quit', accelerator: 'CmdOrCtrl+Q', role: 'quit' },
         ],
       },
-    ])
-  );
+    ];
 }
 
 ipcMain.on('navigate', (_e, input) => {
@@ -691,6 +698,11 @@ ipcMain.handle('vault-reset', () => {
   return true;
 });
 ipcMain.on('lock-now', () => showLock());
+
+// #23: password import must be reachable from the UI, not just the menu.
+ipcMain.on('import-passwords', () => {
+  if (!locked) importPasswordsCsv();
+});
 
 ipcMain.handle('import-bookmarks', async () => {
   const { canceled, filePaths } = await dialog.showOpenDialog(win, {

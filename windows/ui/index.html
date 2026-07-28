@@ -188,13 +188,13 @@
     font-weight: 600;
     color: var(--text-dim);
   }
-  #bmimport {
+  #bmimport, #pwimport {
     border: none; border-radius: 6px;
     padding: 4px 10px;
     background: var(--surface); color: var(--text);
     font-size: 12px; cursor: pointer;
   }
-  #bmimport:hover { background: var(--hover); }
+  #bmimport:hover, #pwimport:hover { background: var(--hover); }
   #bmlist { flex: 1; overflow-y: auto; scrollbar-width: thin; padding: 0 6px 10px; }
   .bmfolder {
     padding: 8px 6px 3px;
@@ -277,7 +277,10 @@
   <div id="bmpanel">
     <header>
       <span id="bmcount">Bookmarks</span>
-      <button id="bmimport" title="Import a Firefox bookmarks export">Import…</button>
+      <span>
+        <button id="pwimport" title="Import passwords (Firefox about:logins CSV export)">🔑</button>
+        <button id="bmimport" title="Import a Firefox bookmarks export">Import…</button>
+      </span>
     </header>
     <div id="bmlist"></div>
   </div>
@@ -381,6 +384,7 @@
 
   star.onclick = () => webforge.toggleStar();
   document.getElementById('bmtoggle').onclick = () => webforge.toggleBookmarksPanel();
+  document.getElementById('pwimport').onclick = () => webforge.importPasswords();
   document.getElementById('bmimport').onclick = async () => {
     const r = await webforge.importBookmarks();
     if (!r) return;
