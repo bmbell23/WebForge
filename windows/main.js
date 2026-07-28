@@ -366,12 +366,9 @@ function createTab(url = HOME_URL, background = false) {
   if (locked) return null; // #15
   const id = nextTabId++;
   const view = new WebContentsView({
-    // #16: hotkey capture inside pages (editability-aware, bound keys only).
-    // #39: run it in EVERY frame — focus inside an iframe was eating hotkeys.
-    webPreferences: {
-      preload: path.join(__dirname, 'content-preload.js'),
-      nodeIntegrationInSubFrames: true,
-    },
+    // #41: hotkeys fire from the main process now (Ctrl+Space leader), so no
+    // page-side key capture — and no need for subframe node integration (#39).
+    webPreferences: { preload: path.join(__dirname, 'content-preload.js') },
   });
   tabs.set(id, view);
   tabOrder.push(id);
@@ -426,7 +423,6 @@ function createTab(url = HOME_URL, background = false) {
   }
   wc.on('did-finish-load', () => tryAutofill(wc)); // #12
   wc.on('dom-ready', () => {
-    wc.send('hotkey-keys', hotkeys.keyIds()); // #16
     // #36 round 2: hide scrollbars on PAGES too (user: "most certainly not
     // gone") — scrolling itself is untouched.
     wc.insertCSS(
@@ -514,9 +510,28 @@ function cycleTab(dir) {
 // #22: navigation-critical chords intercepted at the input level on every
 // webContents — menu accelerators are unreliable for Ctrl+Tab on Windows,
 // and this works regardless of which view has focus.
+// #41: leader-key hotkey mode — Ctrl+Space arms a 3s window; the next
+// non-modifier key fires its hotkey binding. Replaces bare-key firing.
+let leaderUntil = 0;
+
 function wireChords(wc) {
   wc.on('before-input-event', (event, input) => {
     if (input.type !== 'keyDown') return;
+    const rawKey = input.key || '';
+    if (input.control && !input.alt && !input.meta && (rawKey === ' ' || rawKey.toLowerCase() === 'space')) {
+      event.preventDefault();
+      leaderUntil = leaderUntil > Date.now() ? 0 : Date.now() + 3000; // toggle
+      return;
+    }
+    if (leaderUntil > Date.now()) {
+      if (['control', 'shift', 'alt', 'meta'].includes(rawKey.toLowerCase())) return;
+      event.preventDefault();
+      leaderUntil = 0;
+      if (rawKey.toLowerCase() !== 'escape' && !locked) {
+        handleHotkeyPress((input.control ? 'Ctrl+' : '') + (input.alt ? 'Alt+' : '') + rawKey);
+      }
+      return;
+    }
     // #32: F11 at the input level — the menu accelerator only fired reliably
     // on a maximized window.
     if ((input.key || '').toLowerCase() === 'f11' && !input.control && !input.alt && !input.meta) {
@@ -560,8 +575,8 @@ function closeNormalTabs() {
 // --- #16: hotkey tabs ---
 
 function broadcastHotkeys() {
-  const keys = hotkeys.keyIds();
-  for (const view of tabs.values()) view.webContents.send('hotkey-keys', keys);
+  // #41: tabs no longer need the bound-key list (firing is leader-driven in
+  // main); chrome still needs the map for badges and the binding UX.
   chrome?.webContents.send('hotkeys-updated', hotkeys.all());
 }
 

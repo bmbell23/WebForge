@@ -605,7 +605,7 @@
         <tr><td>Ctrl+Shift+L</td><td>Lock WebForge</td></tr>
         <tr><td>Ctrl+,</td><td>Settings</td></tr>
         <tr><td>Ctrl+Q</td><td>Quit</td></tr>
-        <tr><td>your hotkeys</td><td>Bind via ⌨ on a bookmark — single keys (a, B, !, Ctrl+j) jump to that site's tab; press again inside it to go home</td></tr>
+        <tr><td>Ctrl+Space, then key</td><td>Fire a bookmark hotkey (bind via ⌨ on a bookmark) — jumps to that site's tab; fired inside its tab it goes home. Works even while typing. Esc/Ctrl+Space cancels.</td></tr>
       </table>
     </div>
   </div>
@@ -1090,15 +1090,8 @@
       if (!capture) bmcount.textContent = `Bookmarks (${lastBookmarks.length})`;
       return;
     }
-    // Fire hotkeys when chrome has focus too (sidebar/panel clicks focus us).
-    const t = e.target;
-    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT')) return;
-    if (e.repeat || e.metaKey || e.key.length !== 1) return;
-    const id = keyIdOf(e);
-    if (hotkeysMap[id]) {
-      e.preventDefault();
-      webforge.sendKey(id);
-    }
+    // #41: bare-key firing removed — hotkeys fire via Ctrl+Space leader mode,
+    // handled in the main process for every view including this one.
   }, true);
 
   webforge.onHotkeysUpdated((map) => {
