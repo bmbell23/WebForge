@@ -560,6 +560,7 @@ function createWindow() {
   chrome.webContents.loadFile(path.join(__dirname, 'ui', 'index.html'));
   // Chrome renders from pushed state; re-push once it's ready to receive.
   chrome.webContents.on('did-finish-load', pushState);
+  chrome.webContents.on('did-finish-load', pushTabGroups); // #34
   wireChords(chrome.webContents); // #22
 
   win.on('resize', layout);
@@ -919,6 +920,18 @@ ipcMain.on('set-theme', (_e, theme) => {
   getSettings().theme = String(theme);
   saveSettings();
   applyTheme(String(theme));
+});
+
+// #34: user-defined tab groups ({name, pattern}, trailing-* prefix match).
+function pushTabGroups() {
+  chrome?.webContents.send('tab-groups', getSettings().tabGroups || []);
+}
+ipcMain.on('groups-save', (_e, list) => {
+  getSettings().tabGroups = (Array.isArray(list) ? list : [])
+    .map((g) => ({ name: String(g?.name || '').trim(), pattern: String(g?.pattern || '').trim() }))
+    .filter((g) => g.name && g.pattern);
+  saveSettings();
+  pushTabGroups();
 });
 
 // #26: credentials manager IPC.

@@ -34,6 +34,9 @@ contextBridge.exposeInMainWorld('webforge', {
   toggleSettings: () => ipcRenderer.send('toggle-settings'),
   setTheme: (theme) => ipcRenderer.send('set-theme', theme),
   onSettings: (cb) => ipcRenderer.on('settings', (_e, s) => cb(s)),
+  // tab groups (#34)
+  saveTabGroups: (list) => ipcRenderer.send('groups-save', list),
+  onTabGroups: (cb) => ipcRenderer.on('tab-groups', (_e, list) => cb(list)),
   onBookmarksPanel: (cb) => ipcRenderer.on('bookmarks-panel', (_e, open) => cb(open)),
   onFsMode: (cb) => ipcRenderer.on('fs-mode', (_e, mode) => cb(mode)), // #14
   // hotkeys (#16)

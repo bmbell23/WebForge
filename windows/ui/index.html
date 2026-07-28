@@ -360,6 +360,40 @@
     font-size: 13px; cursor: pointer;
   }
   .themeopt button.sel { background: var(--accent); color: #fff; }
+  .grouprow {
+    display: flex; align-items: center; gap: 8px;
+    padding: 5px 4px;
+    border-bottom: 1px solid var(--hover);
+    font-size: 13px;
+  }
+  .grouprow .gn { font-weight: 600; min-width: 110px; }
+  .grouprow .gp {
+    flex: 1;
+    font: 12px ui-monospace, monospace; color: var(--text-dim);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .grouprow button {
+    width: 22px; height: 22px;
+    border: none; border-radius: 50%;
+    background: transparent; color: var(--text);
+    cursor: pointer;
+  }
+  .grouprow button:hover { background: var(--hover); }
+  .groupadd { display: flex; gap: 8px; margin-top: 10px; }
+  .groupadd input {
+    height: 30px; border: none; border-radius: 8px;
+    padding: 0 10px;
+    background: var(--field-bg); color: var(--field-text);
+    font-size: 12px; outline: none;
+  }
+  #gname { width: 150px; }
+  #gpattern { flex: 1; }
+  #gadd {
+    height: 30px; padding: 0 16px;
+    border: none; border-radius: 8px;
+    background: var(--accent); color: #fff;
+    font-size: 12px; font-weight: 600; cursor: pointer;
+  }
   #settings table { width: 100%; border-collapse: collapse; font-size: 13px; }
   #settings td { padding: 5px 4px; border-bottom: 1px solid var(--hover); }
   #settings td:first-child {
@@ -454,6 +488,13 @@
         <button data-theme="light">Light</button>
         <button data-theme="dark">Dark (OLED)</button>
       </div>
+      <h2>Tab groups</h2>
+      <div id="grouplist"></div>
+      <div class="groupadd">
+        <input id="gname" type="text" placeholder="Group name (e.g. Jenkins)" spellcheck="false">
+        <input id="gpattern" type="text" placeholder="URL pattern (e.g. https://ci.example.com:8080/*)" spellcheck="false">
+        <button id="gadd">Add</button>
+      </div>
       <h2>Keybindings</h2>
       <table>
         <tr><td>Ctrl+T</td><td>New tab</td></tr>
@@ -544,21 +585,37 @@
     return h;
   }
 
-  // #17: bucket key for a tab — registrable-ish base domain (heuristic: last
-  // two labels, or three when the TLD looks two-part like co.uk).
-  function baseDomain(url) {
+  // #34: grouping v2 — user-defined pattern groups win; else the FULL host
+  // (base-domain merging wrongly bucketed Jenkins with Gerrit under a shared
+  // parent domain).
+  let tabGroups = [];
+  let lastTabsState = [];
+  webforge.onTabGroups((list) => {
+    tabGroups = list || [];
+    renderTabs(lastTabsState);
+    renderSettingsGroups();
+  });
+
+  function matchPattern(url, pattern) {
+    if (!pattern) return false;
+    return pattern.endsWith('*') ? url.startsWith(pattern.slice(0, -1)) : url === pattern;
+  }
+  function bucketFor(url) {
+    const custom = tabGroups.find((g) => matchPattern(url, g.pattern));
+    if (custom) return custom.name;
     try {
-      const host = new URL(url).hostname.replace(/^www\./, '');
-      const parts = host.split('.');
-      if (parts.length <= 2) return host;
-      const twoPart = parts.slice(-2).join('.');
-      return twoPart.length <= 5 ? parts.slice(-3).join('.') : twoPart;
+      return new URL(url).hostname.replace(/^www\./, '') || '(local)';
     } catch {
-      return '';
+      return '(local)';
     }
   }
 
   webforge.onTabsUpdated((state) => {
+    lastTabsState = state;
+    renderTabs(state);
+  });
+
+  function renderTabs(state) {
     // #16: sidebar sections — Hotkeys, Pinned, then normal tabs.
     const hot = state.filter((t) => t.hotkey);
     const pin = state.filter((t) => !t.hotkey && t.pinned);
@@ -567,20 +624,22 @@
     if (hot.length) nodes.push(groupHdr('Hotkeys'), ...hot.map(makeTab));
     if (pin.length) nodes.push(groupHdr('Pinned'), ...pin.map(makeTab));
     if (rest.length) {
-      // #17: auto-group normal tabs by site — buckets (with a domain header)
-      // when a domain holds ≥2 tabs; singletons render flat at the end.
-      const buckets = new Map(); // domain -> tabs, insertion-ordered
+      // #34: named pattern groups first (shown even as singletons — they're
+      // deliberate), then full-host buckets for ≥2 tabs, then flat singles.
+      const buckets = new Map(); // key -> {name, custom, tabs}, insertion-ordered
       for (const t of rest) {
-        const d = baseDomain(t.url) || '(local)';
-        if (!buckets.has(d)) buckets.set(d, []);
-        buckets.get(d).push(t);
+        const name = bucketFor(t.url);
+        if (!buckets.has(name)) {
+          buckets.set(name, { name, custom: tabGroups.some((g) => g.name === name), tabs: [] });
+        }
+        buckets.get(name).tabs.push(t);
       }
       const singles = [];
-      for (const [domain, group] of buckets) {
-        if (group.length >= 2) {
-          nodes.push(groupHdr(`${domain} (${group.length})`), ...group.map(makeTab));
+      for (const b of buckets.values()) {
+        if (b.custom || b.tabs.length >= 2) {
+          nodes.push(groupHdr(`${b.name} (${b.tabs.length})`), ...b.tabs.map(makeTab));
         } else {
-          singles.push(group[0]);
+          singles.push(b.tabs[0]);
         }
       }
       if (singles.length) {
@@ -599,7 +658,7 @@
     reloadstop.title = activeLoading ? 'Stop' : 'Reload';
     progress.className = activeLoading ? 'loading' : '';
     star.textContent = active.starred ? '★' : '☆';
-  });
+  }
 
   // --- bookmarks (#11) ---
   const star = document.getElementById('star');
@@ -751,8 +810,36 @@
     if (s) {
       const cur = s.theme || 'system';
       themeBtns.forEach((x) => x.classList.toggle('sel', x.dataset.theme === cur));
+      renderSettingsGroups();
     }
   });
+
+  // #34: tab-group management (renders from the broadcast tabGroups cache).
+  const grouplist = document.getElementById('grouplist');
+  function renderSettingsGroups() {
+    grouplist.replaceChildren(
+      ...tabGroups.map((g, i) => {
+        const row = document.createElement('div');
+        row.className = 'grouprow';
+        row.append(
+          Object.assign(document.createElement('span'), { className: 'gn', textContent: g.name }),
+          Object.assign(document.createElement('span'), { className: 'gp', textContent: g.pattern, title: g.pattern })
+        );
+        const rm = Object.assign(document.createElement('button'), { textContent: '✕', title: 'Delete group' });
+        rm.onclick = () => webforge.saveTabGroups(tabGroups.filter((_x, j) => j !== i));
+        row.appendChild(rm);
+        return row;
+      })
+    );
+  }
+  document.getElementById('gadd').onclick = () => {
+    const name = document.getElementById('gname').value.trim();
+    const pattern = document.getElementById('gpattern').value.trim();
+    if (!name || !pattern) return;
+    webforge.saveTabGroups([...tabGroups, { name, pattern }]);
+    document.getElementById('gname').value = '';
+    document.getElementById('gpattern').value = '';
+  };
 
   // --- bookmark search (#27) ---
   const bmsearch = document.getElementById('bmsearch');
