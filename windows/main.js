@@ -268,8 +268,9 @@ function createTab(url = HOME_URL, background = false) {
   // Popups (window.open / target=_blank) become tabs, never OS windows.
   // #30: they open FOREGROUND — clicking a link that spawns a tab should put
   // you in that tab (matches every mainstream browser; reverses #4's call).
+  // #31: same URL already open → focus that tab instead of spawning a dupe.
   wc.setWindowOpenHandler(({ url: popupUrl }) => {
-    createTab(popupUrl, false);
+    openOrFocus(popupUrl, false);
     return { action: 'deny' };
   });
   for (const ev of [
@@ -322,6 +323,30 @@ function closeTab(id) {
   } else {
     pushState();
   }
+}
+
+// #31: dedup for link/bookmark-opened tabs. Explicit new tabs (Ctrl+T) and
+// session restore bypass this — only "open this URL somewhere" paths dedup.
+function findTabByUrl(url) {
+  for (const id of tabOrder) {
+    if (tabs.get(id).webContents.getURL() === url) return id;
+  }
+  return null;
+}
+
+function openOrFocus(url, background) {
+  const existing = findTabByUrl(url);
+  if (existing !== null) {
+    if (!background) activateTab(existing);
+    return existing;
+  }
+  return createTab(url, background);
+}
+
+// #31: intentional duplicate of the active tab (Ctrl+Shift+U).
+function duplicateActiveTab() {
+  const url = activeWc()?.getURL();
+  if (url) createTab(url, false);
 }
 
 function cycleTab(dir) {
@@ -634,6 +659,7 @@ function menuTemplate() {
         submenu: [
           { label: 'New Tab', accelerator: 'CmdOrCtrl+T', click: () => createTab() },
           { label: 'Close Tab', accelerator: 'CmdOrCtrl+W', click: () => closeTab(activeId) },
+          { label: 'Duplicate Tab', accelerator: 'CmdOrCtrl+Shift+U', click: () => locked || duplicateActiveTab() },
           { label: 'Pin/Unpin Tab', accelerator: 'CmdOrCtrl+Shift+P', click: () => togglePin(activeId) },
           { label: 'Close Normal Tabs', accelerator: 'CmdOrCtrl+Shift+W', click: () => closeNormalTabs() },
           { label: 'Detach Hotkey Tab', accelerator: 'CmdOrCtrl+Shift+D', click: () => detachActiveHotkeyTab() },
@@ -697,6 +723,12 @@ ipcMain.on('remove-hotkey', (_e, keyId) => {
 ipcMain.on('toggle-bookmarks-panel', () => toggleBookmarksPanel());
 ipcMain.on('toggle-star', () => toggleStarCurrent());
 ipcMain.on('open-bookmark', (_e, { url, background }) => {
+  // #31: an already-open copy of the bookmark wins over navigating/spawning.
+  const existing = findTabByUrl(url);
+  if (existing !== null) {
+    if (!background) activateTab(existing);
+    return;
+  }
   if (background) createTab(url, true);
   else activeWc()?.loadURL(url);
 });
