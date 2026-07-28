@@ -220,6 +220,7 @@ let settingsOpen = false;
 function toggleSettings() {
   settingsOpen = !settingsOpen;
   if (settingsOpen) {
+    clearFsReveal(); // #37
     win.contentView.addChildView(chrome); // raise chrome above the page
   } else {
     const view = tabs.get(activeId);
@@ -275,8 +276,17 @@ function setChromeRaised(on) {
   }
 }
 
+// #37: overlays and the fullscreen hover-reveal fight over the chrome view's
+// CSS mode — clear any active reveal before showing an overlay.
+function clearFsReveal() {
+  if (!fsRevealed) return;
+  fsRevealed = null;
+  chrome.webContents.send('fs-mode', null);
+}
+
 function openBookmarkDialog(prefill) {
   bmDialogOpen = true;
+  clearFsReveal();
   setChromeRaised(true);
   pushBookmarks(); // dialog needs the folder list
   chrome.webContents.send('bm-edit', prefill);
@@ -339,7 +349,11 @@ function createTab(url = HOME_URL, background = false) {
   const id = nextTabId++;
   const view = new WebContentsView({
     // #16: hotkey capture inside pages (editability-aware, bound keys only).
-    webPreferences: { preload: path.join(__dirname, 'content-preload.js') },
+    // #39: run it in EVERY frame — focus inside an iframe was eating hotkeys.
+    webPreferences: {
+      preload: path.join(__dirname, 'content-preload.js'),
+      nodeIntegrationInSubFrames: true,
+    },
   });
   tabs.set(id, view);
   tabOrder.push(id);
@@ -364,6 +378,25 @@ function createTab(url = HOME_URL, background = false) {
       openOrFocus(navUrl, false);
     }
   });
+  // #33 round 2: SPAs (Gerrit's PolyGerrit) navigate via pushState, which
+  // never fires will-navigate. If a hotkey tab's URL drifts from home via
+  // in-page navigation, open the destination in its own tab and bounce the
+  // hotkey tab back.
+  let spaBouncing = false;
+  wc.on('did-navigate-in-page', (_e2, navUrl, isMainFrame) => {
+    if (!isMainFrame || spaBouncing || locked) return;
+    const keyId = hotkeyByTab.get(id);
+    if (!keyId) return;
+    const home = hotkeys.get(keyId)?.url;
+    if (!home || navUrl.split('#')[0] === home.split('#')[0]) return;
+    spaBouncing = true;
+    openOrFocus(navUrl, false);
+    if (wc.navigationHistory.canGoBack()) wc.navigationHistory.goBack();
+    else wc.loadURL(home);
+    setTimeout(() => {
+      spaBouncing = false;
+    }, 500);
+  });
   for (const ev of [
     'did-navigate',
     'did-navigate-in-page',
@@ -374,7 +407,14 @@ function createTab(url = HOME_URL, background = false) {
     wc.on(ev, pushState);
   }
   wc.on('did-finish-load', () => tryAutofill(wc)); // #12
-  wc.on('dom-ready', () => wc.send('hotkey-keys', hotkeys.keyIds())); // #16
+  wc.on('dom-ready', () => {
+    wc.send('hotkey-keys', hotkeys.keyIds()); // #16
+    // #36 round 2: hide scrollbars on PAGES too (user: "most certainly not
+    // gone") — scrolling itself is untouched.
+    wc.insertCSS(
+      '::-webkit-scrollbar{width:0!important;height:0!important;display:none!important}'
+    ).catch(() => {});
+  });
   wireChords(wc); // #22
 
   win.contentView.addChildView(view);
@@ -549,8 +589,18 @@ function createWindow() {
     width: 1280,
     height: 840,
     title: 'WebForge',
+    fullscreen: true, // #37: always launch fullscreen (user decision)
     // #7: match the chrome theme so resize flashes aren't white in dark mode.
     backgroundColor: nativeTheme.shouldUseDarkColors ? '#000000' : '#f2f2f4',
+  });
+  fullscreen = true;
+  fsPollTimer = setInterval(fsPoll, 150); // edge-reveal live from launch
+
+  // #38: mouse XButton1/XButton2 + touchpad back/forward gestures.
+  win.on('app-command', (_e, cmd) => {
+    if (locked) return;
+    if (cmd === 'browser-backward') activeWc()?.navigationHistory.goBack();
+    if (cmd === 'browser-forward') activeWc()?.navigationHistory.goForward();
   });
 
   chrome = new WebContentsView({
@@ -714,8 +764,7 @@ async function importPasswordsCsv() {
 function showLock() {
   if (lockView) return;
   if (!locked) saveSessionNow();
-  if (fullscreen) setFullscreenMode(false); // lock screen is never chromeless
-  locked = true;
+  locked = true; // #37: locking no longer exits fullscreen (we live there now)
   vault.lock();
   // Tear the whole session down — nothing sensitive stays rendered or mapped.
   for (const id of [...tabOrder]) {
