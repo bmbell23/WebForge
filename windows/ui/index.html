@@ -531,6 +531,13 @@
   let capture = null;  // {url, title} while waiting for a key press
   const keyIdOf = (e) => (e.ctrlKey ? 'Ctrl+' : '') + (e.altKey ? 'Alt+' : '') + e.key;
   const keyForUrl = (url) => Object.keys(hotkeysMap).find((k) => hotkeysMap[k].url === url);
+  // #28: hold bind/unbind confirmations for a few seconds — the broadcast that
+  // follows a binding change re-renders and would instantly clobber them.
+  let feedbackUntil = 0;
+  function showFeedback(text) {
+    bmcount.textContent = text;
+    feedbackUntil = Date.now() + 4000;
+  }
 
   window.addEventListener('keydown', (e) => {
     if (capture) {
@@ -541,10 +548,17 @@
       } else if (e.key === 'Delete' || e.key === 'Backspace') {
         const k = keyForUrl(capture.url);
         if (k) webforge.removeHotkey(k);
+        showFeedback(k ? `Unbound "${k}" ✓` : 'Nothing was bound');
         capture = null;
+        return;
       } else if (e.key.length === 1 && !e.metaKey) {
-        webforge.setHotkey(keyIdOf(e), capture.url, capture.title);
+        // #28: confirm exactly what got captured — field diagnosis for the
+        // "capitals won't bind" report (splits set-failure from fire-failure).
+        const id = keyIdOf(e);
+        webforge.setHotkey(id, capture.url, capture.title);
+        showFeedback(`Bound "${id}" → ${capture.title} ✓`);
         capture = null;
+        return;
       }
       if (!capture) bmcount.textContent = `Bookmarks (${lastBookmarks.length})`;
       return;
@@ -579,9 +593,11 @@
           (b.url || '').toLowerCase().includes(q) ||
           (b.folder || '').toLowerCase().includes(q))
       : fullList;
-    bmcount.textContent = q
-      ? `Bookmarks (${list.length}/${fullList.length})`
-      : `Bookmarks (${fullList.length})`;
+    if (Date.now() >= feedbackUntil) {
+      bmcount.textContent = q
+        ? `Bookmarks (${list.length}/${fullList.length})`
+        : `Bookmarks (${fullList.length})`;
+    }
     if (!list.length) {
       bmlist.replaceChildren(
         Object.assign(document.createElement('div'), {
@@ -628,7 +644,7 @@
         setkey.onclick = (e) => {
           e.stopPropagation();
           capture = { url: b.url, title: b.title };
-          bmcount.textContent = `Press a key for "${b.title}" (Del unbinds, Esc cancels)`;
+          bmcount.textContent = `Press a key for "${b.title}" — hold Shift for capitals (Del unbinds, Esc cancels)`;
         };
         el.appendChild(setkey);
         const rm = document.createElement('button');
