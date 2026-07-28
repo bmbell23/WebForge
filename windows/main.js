@@ -393,25 +393,10 @@ function createTab(url = HOME_URL, background = false) {
       openOrFocus(navUrl, false);
     }
   });
-  // #33 round 2: SPAs (Gerrit's PolyGerrit) navigate via pushState, which
-  // never fires will-navigate. If a hotkey tab's URL drifts from home via
-  // in-page navigation, open the destination in its own tab and bounce the
-  // hotkey tab back.
-  let spaBouncing = false;
-  wc.on('did-navigate-in-page', (_e2, navUrl, isMainFrame) => {
-    if (!isMainFrame || spaBouncing || locked) return;
-    const keyId = hotkeyByTab.get(id);
-    if (!keyId) return;
-    const home = hotkeys.get(keyId)?.url;
-    if (!home || navUrl.split('#')[0] === home.split('#')[0]) return;
-    spaBouncing = true;
-    openOrFocus(navUrl, false);
-    if (wc.navigationHistory.canGoBack()) wc.navigationHistory.goBack();
-    else wc.loadURL(home);
-    setTimeout(() => {
-      spaBouncing = false;
-    }, 500);
-  });
+  // #33 round 3: the in-page "bounce back" heuristic is gone — it fought SPA
+  // routers and just flickered. Link clicks are now cancelled at the source
+  // by content-preload.js (see 'open-in-new-tab' below); will-navigate above
+  // stays as the backup for non-anchor navigations.
   for (const ev of [
     'did-navigate',
     'did-navigate-in-page',
@@ -423,6 +408,7 @@ function createTab(url = HOME_URL, background = false) {
   }
   wc.on('did-finish-load', () => tryAutofill(wc)); // #12
   wc.on('dom-ready', () => {
+    wc.send('sticky-mode', hotkeyByTab.has(id)); // #33
     // #36 round 2: hide scrollbars on PAGES too (user: "most certainly not
     // gone") — scrolling itself is untouched.
     wc.insertCSS(
@@ -641,6 +627,14 @@ function closeNormalTabs() {
 
 // --- #16: hotkey tabs ---
 
+// #33: tell each tab whether it's a sticky hotkey tab (drives the preload's
+// click interception). Call after anything that changes hotkeyByTab.
+function pushStickyModes() {
+  for (const [tid, view] of tabs) {
+    view.webContents.send('sticky-mode', hotkeyByTab.has(tid));
+  }
+}
+
 function broadcastHotkeys() {
   // #41: tabs no longer need the bound-key list (firing is leader-driven in
   // main); chrome still needs the map for badges and the binding UX.
@@ -670,6 +664,7 @@ function handleHotkeyPress(keyId) {
     if (newId !== null) {
       hotkeyByTab.set(newId, keyId);
       sortTabOrder();
+      pushStickyModes(); // #33
       pushState();
     }
   }
@@ -681,6 +676,7 @@ function detachActiveHotkeyTab() {
   if (locked || !hotkeyByTab.has(activeId)) return;
   hotkeyByTab.delete(activeId);
   sortTabOrder();
+  pushStickyModes(); // #33
   pushState();
 }
 
@@ -907,6 +903,7 @@ function onUnlocked() {
       if (t.hotkey && hotkeys.get(t.hotkey)) hotkeyByTab.set(id, t.hotkey); // #16
     }
     sortTabOrder();
+    pushStickyModes(); // #33
     activateTab(tabOrder[Math.min(session.active ?? 0, tabOrder.length - 1)]);
   } else {
     const legacy = loadLegacyPinned();
@@ -986,6 +983,10 @@ ipcMain.on('toggle-pin', (_e, id) => togglePin(id));
 
 // #16: hotkey IPC — key presses arrive from content preloads AND the chrome UI.
 ipcMain.on('webforge-key', (_e, keyId) => handleHotkeyPress(String(keyId)));
+// #33: a sticky hotkey tab cancelled a link click — open it as its own tab.
+ipcMain.on('open-in-new-tab', (_e, url) => {
+  if (!locked && typeof url === 'string') openOrFocus(url, false);
+});
 ipcMain.on('set-hotkey', (_e, { keyId, url, title }) => {
   if (locked) return;
   hotkeys.set(String(keyId), { url, title });
@@ -999,6 +1000,7 @@ ipcMain.on('remove-hotkey', (_e, keyId) => {
   hotkeys.remove(String(keyId));
   broadcastHotkeys();
   sortTabOrder();
+  pushStickyModes(); // #33
   pushState();
 });
 
