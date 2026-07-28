@@ -27,6 +27,7 @@
       "main.js",
       "preload.js",
       "bookmarks.js",
+      "vault.js",
       "ui/**"
     ],
     "win": {

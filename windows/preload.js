@@ -20,4 +20,10 @@ contextBridge.exposeInMainWorld('webforge', {
   importBookmarks: () => ipcRenderer.invoke('import-bookmarks'),
   onBookmarksPanel: (cb) => ipcRenderer.on('bookmarks-panel', (_e, open) => cb(open)),
   onBookmarksUpdated: (cb) => ipcRenderer.on('bookmarks-updated', (_e, list) => cb(list)),
+  // vault (#15)
+  vaultStatus: () => ipcRenderer.invoke('vault-status'),
+  vaultSetup: (pw) => ipcRenderer.invoke('vault-setup', pw),
+  vaultUnlock: (pw) => ipcRenderer.invoke('vault-unlock', pw),
+  vaultReset: () => ipcRenderer.invoke('vault-reset'),
+  lockNow: () => ipcRenderer.send('lock-now'),
 });

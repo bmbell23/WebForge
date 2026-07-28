@@ -9,6 +9,7 @@ const { app, BaseWindow, WebContentsView, ipcMain, dialog, Menu, nativeTheme } =
 const path = require('path');
 const fs = require('fs');
 const bookmarks = require('./bookmarks');
+const vault = require('./vault');
 
 const HOME_URL = 'https://duckduckgo.com/';
 const SEARCH_URL = 'https://duckduckgo.com/?q=';
@@ -18,32 +19,45 @@ const TOPBAR_H = 44;
 const BM_PANEL_W = 280; // #11 bookmarks panel, right side
 let bmPanelOpen = false;
 
-let win, chrome;
+let win, chrome, lockView;
 const tabs = new Map(); // id -> WebContentsView
 let tabOrder = [];      // ids in sidebar order (pinned group first)
 let activeId = null;
 let nextTabId = 1;
 const pinnedIds = new Set(); // #9
+let locked = true;           // #15: the app is a brick until the vault unlocks
 
-// #9: pinned tabs survive restarts — their URLs live in userData/pinned.json,
-// saved (debounced) on every state change and restored at launch.
-const pinnedFile = () => path.join(app.getPath('userData'), 'pinned.json');
-let savePinnedTimer = null;
-function savePinnedSoon() {
-  clearTimeout(savePinnedTimer);
-  savePinnedTimer = setTimeout(() => {
-    try {
-      const urls = tabOrder
-        .filter((id) => pinnedIds.has(id))
-        .map((id) => tabs.get(id).webContents.getURL())
-        .filter(Boolean);
-      fs.writeFileSync(pinnedFile(), JSON.stringify(urls));
-    } catch {}
-  }, 500);
+// #15: the whole session (tabs + pinned flags + active tab) persists
+// AES-encrypted in the vault, saved (debounced) on every state change and
+// restored after unlock. Supersedes #9's plaintext pinned.json (migrated
+// below, then deleted).
+let saveSessionTimer = null;
+function sessionSnapshot() {
+  return {
+    tabs: tabOrder
+      .map((id) => ({
+        url: tabs.get(id).webContents.getURL(),
+        pinned: pinnedIds.has(id),
+      }))
+      .filter((t) => t.url),
+    active: Math.max(0, tabOrder.indexOf(activeId)),
+  };
 }
-function loadPinnedUrls() {
+function saveSessionSoon() {
+  if (locked) return;
+  clearTimeout(saveSessionTimer);
+  saveSessionTimer = setTimeout(() => vault.writeFile('session', sessionSnapshot()), 500);
+}
+function saveSessionNow() {
+  if (locked) return;
+  clearTimeout(saveSessionTimer);
+  vault.writeFile('session', sessionSnapshot());
+}
+function loadLegacyPinned() {
+  const f = path.join(app.getPath('userData'), 'pinned.json');
   try {
-    const urls = JSON.parse(fs.readFileSync(pinnedFile(), 'utf8'));
+    const urls = JSON.parse(fs.readFileSync(f, 'utf8'));
+    fs.rmSync(f, { force: true });
     return Array.isArray(urls) ? urls.filter((u) => typeof u === 'string') : [];
   } catch {
     return [];
@@ -65,6 +79,7 @@ const activeWc = () => tabs.get(activeId)?.webContents;
 function layout() {
   const { width, height } = win.getContentBounds();
   chrome.setBounds({ x: 0, y: 0, width, height });
+  lockView?.setBounds({ x: 0, y: 0, width, height });
   const view = tabs.get(activeId);
   if (view) {
     view.setBounds({
@@ -120,10 +135,11 @@ function pushState() {
   const wc = activeWc();
   const title = wc?.getTitle();
   win.setTitle(title ? `${title} — WebForge` : 'WebForge');
-  savePinnedSoon();
+  saveSessionSoon();
 }
 
 function createTab(url = HOME_URL, background = false) {
+  if (locked) return null; // #15
   const id = nextTabId++;
   const view = new WebContentsView();
   tabs.set(id, view);
@@ -226,11 +242,64 @@ function createWindow() {
   win.on('maximize', layout);
   win.on('unmaximize', layout);
 
-  // #9: bring back pinned tabs from the previous session, then land on Home.
-  const pinnedUrls = loadPinnedUrls();
-  for (const u of pinnedUrls) pinnedIds.add(createTab(u, true));
-  if (pinnedUrls.length) activateTab(tabOrder[0]);
-  else createTab(HOME_URL);
+  showLock(); // #15: nothing exists until the vault opens
+}
+
+// --- #15: lock screen + session restore ---
+
+function showLock() {
+  if (lockView) return;
+  locked ? null : saveSessionNow();
+  locked = true;
+  vault.lock();
+  // Tear the whole session down — nothing sensitive stays rendered or mapped.
+  for (const id of [...tabOrder]) {
+    const view = tabs.get(id);
+    win.contentView.removeChildView(view);
+    view.webContents.close();
+  }
+  tabs.clear();
+  tabOrder = [];
+  pinnedIds.clear();
+  activeId = null;
+  win.setTitle('WebForge — locked');
+  chrome.webContents.send('tabs-updated', []);
+
+  lockView = new WebContentsView({
+    webPreferences: { preload: path.join(__dirname, 'preload.js') },
+  });
+  win.contentView.addChildView(lockView); // last added = on top of everything
+  lockView.webContents.loadFile(path.join(__dirname, 'ui', 'lock.html'));
+  layout();
+  lockView.webContents.focus();
+}
+
+function onUnlocked() {
+  locked = false;
+  if (lockView) {
+    win.contentView.removeChildView(lockView);
+    lockView.webContents.close();
+    lockView = null;
+  }
+  win.setTitle('WebForge');
+  // Restore the previous session; fall back to legacy pinned.json, then Home.
+  const session = vault.readFile('session');
+  if (session?.tabs?.length) {
+    for (const t of session.tabs) {
+      const id = createTab(t.url, true);
+      if (t.pinned && id !== null) pinnedIds.add(id);
+    }
+    activateTab(tabOrder[Math.min(session.active ?? 0, tabOrder.length - 1)]);
+  } else {
+    const legacy = loadLegacyPinned();
+    for (const u of legacy) {
+      const id = createTab(u, true);
+      if (id !== null) pinnedIds.add(id);
+    }
+    if (!tabOrder.length) createTab(HOME_URL);
+    else activateTab(tabOrder[0]);
+  }
+  pushState();
 }
 
 // Keyboard shortcuts via a hidden application menu — accelerators fire no
@@ -245,8 +314,9 @@ function setupShortcuts() {
           { label: 'Close Tab', accelerator: 'CmdOrCtrl+W', click: () => closeTab(activeId) },
           { label: 'Pin/Unpin Tab', accelerator: 'CmdOrCtrl+Shift+P', click: () => togglePin(activeId) },
           { label: 'Close Unpinned Tabs', accelerator: 'CmdOrCtrl+Shift+W', click: () => purgeUnpinned() },
-          { label: 'Bookmarks Panel', accelerator: 'CmdOrCtrl+B', click: () => toggleBookmarksPanel() },
-          { label: 'Bookmark This Page', accelerator: 'CmdOrCtrl+D', click: () => toggleStarCurrent() },
+          { label: 'Bookmarks Panel', accelerator: 'CmdOrCtrl+B', click: () => locked || toggleBookmarksPanel() },
+          { label: 'Bookmark This Page', accelerator: 'CmdOrCtrl+D', click: () => locked || toggleStarCurrent() },
+          { label: 'Lock WebForge', accelerator: 'CmdOrCtrl+Shift+L', click: () => showLock() },
           { label: 'Next Tab', accelerator: 'Control+Tab', click: () => cycleTab(1) },
           { label: 'Previous Tab', accelerator: 'Control+Shift+Tab', click: () => cycleTab(-1) },
           {
@@ -292,6 +362,27 @@ ipcMain.on('remove-bookmark', (_e, id) => {
   pushBookmarks();
   pushState();
 });
+// #15: vault IPC (used by ui/lock.html).
+ipcMain.handle('vault-status', () => ({
+  initialized: vault.isInitialized(),
+  unlocked: vault.isUnlocked(),
+}));
+ipcMain.handle('vault-setup', (_e, pw) => {
+  const ok = vault.setup(String(pw ?? ''));
+  if (ok) onUnlocked();
+  return ok;
+});
+ipcMain.handle('vault-unlock', (_e, pw) => {
+  const ok = vault.unlock(String(pw ?? ''));
+  if (ok) onUnlocked();
+  return ok;
+});
+ipcMain.handle('vault-reset', () => {
+  vault.reset();
+  return true;
+});
+ipcMain.on('lock-now', () => showLock());
+
 ipcMain.handle('import-bookmarks', async () => {
   const { canceled, filePaths } = await dialog.showOpenDialog(win, {
     title: 'Import Firefox bookmarks (HTML export or JSON backup)',
@@ -360,4 +451,5 @@ app.whenReady().then(() => {
   setupAutoUpdate();
 });
 
+app.on('before-quit', () => saveSessionNow()); // flush any pending debounce
 app.on('window-all-closed', () => app.quit());

@@ -1,0 +1,122 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #dde3ec; --text: #1a2b4c; --text-dim: #5a6b88;
+    --field-bg: #ffffff; --field-text: #111111;
+    --accent: #2f6fd0; --danger: #c0392b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #10203c; --text: #e3eaf5; --text-dim: #9fb0c9;
+      --field-bg: #0d1830; --field-text: #e3eaf5;
+      --accent: #7fb2ff; --danger: #e07060;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    display: grid;
+    place-items: center;
+    background: var(--bg);
+    color: var(--text);
+    font: 14px system-ui, sans-serif;
+    -webkit-user-select: none;
+  }
+  #card { width: 320px; text-align: center; }
+  #logo { font-size: 40px; }
+  h1 { font-size: 18px; margin: 8px 0 2px; }
+  #hint { color: var(--text-dim); margin: 0 0 18px; font-size: 13px; }
+  input {
+    width: 100%; height: 38px;
+    border: none; border-radius: 8px;
+    padding: 0 14px; margin-bottom: 10px;
+    background: var(--field-bg); color: var(--field-text);
+    font-size: 14px; outline: none;
+  }
+  button {
+    width: 100%; height: 38px;
+    border: none; border-radius: 8px;
+    background: var(--accent); color: #fff;
+    font-size: 14px; font-weight: 600; cursor: pointer;
+  }
+  #error { color: var(--danger); min-height: 20px; margin: 10px 0 0; font-size: 13px; }
+  #reset {
+    margin-top: 22px; font-size: 12px; color: var(--text-dim);
+    background: none; border: none; cursor: pointer; width: auto; height: auto;
+  }
+  #reset:hover { color: var(--danger); }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+  <div id="card">
+    <div id="logo">🌐</div>
+    <h1 id="title">WebForge is locked</h1>
+    <p id="hint">Enter your master password</p>
+    <input id="pw" type="password" placeholder="Master password" autofocus>
+    <input id="pw2" type="password" placeholder="Repeat master password" class="hidden">
+    <button id="go">Unlock</button>
+    <div id="error"></div>
+    <button id="reset" class="hidden">Forgot? Reset the vault (wipes saved data)</button>
+  </div>
+<script>
+  const pw = document.getElementById('pw');
+  const pw2 = document.getElementById('pw2');
+  const go = document.getElementById('go');
+  const error = document.getElementById('error');
+  const resetBtn = document.getElementById('reset');
+  let mode = 'unlock';
+
+  async function init() {
+    const { initialized } = await webforge.vaultStatus();
+    mode = initialized ? 'unlock' : 'setup';
+    document.getElementById('title').textContent =
+      mode === 'setup' ? 'Welcome to WebForge' : 'WebForge is locked';
+    document.getElementById('hint').textContent =
+      mode === 'setup'
+        ? 'Set a master password — the browser is a brick without it. There is NO recovery.'
+        : 'Enter your master password';
+    pw2.classList.toggle('hidden', mode !== 'setup');
+    resetBtn.classList.toggle('hidden', mode !== 'unlock');
+    go.textContent = mode === 'setup' ? 'Set password & start' : 'Unlock';
+    pw.focus();
+  }
+
+  async function submit() {
+    error.textContent = '';
+    if (!pw.value) return;
+    if (mode === 'setup') {
+      if (pw.value.length < 8) { error.textContent = 'Use at least 8 characters.'; return; }
+      if (pw.value !== pw2.value) { error.textContent = 'Passwords do not match.'; return; }
+      const ok = await webforge.vaultSetup(pw.value);
+      if (!ok) error.textContent = 'Setup failed — is the vault already initialized?';
+    } else {
+      go.textContent = '…';
+      const ok = await webforge.vaultUnlock(pw.value);
+      go.textContent = 'Unlock';
+      if (!ok) { error.textContent = 'Wrong password.'; pw.select(); }
+    }
+    // On success main tears this view down — nothing else to do here.
+  }
+
+  go.onclick = submit;
+  pw.addEventListener('keydown', (e) => { if (e.key === 'Enter') (mode === 'setup' ? pw2.focus() : submit()); });
+  pw2.addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
+
+  resetBtn.onclick = async () => {
+    const phrase = prompt(
+      'This PERMANENTLY deletes your saved session and imported passwords.\n' +
+      'Bookmarks are kept. Type RESET to confirm:'
+    );
+    if (phrase === 'RESET') { await webforge.vaultReset(); init(); }
+  };
+
+  init();
+</script>
+</body>
+</html>
