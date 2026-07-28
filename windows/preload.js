@@ -5,5 +5,10 @@ contextBridge.exposeInMainWorld('webforge', {
   goBack: () => ipcRenderer.send('go-back'),
   goForward: () => ipcRenderer.send('go-forward'),
   reload: () => ipcRenderer.send('reload'),
-  onUrlChanged: (cb) => ipcRenderer.on('url-changed', (_e, url) => cb(url)),
+  stop: () => ipcRenderer.send('stop'),
+  newTab: () => ipcRenderer.send('new-tab'),
+  closeTab: (id) => ipcRenderer.send('close-tab', id),
+  activateTab: (id) => ipcRenderer.send('activate-tab', id),
+  onTabsUpdated: (cb) => ipcRenderer.on('tabs-updated', (_e, state) => cb(state)),
+  onFocusUrl: (cb) => ipcRenderer.on('focus-url', () => cb()),
 });

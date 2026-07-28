@@ -7,22 +7,81 @@
   * { box-sizing: border-box; }
   body {
     margin: 0;
+    height: 80px; /* keep in sync with CHROME_HEIGHT in main.js */
+    display: flex;
+    flex-direction: column;
+    background: #1a2b4c;
+    font: 13px system-ui, sans-serif;
+    -webkit-user-select: none;
+    overflow: hidden;
+  }
+
+  /* --- tab strip --- */
+  #tabstrip {
+    height: 36px;
+    display: flex;
+    align-items: flex-end;
+    gap: 2px;
+    padding: 4px 6px 0 6px;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .tab {
+    flex: 0 1 200px;
+    min-width: 90px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 6px 0 10px;
+    border-radius: 8px 8px 0 0;
+    background: #10203c;
+    color: #9fb0c9;
+    cursor: default;
+    white-space: nowrap;
+  }
+  .tab.active { background: #2c4370; color: #fff; }
+  .tab .title {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .tab .close {
+    width: 18px; height: 18px;
+    border: none; border-radius: 50%;
+    background: transparent; color: inherit;
+    font-size: 12px; line-height: 1;
+    cursor: pointer;
+  }
+  .tab .close:hover { background: rgba(255, 255, 255, 0.2); }
+  .tab .spinner { font-size: 11px; }
+  #newtab {
+    flex: 0 0 auto;
+    width: 26px; height: 26px;
+    margin: 0 0 3px 2px;
+    border: none; border-radius: 6px;
+    background: transparent; color: #cdd6e4;
+    font-size: 16px; cursor: pointer;
+  }
+  #newtab:hover { background: rgba(255, 255, 255, 0.12); }
+
+  /* --- nav bar --- */
+  #nav {
     height: 44px;
     display: flex;
     align-items: center;
     gap: 6px;
     padding: 0 8px;
-    background: #1a2b4c;
-    font: 14px system-ui, sans-serif;
-    -webkit-user-select: none;
+    background: #2c4370;
   }
-  button {
+  #nav button {
     width: 30px; height: 30px;
     border: none; border-radius: 6px;
-    background: transparent; color: #cdd6e4;
+    background: transparent; color: #e3eaf5;
     font-size: 16px; cursor: pointer;
   }
-  button:hover { background: rgba(255, 255, 255, 0.12); }
+  #nav button:hover:not(:disabled) { background: rgba(255, 255, 255, 0.12); }
+  #nav button:disabled { color: #6b7c99; cursor: default; }
   #url {
     flex: 1; height: 30px;
     border: none; border-radius: 15px;
@@ -30,25 +89,102 @@
     background: #ffffff; color: #111;
     font-size: 13px; outline: none;
   }
+
+  /* --- load progress (indeterminate) --- */
+  #progress {
+    height: 2px;
+    background: transparent;
+    position: relative;
+    overflow: hidden;
+  }
+  #progress.loading::after {
+    content: '';
+    position: absolute;
+    top: 0; left: -30%;
+    width: 30%; height: 100%;
+    background: #7fb2ff;
+    animation: slide 1s linear infinite;
+  }
+  @keyframes slide {
+    to { left: 100%; }
+  }
 </style>
 </head>
 <body>
-  <button id="back" title="Back">←</button>
-  <button id="forward" title="Forward">→</button>
-  <button id="reload" title="Reload">⟳</button>
-  <input id="url" type="text" spellcheck="false"
-         placeholder="Search or enter address">
+  <div id="tabstrip"></div>
+  <div id="nav">
+    <button id="back" title="Back">←</button>
+    <button id="forward" title="Forward">→</button>
+    <button id="reloadstop" title="Reload">⟳</button>
+    <input id="url" type="text" spellcheck="false"
+           placeholder="Search or enter address">
+  </div>
+  <div id="progress"></div>
 <script>
+  const tabstrip = document.getElementById('tabstrip');
   const url = document.getElementById('url');
-  document.getElementById('back').onclick = () => webforge.goBack();
-  document.getElementById('forward').onclick = () => webforge.goForward();
-  document.getElementById('reload').onclick = () => webforge.reload();
+  const back = document.getElementById('back');
+  const forward = document.getElementById('forward');
+  const reloadstop = document.getElementById('reloadstop');
+  const progress = document.getElementById('progress');
+  let activeLoading = false;
+
+  back.onclick = () => webforge.goBack();
+  forward.onclick = () => webforge.goForward();
+  reloadstop.onclick = () => (activeLoading ? webforge.stop() : webforge.reload());
   url.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') { webforge.navigate(url.value); url.blur(); }
   });
   url.addEventListener('focus', () => url.select());
-  webforge.onUrlChanged((u) => {
-    if (document.activeElement !== url) url.value = u;
+  webforge.onFocusUrl(() => { url.focus(); url.select(); });
+
+  function makeTab(t) {
+    const el = document.createElement('div');
+    el.className = 'tab' + (t.active ? ' active' : '');
+    el.title = t.url;
+
+    if (t.loading) {
+      const spin = document.createElement('span');
+      spin.className = 'spinner';
+      spin.textContent = '⟳';
+      el.appendChild(spin);
+    }
+    const title = document.createElement('span');
+    title.className = 'title';
+    title.textContent = t.title;
+    el.appendChild(title);
+
+    const close = document.createElement('button');
+    close.className = 'close';
+    close.textContent = '✕';
+    close.title = 'Close tab';
+    close.onclick = (e) => { e.stopPropagation(); webforge.closeTab(t.id); };
+    el.appendChild(close);
+
+    el.onclick = () => webforge.activateTab(t.id);
+    el.onauxclick = (e) => { if (e.button === 1) webforge.closeTab(t.id); };
+    return el;
+  }
+
+  webforge.onTabsUpdated((state) => {
+    tabstrip.replaceChildren(
+      ...state.map(makeTab),
+      Object.assign(document.createElement('button'), {
+        id: 'newtab',
+        textContent: '+',
+        title: 'New tab (Ctrl+T)',
+        onclick: () => webforge.newTab(),
+      })
+    );
+    const active = state.find((t) => t.active);
+    if (!active) return;
+    if (document.activeElement !== url) url.value = active.url;
+    back.disabled = !active.canGoBack;
+    forward.disabled = !active.canGoForward;
+    activeLoading = active.loading;
+    reloadstop.textContent = activeLoading ? '✕' : '⟳';
+    reloadstop.title = activeLoading ? 'Stop' : 'Reload';
+    progress.className = activeLoading ? 'loading' : '';
   });
 </script>
 </body>

@@ -1,15 +1,19 @@
-// WebForge Windows shell: a BaseWindow holding two WebContentsViews —
-// a thin "chrome" strip (ui/index.html: back/forward/reload + address bar)
-// and the page content below it. This is the same layout the future tabbed
-// UI (#4) extends: one chrome view, N content views.
-const { app, BaseWindow, WebContentsView, ipcMain, dialog } = require('electron');
+// WebForge Windows shell (#3, tabs in #4): a BaseWindow holding one chrome
+// WebContentsView (ui/index.html: tab strip + nav bar) and one content
+// WebContentsView per tab — only the active tab's view is visible. Full tab
+// state is broadcast to the chrome UI on every change; it re-renders from that.
+const { app, BaseWindow, WebContentsView, ipcMain, dialog, Menu } = require('electron');
 const path = require('path');
 
 const HOME_URL = 'https://duckduckgo.com/';
 const SEARCH_URL = 'https://duckduckgo.com/?q=';
-const CHROME_HEIGHT = 44;
+const CHROME_HEIGHT = 80; // 36px tab strip + 44px nav bar — keep in sync with ui/index.html
 
-let win, chrome, content;
+let win, chrome;
+const tabs = new Map(); // id -> WebContentsView
+let tabOrder = [];      // ids in tab-strip order
+let activeId = null;
+let nextTabId = 1;
 
 // Address-bar input → URL. Same rules as the Android shell: explicit scheme
 // passes through; something host-shaped gets https://; anything else searches.
@@ -21,10 +25,99 @@ function resolveInput(text) {
   return SEARCH_URL + encodeURIComponent(t);
 }
 
+const activeWc = () => tabs.get(activeId)?.webContents;
+
 function layout() {
   const { width, height } = win.getContentBounds();
   chrome.setBounds({ x: 0, y: 0, width, height: CHROME_HEIGHT });
-  content.setBounds({ x: 0, y: CHROME_HEIGHT, width, height: height - CHROME_HEIGHT });
+  const view = tabs.get(activeId);
+  if (view) view.setBounds({ x: 0, y: CHROME_HEIGHT, width, height: height - CHROME_HEIGHT });
+}
+
+function tabState() {
+  return tabOrder.map((id) => {
+    const wc = tabs.get(id).webContents;
+    return {
+      id,
+      title: wc.getTitle() || wc.getURL() || 'New tab',
+      url: wc.getURL(),
+      loading: wc.isLoading(),
+      active: id === activeId,
+      canGoBack: wc.navigationHistory.canGoBack(),
+      canGoForward: wc.navigationHistory.canGoForward(),
+    };
+  });
+}
+
+function pushState() {
+  if (!chrome) return;
+  chrome.webContents.send('tabs-updated', tabState());
+  const wc = activeWc();
+  const title = wc?.getTitle();
+  win.setTitle(title ? `${title} — WebForge` : 'WebForge');
+}
+
+function createTab(url = HOME_URL, background = false) {
+  const id = nextTabId++;
+  const view = new WebContentsView();
+  tabs.set(id, view);
+  tabOrder.push(id);
+
+  const wc = view.webContents;
+  // Popups (window.open / target=_blank) land in a background tab (#4)
+  // instead of hijacking the current view or spawning an OS window.
+  wc.setWindowOpenHandler(({ url: popupUrl }) => {
+    createTab(popupUrl, true);
+    return { action: 'deny' };
+  });
+  for (const ev of [
+    'did-navigate',
+    'did-navigate-in-page',
+    'page-title-updated',
+    'did-start-loading',
+    'did-stop-loading',
+  ]) {
+    wc.on(ev, pushState);
+  }
+
+  win.contentView.addChildView(view);
+  view.setVisible(false);
+  wc.loadURL(url);
+  if (background && activeId !== null) pushState();
+  else activateTab(id);
+  return id;
+}
+
+function activateTab(id) {
+  if (!tabs.has(id)) return;
+  tabs.get(activeId)?.setVisible(false);
+  activeId = id;
+  tabs.get(id).setVisible(true);
+  layout();
+  pushState();
+}
+
+function closeTab(id) {
+  const view = tabs.get(id);
+  if (!view) return;
+  const idx = tabOrder.indexOf(id);
+  tabs.delete(id);
+  tabOrder = tabOrder.filter((t) => t !== id);
+  win.contentView.removeChildView(view);
+  view.webContents.close();
+  if (activeId === id) {
+    activeId = null;
+    if (tabOrder.length === 0) createTab(); // the window always has ≥1 tab
+    else activateTab(tabOrder[Math.min(idx, tabOrder.length - 1)]);
+  } else {
+    pushState();
+  }
+}
+
+function cycleTab(dir) {
+  if (tabOrder.length < 2) return;
+  const idx = tabOrder.indexOf(activeId);
+  activateTab(tabOrder[(idx + dir + tabOrder.length) % tabOrder.length]);
 }
 
 function createWindow() {
@@ -33,37 +126,59 @@ function createWindow() {
   chrome = new WebContentsView({
     webPreferences: { preload: path.join(__dirname, 'preload.js') },
   });
-  content = new WebContentsView();
-
   win.contentView.addChildView(chrome);
-  win.contentView.addChildView(content);
-  layout();
+  chrome.webContents.loadFile(path.join(__dirname, 'ui', 'index.html'));
+  // Chrome renders from pushed state; re-push once it's ready to receive.
+  chrome.webContents.on('did-finish-load', pushState);
+
   win.on('resize', layout);
   win.on('maximize', layout);
   win.on('unmaximize', layout);
 
-  // Keep every navigation in our content view — we ARE the browser.
-  content.webContents.setWindowOpenHandler(({ url }) => {
-    content.webContents.loadURL(url);
-    return { action: 'deny' };
-  });
+  createTab(HOME_URL);
+}
 
-  const pushUrl = () =>
-    chrome.webContents.send('url-changed', content.webContents.getURL());
-  content.webContents.on('did-navigate', pushUrl);
-  content.webContents.on('did-navigate-in-page', pushUrl);
-
-  chrome.webContents.loadFile(path.join(__dirname, 'ui', 'index.html'));
-  content.webContents.loadURL(HOME_URL);
+// Keyboard shortcuts via a hidden application menu — accelerators fire no
+// matter which webContents (page or chrome UI) has keyboard focus.
+function setupShortcuts() {
+  Menu.setApplicationMenu(
+    Menu.buildFromTemplate([
+      {
+        label: 'WebForge',
+        submenu: [
+          { label: 'New Tab', accelerator: 'CmdOrCtrl+T', click: () => createTab() },
+          { label: 'Close Tab', accelerator: 'CmdOrCtrl+W', click: () => closeTab(activeId) },
+          { label: 'Next Tab', accelerator: 'Control+Tab', click: () => cycleTab(1) },
+          { label: 'Previous Tab', accelerator: 'Control+Shift+Tab', click: () => cycleTab(-1) },
+          {
+            label: 'Focus Address Bar',
+            accelerator: 'CmdOrCtrl+L',
+            click: () => {
+              chrome.webContents.focus();
+              chrome.webContents.send('focus-url');
+            },
+          },
+          { label: 'Reload', accelerator: 'CmdOrCtrl+R', click: () => activeWc()?.reload() },
+          { label: 'Reload', accelerator: 'F5', visible: false, click: () => activeWc()?.reload() },
+          { type: 'separator' },
+          { label: 'Quit', accelerator: 'CmdOrCtrl+Q', role: 'quit' },
+        ],
+      },
+    ])
+  );
 }
 
 ipcMain.on('navigate', (_e, input) => {
   const url = resolveInput(input);
-  if (url) content.webContents.loadURL(url);
+  if (url) activeWc()?.loadURL(url);
 });
-ipcMain.on('go-back', () => content.webContents.navigationHistory.goBack());
-ipcMain.on('go-forward', () => content.webContents.navigationHistory.goForward());
-ipcMain.on('reload', () => content.webContents.reload());
+ipcMain.on('go-back', () => activeWc()?.navigationHistory.goBack());
+ipcMain.on('go-forward', () => activeWc()?.navigationHistory.goForward());
+ipcMain.on('reload', () => activeWc()?.reload());
+ipcMain.on('stop', () => activeWc()?.stop());
+ipcMain.on('new-tab', () => createTab());
+ipcMain.on('close-tab', (_e, id) => closeTab(id));
+ipcMain.on('activate-tab', (_e, id) => activateTab(id));
 
 // Self-update: electron-updater against the generic HTTP provider on
 // dockerhost (releases/windows/ behind nginx :8012 — see docker-compose.yml).
@@ -110,6 +225,7 @@ function setupAutoUpdate() {
 
 app.whenReady().then(() => {
   createWindow();
+  setupShortcuts();
   setupAutoUpdate();
 });
 
