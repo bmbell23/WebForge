@@ -85,11 +85,18 @@
   #tablist {
     flex: 1;
     overflow-y: auto;
-    scrollbar-width: thin;
     padding: 0 6px 8px 6px;
     display: flex;
     flex-direction: column;
     gap: 2px;
+  }
+  /* #36: no visible scrollbars anywhere in the chrome (wheel still scrolls) */
+  #tablist, #bmlist, #pwlist, #settings {
+    scrollbar-width: none;
+  }
+  #tablist::-webkit-scrollbar, #bmlist::-webkit-scrollbar,
+  #pwlist::-webkit-scrollbar, #settings::-webkit-scrollbar {
+    display: none;
   }
   .tab {
     flex: 0 0 auto;
@@ -196,7 +203,7 @@
     font-weight: 600;
     color: var(--text-dim);
   }
-  #pwlist { flex: 1; overflow-y: auto; scrollbar-width: thin; padding: 0 6px 10px; }
+  #pwlist { flex: 1; overflow-y: auto; padding: 0 6px 10px; }
   #pwadd {
     width: 26px; height: 26px;
     border: none; border-radius: 6px;
@@ -247,7 +254,7 @@
     font-size: 12px; cursor: pointer;
   }
   #bmimport:hover, #pwimport:hover { background: var(--hover); }
-  #bmlist { flex: 1; overflow-y: auto; scrollbar-width: thin; padding: 0 6px 10px; }
+  #bmlist { flex: 1; overflow-y: auto; padding: 0 6px 10px; }
   .bmfolder {
     padding: 8px 6px 3px;
     font-size: 11px; font-weight: 600;
@@ -255,6 +262,15 @@
     text-transform: uppercase; letter-spacing: 0.04em;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
+  /* #35: clickable tree folders */
+  .bmfolder.tree {
+    text-transform: none; letter-spacing: 0;
+    font-size: 12.5px;
+    padding-top: 4px; padding-bottom: 4px;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  .bmfolder.tree:hover { background: var(--hover); }
   .bm {
     display: flex; align-items: center; gap: 6px;
     height: 28px; padding: 0 4px 0 8px;
@@ -852,7 +868,11 @@
       : `Imported ${r.added} (${r.skipped} dupes skipped)`;
   };
 
-  webforge.onBookmarksPanel((open) => bmpanel.classList.toggle('open', open));
+  webforge.onBookmarksPanel((open) => {
+    bmpanel.classList.toggle('open', open);
+    bmExpanded.clear(); // #35: every open starts fully collapsed
+    if (open) renderBookmarks(lastBookmarks);
+  });
   webforge.onFsMode((mode) => { // #14
     if (mode) document.body.dataset.fs = mode;
     else delete document.body.dataset.fs;
@@ -861,6 +881,7 @@
   // --- #16: hotkeys — chrome-side firing, bookmark ⌨ assignment ---
   let hotkeysMap = {}; // keyId -> {url, title}
   let lastBookmarks = [];
+  let bmExpanded = new Set(); // #35: expanded folder paths (reset on panel open)
   let capture = null;  // {url, title} while waiting for a key press
   const keyIdOf = (e) => (e.ctrlKey ? 'Ctrl+' : '') + (e.altKey ? 'Alt+' : '') + e.key;
   const keyForUrl = (url) => Object.keys(hotkeysMap).find((k) => hotkeysMap[k].url === url);
@@ -935,70 +956,114 @@
       bmlist.replaceChildren(
         Object.assign(document.createElement('div'), {
           id: 'bmempty',
-          textContent: 'No bookmarks yet. Star a page (Ctrl+D) or Import a Firefox export.',
+          textContent: q
+            ? 'No bookmarks match.'
+            : 'No bookmarks yet. Star a page (Ctrl+D) or Import a Firefox export.',
         })
       );
       return;
     }
-    const byFolder = new Map();
+
+    // #35: searching renders the flat match list (collapse state ignored so
+    // search always finds everything); otherwise a real collapsible tree.
+    if (q) {
+      bmlist.replaceChildren(...list.map((b) => makeBmRow(b, 0)));
+      return;
+    }
+
+    // Build the nested tree: folder paths split on '/'.
+    const root = { subs: new Map(), items: [] };
     for (const b of list) {
-      const key = b.folder || 'Other';
-      if (!byFolder.has(key)) byFolder.set(key, []);
-      byFolder.get(key).push(b);
+      let node = root;
+      for (const seg of (b.folder || '').split('/').filter(Boolean)) {
+        if (!node.subs.has(seg)) node.subs.set(seg, { subs: new Map(), items: [] });
+        node = node.subs.get(seg);
+      }
+      node.items.push(b);
     }
     const nodes = [];
-    for (const [folder, items] of [...byFolder.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+    const emit = (node, path, depth) => {
+      for (const [name, sub] of [...node.subs.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+        const subPath = path ? `${path}/${name}` : name;
+        const open = bmExpanded.has(subPath);
+        const h = document.createElement('div');
+        h.className = 'bmfolder tree';
+        h.style.paddingLeft = `${6 + depth * 14}px`;
+        h.textContent = `${open ? '▾' : '▸'} ${name}`;
+        h.title = subPath;
+        h.onclick = () => {
+          if (open) bmExpanded.delete(subPath);
+          else bmExpanded.add(subPath);
+          renderBookmarks(lastBookmarks);
+        };
+        nodes.push(h);
+        if (open) emit(sub, subPath, depth + 1);
+      }
+      for (const b of node.items) nodes.push(makeBmRow(b, depth));
+    };
+    // Keybound bookmarks pinned at the very top, alphanumeric by key (they
+    // also remain in their folders below).
+    const boundBms = list
+      .filter((b) => keyForUrl(b.url))
+      .sort((a, b) =>
+        keyForUrl(a.url).localeCompare(keyForUrl(b.url), undefined, { numeric: true })
+      );
+    if (boundBms.length) {
       const h = document.createElement('div');
       h.className = 'bmfolder';
-      h.textContent = folder;
-      h.title = folder;
-      nodes.push(h);
-      for (const b of items) {
-        const el = document.createElement('div');
-        el.className = 'bm';
-        el.title = b.url;
-        const bound = keyForUrl(b.url);
-        if (bound) {
-          const k = document.createElement('span');
-          k.className = 'kbd';
-          k.textContent = bound;
-          el.appendChild(k);
-        }
-        const t = document.createElement('span');
-        t.className = 'title';
-        t.textContent = b.title;
-        el.appendChild(t);
-        const edit = Object.assign(document.createElement('button'), {
-          className: 'setkey',
-          textContent: '✎',
-          title: 'Edit bookmark',
-        });
-        edit.onclick = (e) => { e.stopPropagation(); webforge.editBookmark(b.id); };
-        el.appendChild(edit);
-        const setkey = document.createElement('button');
-        setkey.className = 'setkey';
-        setkey.textContent = '⌨';
-        setkey.title = bound
-          ? `Hotkey: ${bound} — press a new key, Del to unbind, Esc to cancel`
-          : 'Set a hotkey for this bookmark';
-        setkey.onclick = (e) => {
-          e.stopPropagation();
-          capture = { url: b.url, title: b.title };
-          bmcount.textContent = `Press a key for "${b.title}" — hold Shift for capitals (Del unbinds, Esc cancels)`;
-        };
-        el.appendChild(setkey);
-        const rm = document.createElement('button');
-        rm.className = 'rm';
-        rm.textContent = '✕';
-        rm.title = 'Remove bookmark';
-        rm.onclick = (e) => { e.stopPropagation(); webforge.removeBookmark(b.id); };
-        el.appendChild(rm);
-        el.onclick = () => webforge.openBookmark(b.url, false);
-        el.onauxclick = (e) => { if (e.button === 1) webforge.openBookmark(b.url, true); };
-        nodes.push(el);
-      }
+      h.textContent = 'Hotkeys';
+      nodes.unshift(h, ...boundBms.map((b) => makeBmRow(b, 0)));
     }
+    // Root-level (folderless) bookmarks, then the tree.
+    for (const b of root.items) nodes.push(makeBmRow(b, 0));
+    emit({ subs: root.subs, items: [] }, '', 0);
     bmlist.replaceChildren(...nodes);
+  }
+
+  function makeBmRow(b, depth) {
+    const el = document.createElement('div');
+    el.className = 'bm';
+    el.title = b.url;
+    el.style.paddingLeft = `${8 + depth * 14}px`;
+    const bound = keyForUrl(b.url);
+    if (bound) {
+      const k = document.createElement('span');
+      k.className = 'kbd';
+      k.textContent = bound;
+      el.appendChild(k);
+    }
+    const t = document.createElement('span');
+    t.className = 'title';
+    t.textContent = b.title;
+    el.appendChild(t);
+    const edit = Object.assign(document.createElement('button'), {
+      className: 'setkey',
+      textContent: '✎',
+      title: 'Edit bookmark',
+    });
+    edit.onclick = (e) => { e.stopPropagation(); webforge.editBookmark(b.id); };
+    el.appendChild(edit);
+    const setkey = document.createElement('button');
+    setkey.className = 'setkey';
+    setkey.textContent = '⌨';
+    setkey.title = bound
+      ? `Hotkey: ${bound} — press a new key, Del to unbind, Esc to cancel`
+      : 'Set a hotkey for this bookmark';
+    setkey.onclick = (e) => {
+      e.stopPropagation();
+      capture = { url: b.url, title: b.title };
+      bmcount.textContent = `Press a key for "${b.title}" — hold Shift for capitals (Del unbinds, Esc cancels)`;
+    };
+    el.appendChild(setkey);
+    const rm = document.createElement('button');
+    rm.className = 'rm';
+    rm.textContent = '✕';
+    rm.title = 'Remove bookmark';
+    rm.onclick = (e) => { e.stopPropagation(); webforge.removeBookmark(b.id); };
+    el.appendChild(rm);
+    el.onclick = () => webforge.openBookmark(b.url, false);
+    el.onauxclick = (e) => { if (e.button === 1) webforge.openBookmark(b.url, true); };
+    return el;
   }
 </script>
 </body>
