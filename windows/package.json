@@ -11,6 +11,7 @@
     "dist": "electron-builder --win nsis"
   },
   "dependencies": {
+    "@ghostery/adblocker-electron": "^2.18.1",
     "electron-updater": "^6.3.9"
   },
   "devDependencies": {

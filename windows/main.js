@@ -5,7 +5,7 @@
 // and added after it, so they cover chrome's dead area. Only the active tab's
 // view is visible. Full tab state is broadcast to the chrome UI on every
 // change; it re-renders from that.
-const { app, BaseWindow, WebContentsView, ipcMain, dialog, Menu, nativeTheme } = require('electron');
+const { app, BaseWindow, WebContentsView, ipcMain, dialog, Menu, nativeTheme, session } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const bookmarks = require('./bookmarks');
@@ -245,6 +245,47 @@ function createWindow() {
   win.on('unmaximize', layout);
 
   showLock(); // #15: nothing exists until the vault opens
+}
+
+// #10: ad blocking — Ghostery engine with the FULL prebuilt list set
+// (EasyList/EasyPrivacy + uBlock lists incl. Annoyances), plus extra cosmetic
+// rules for fandom.com, the user's priority target. Engine is cached in
+// userData so later launches (even off-network) reuse it; a first-ever run
+// with no network just skips blocking until next launch.
+const FANDOM_EXTRA_FILTERS = `
+fandom.com##.top-ads-container
+fandom.com##.bottom-ads-container
+fandom.com##.ad-slot
+fandom.com##.gpt-ad
+fandom.com##div[class*="ad-slot"]
+fandom.com##div[data-ad-bucket]
+fandom.com##.global-footer__bottom-ads
+fandom.com##.mobile-global-navigation__anchor-ads
+fandom.com##.fandom-video-ad
+`;
+
+async function setupAdblock() {
+  try {
+    const { ElectronBlocker } = require('@ghostery/adblocker-electron');
+    const blocker = await ElectronBlocker.fromPrebuiltFull(fetch, {
+      path: path.join(app.getPath('userData'), 'adblock-engine.bin'),
+      read: fs.promises.readFile,
+      write: fs.promises.writeFile,
+    });
+    try {
+      const { parseFilters } = require('@ghostery/adblocker');
+      const extra = parseFilters(FANDOM_EXTRA_FILTERS, blocker.config);
+      blocker.update({
+        newNetworkFilters: extra.networkFilters,
+        newCosmeticFilters: extra.cosmeticFilters,
+      });
+    } catch (e) {
+      console.error('webforge: fandom extras failed to load', e);
+    }
+    blocker.enableBlockingInSession(session.defaultSession);
+  } catch (e) {
+    console.error('webforge: adblock disabled this run', e);
+  }
 }
 
 // #12: automatic login fill — user decision: "everything once I'm in".
@@ -508,6 +549,7 @@ function setupAutoUpdate() {
 }
 
 app.whenReady().then(() => {
+  setupAdblock(); // async — engine attaches to the session when ready
   createWindow();
   setupShortcuts();
   setupAutoUpdate();
