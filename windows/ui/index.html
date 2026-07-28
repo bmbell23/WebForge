@@ -271,6 +271,10 @@
     cursor: pointer;
   }
   .bmfolder.tree:hover { background: var(--hover); }
+  .bmfolder.dropping {
+    background: var(--accent) !important;
+    color: #fff; outline: 1px dashed var(--accent);
+  }
   .bm {
     display: flex; align-items: center; gap: 6px;
     height: 28px; padding: 0 4px 0 8px;
@@ -708,7 +712,9 @@
 
   function renderTabs(state) {
     // #16: sidebar sections — Hotkeys, Pinned, then normal tabs.
-    const hot = state.filter((t) => t.hotkey);
+    const hot = state
+      .filter((t) => t.hotkey)
+      .sort((a, b) => a.hotkey.localeCompare(b.hotkey, undefined, { numeric: true })); // #44
     const pin = state.filter((t) => !t.hotkey && t.pinned);
     const rest = state.filter((t) => !t.hotkey && !t.pinned);
     const nodes = [];
@@ -1163,6 +1169,14 @@
           else bmExpanded.add(subPath);
           renderBookmarks(lastBookmarks);
         };
+        h.ondragover = (e) => { e.preventDefault(); h.classList.add('dropping'); };
+        h.ondragleave = () => h.classList.remove('dropping');
+        h.ondrop = (e) => { // #29
+          e.preventDefault();
+          h.classList.remove('dropping');
+          const id = e.dataTransfer.getData('text/plain');
+          if (id) webforge.moveBookmark(id, subPath);
+        };
         nodes.push(h);
         if (open) emit(sub, subPath, depth + 1);
       }
@@ -1192,6 +1206,12 @@
     el.className = 'bm';
     el.title = b.url;
     el.style.paddingLeft = `${8 + depth * 14}px`;
+    // #29: drag a bookmark onto a folder row to move it.
+    el.draggable = true;
+    el.ondragstart = (e) => {
+      e.dataTransfer.setData('text/plain', b.id);
+      e.dataTransfer.effectAllowed = 'move';
+    };
     const bound = keyForUrl(b.url);
     if (bound) {
       const k = document.createElement('span');
@@ -1228,7 +1248,11 @@
     rm.title = 'Remove bookmark';
     rm.onclick = (e) => { e.stopPropagation(); webforge.removeBookmark(b.id); };
     el.appendChild(rm);
-    el.onclick = () => webforge.openBookmark(b.url, false);
+    el.onclick = () => {
+      webforge.openBookmark(b.url, false);
+      bmExpanded.clear(); // #35: folders re-collapse after each use
+      renderBookmarks(lastBookmarks);
+    };
     el.onauxclick = (e) => { if (e.button === 1) webforge.openBookmark(b.url, true); };
     return el;
   }

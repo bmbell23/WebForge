@@ -13,8 +13,26 @@ const vault = require('./vault');
 const credentials = require('./credentials');
 const hotkeys = require('./hotkeys');
 
-const HOME_URL = 'https://duckduckgo.com/';
-const SEARCH_URL = 'https://duckduckgo.com/?q=';
+// #43: new tabs land on our own search page; Google is the default engine.
+const ENGINES = {
+  google: 'https://www.google.com/search?q=',
+  duckduckgo: 'https://duckduckgo.com/?q=',
+  bing: 'https://www.bing.com/search?q=',
+  brave: 'https://search.brave.com/search?q=',
+};
+const NEWTAB_FILE = path.join(__dirname, 'ui', 'newtab.html');
+// #40: WebForge's own pages open as ordinary tabs (no more full-window
+// overlays fighting the view stack).
+const INTERNAL_PAGES = {
+  settings: path.join(__dirname, 'ui', 'settings.html'),
+  manager: path.join(__dirname, 'ui', 'manager.html'),
+};
+const fileUrl = (p) => `file://${p.replace(/\\/g, '/')}`;
+const isInternalUrl = (u) =>
+  typeof u === 'string' && Object.values(INTERNAL_PAGES).some((p) => u.startsWith(fileUrl(p)));
+const searchEngine = () => (ENGINES[getSettings().searchEngine] ? getSettings().searchEngine : 'google');
+const newTabUrl = () => `file://${NEWTAB_FILE.replace(/\\/g, '/')}?e=${searchEngine()}`;
+const isNewTabUrl = (u) => typeof u === 'string' && u.startsWith('file://') && u.includes('newtab.html');
 // Keep in sync with ui/index.html's grid.
 const SIDEBAR_W = 240;
 const TOPBAR_H = 44;
@@ -82,7 +100,7 @@ function resolveInput(text) {
   if (!t) return null;
   if (/^https?:\/\//i.test(t)) return t;
   if (!t.includes(' ') && t.includes('.')) return `https://${t}`;
-  return SEARCH_URL + encodeURIComponent(t);
+  return ENGINES[searchEngine()] + encodeURIComponent(t); // #43
 }
 
 const activeWc = () => tabs.get(activeId)?.webContents;
@@ -216,38 +234,28 @@ function applyTheme(theme) {
   nativeTheme.themeSource = ['light', 'dark'].includes(theme) ? theme : 'system';
 }
 
-// #29: bookmark manager overlay (same raise mechanics as settings).
-let managerOpen = false;
-function toggleBmManager() {
-  managerOpen = !managerOpen;
-  if (managerOpen) {
-    clearFsReveal();
-    win.contentView.addChildView(chrome);
-    pushBookmarks();
-  } else {
-    const view = tabs.get(activeId);
-    if (view && !settingsOpen) win.contentView.addChildView(view);
+// #40: internal pages (settings, bookmark manager) are ORDINARY TABS now.
+// Reuse the existing tab if one is already open rather than piling up copies.
+const managerOpen = false; // overlays retired; kept false for the layout guards
+function openInternalTab(page) {
+  const target = fileUrl(INTERNAL_PAGES[page]);
+  if (!target) return;
+  for (const id of tabOrder) {
+    if (tabs.get(id).webContents.getURL().startsWith(target)) {
+      activateTab(id);
+      return;
+    }
   }
-  chrome.webContents.send('bm-manager', managerOpen);
-  layout();
-  if (managerOpen) chrome.webContents.focus();
-  else activeWc()?.focus();
+  createTab(target, false);
 }
 
-let settingsOpen = false;
+function toggleBmManager() {
+  openInternalTab('manager');
+}
+
+const settingsOpen = false; // #40: overlay retired — settings is a tab
 function toggleSettings() {
-  settingsOpen = !settingsOpen;
-  if (settingsOpen) {
-    clearFsReveal(); // #37
-    win.contentView.addChildView(chrome); // raise chrome above the page
-  } else {
-    const view = tabs.get(activeId);
-    if (view) win.contentView.addChildView(view); // re-raise content
-  }
-  chrome.webContents.send('settings', settingsOpen ? getSettings() : null);
-  layout(); // #32: expands/collapses chrome correctly in fullscreen too
-  if (settingsOpen) chrome.webContents.focus();
-  else activeWc()?.focus();
+  openInternalTab('settings');
 }
 
 // #11: bookmarks panel + star state.
@@ -338,10 +346,15 @@ function starCurrent() {
 function tabState() {
   return tabOrder.map((id) => {
     const wc = tabs.get(id).webContents;
+    const rawUrl = wc.getURL();
+    const isNew = isNewTabUrl(rawUrl); // #43: don't surface the file:// path
+    const internal = isInternalUrl(rawUrl)
+      ? rawUrl.includes('settings.html') ? 'Settings' : 'Bookmarks'
+      : null;
     return {
       id,
-      title: wc.getTitle() || wc.getURL() || 'New tab',
-      url: wc.getURL(),
+      title: internal || (isNew ? 'New tab' : wc.getTitle() || rawUrl || 'New tab'),
+      url: isNew || internal ? '' : rawUrl,
       loading: wc.isLoading(),
       active: id === activeId,
       pinned: pinnedIds.has(id),
@@ -362,13 +375,19 @@ function pushState() {
   saveSessionSoon();
 }
 
-function createTab(url = HOME_URL, background = false) {
+function createTab(url = null, background = false) {
   if (locked) return null; // #15
   const id = nextTabId++;
+  if (!url) url = newTabUrl(); // #43: default landing page is our search page
   const view = new WebContentsView({
     // #41: hotkeys fire from the main process now (Ctrl+Space leader), so no
     // page-side key capture — and no need for subframe node integration (#39).
-    webPreferences: { preload: path.join(__dirname, 'content-preload.js') },
+    // #40: our own pages get the privileged bridge; web content never does.
+    webPreferences: {
+      preload: isInternalUrl(url)
+        ? path.join(__dirname, 'internal-preload.js')
+        : path.join(__dirname, 'content-preload.js'),
+    },
   });
   tabs.set(id, view);
   tabOrder.push(id);
@@ -911,7 +930,7 @@ function onUnlocked() {
       const id = createTab(u, true);
       if (id !== null) pinnedIds.add(id);
     }
-    if (!tabOrder.length) createTab(HOME_URL);
+    if (!tabOrder.length) createTab();
     else activateTab(tabOrder[0]);
   }
   pushState();
@@ -944,7 +963,7 @@ function menuTemplate() {
           { label: 'Bookmarks Panel', accelerator: 'CmdOrCtrl+B', click: () => locked || toggleBookmarksPanel() },
           { label: 'Bookmark Manager', accelerator: 'CmdOrCtrl+Shift+B', click: () => locked || toggleBmManager() },
           { label: 'Passwords Panel', accelerator: 'CmdOrCtrl+Shift+K', click: () => locked || togglePwPanel() },
-          { label: 'Settings', accelerator: 'CmdOrCtrl+,', click: () => locked || toggleSettings() },
+          { label: 'Settings', accelerator: 'CmdOrCtrl+Shift+S', click: () => locked || toggleSettings() },
           { label: 'Bookmark This Page', accelerator: 'CmdOrCtrl+D', click: () => locked || starCurrent() },
           { label: 'Lock WebForge', accelerator: 'CmdOrCtrl+Shift+L', click: () => showLock() },
           { label: 'Import Passwords (CSV)…', click: () => locked || importPasswordsCsv() },
@@ -1066,6 +1085,114 @@ ipcMain.on('lock-now', () => showLock());
 ipcMain.on('import-passwords', () => {
   if (!locked) importPasswordsCsv();
 });
+
+// #40: IPC for WebForge's own pages (settings + bookmark manager tabs).
+function pushInternalBookmarks() {
+  for (const view of tabs.values()) {
+    if (isInternalUrl(view.webContents.getURL())) view.webContents.send('int:bookmarks');
+  }
+}
+ipcMain.handle('int:get-settings', () => ({ ...getSettings(), searchEngine: searchEngine() }));
+ipcMain.handle('int:set-theme', (_e, t) => {
+  getSettings().theme = String(t);
+  saveSettings();
+  applyTheme(String(t));
+  return true;
+});
+ipcMain.handle('int:set-engine', (_e, engine) => {
+  if (!ENGINES[engine]) return false;
+  getSettings().searchEngine = engine;
+  saveSettings();
+  return true;
+});
+ipcMain.handle('int:save-tab-groups', (_e, list) => {
+  getSettings().tabGroups = (Array.isArray(list) ? list : [])
+    .map((g) => ({ name: String(g?.name || '').trim(), pattern: String(g?.pattern || '').trim() }))
+    .filter((g) => g.name && g.pattern);
+  saveSettings();
+  pushTabGroups();
+  return true;
+});
+ipcMain.handle('int:sync-status', async () => {
+  // #13: let the user SEE that sync works instead of asking someone to curl it.
+  const local = bookmarks.all().length;
+  try {
+    const res = await fetch(SYNC_URL, { signal: AbortSignal.timeout(4000) });
+    const remote = await res.json();
+    return {
+      reachable: true,
+      local,
+      remote: Array.isArray(remote.data) ? remote.data.length : 0,
+      updatedAt: remote.updatedAt || 0,
+    };
+  } catch {
+    return { reachable: false, local };
+  }
+});
+ipcMain.handle('int:get-bookmarks', () => bookmarks.all());
+ipcMain.handle('int:get-hotkeys', () => hotkeys.all());
+ipcMain.handle('int:save-bookmark', (_e, b) => {
+  if (locked || !b?.url) return false;
+  if (b.id) bookmarks.update(b.id, b);
+  else bookmarks.add(b);
+  afterBookmarkChange();
+  return true;
+});
+ipcMain.handle('int:delete-bookmark', (_e, id) => {
+  bookmarks.remove(String(id));
+  afterBookmarkChange();
+  return true;
+});
+ipcMain.handle('int:move-bookmarks', (_e, { ids, folder }) => {
+  const n = bookmarks.moveMany(ids, folder);
+  afterBookmarkChange();
+  return n;
+});
+ipcMain.handle('int:rename-folder', (_e, { from, to }) => {
+  const n = bookmarks.renameFolder(from, to);
+  afterBookmarkChange();
+  return n;
+});
+ipcMain.handle('int:delete-folder', (_e, folder) => {
+  const n = bookmarks.deleteFolder(folder);
+  afterBookmarkChange();
+  return n;
+});
+ipcMain.handle('int:set-hotkey', (_e, { keyId, url, title }) => {
+  if (locked) return false;
+  hotkeys.set(String(keyId), { url, title });
+  broadcastHotkeys();
+  pushState();
+  return true;
+});
+ipcMain.handle('int:remove-hotkey', (_e, keyId) => {
+  if (locked) return false;
+  const tabId = tabForHotkey(String(keyId));
+  if (tabId !== null) hotkeyByTab.delete(tabId);
+  hotkeys.remove(String(keyId));
+  broadcastHotkeys();
+  sortTabOrder();
+  pushStickyModes();
+  pushState();
+  return true;
+});
+// Sidebar drag & drop (#29): move a bookmark into a folder.
+ipcMain.on('move-bookmark', (_e, { id, folder }) => {
+  if (locked) return;
+  bookmarks.moveMany([id], folder || '');
+  afterBookmarkChange();
+});
+ipcMain.on('int:open-url', (_e, { url, background }) => {
+  if (!locked && typeof url === 'string') openOrFocus(url, Boolean(background));
+});
+
+// Anything that mutates bookmarks refreshes every surface + queues a sync.
+function afterBookmarkChange() {
+  pushBookmarks();
+  pushInternalBookmarks();
+  pushState();
+  scheduleSyncSoon();
+}
 
 // #29: bookmark manager IPC.
 ipcMain.on('toggle-bm-manager', () => locked || toggleBmManager());

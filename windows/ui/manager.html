@@ -1,0 +1,314 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Bookmarks</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f2f2f4; --card: #ffffff; --text: #1c1c1e; --dim: #6e6e73;
+    --hover: rgba(0,0,0,0.07); --field: #ffffff; --field-text: #111;
+    --accent: #2f7cf6; --danger: #a13030; --drop: rgba(47,124,246,0.22);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #000000; --card: #131315; --text: #e8e8ea; --dim: #7c7c82;
+      --hover: rgba(255,255,255,0.09); --field: #131315; --field-text: #e8e8ea;
+      --accent: #3d9bff; --danger: #c04040; --drop: rgba(61,155,255,0.28);
+    }
+  }
+  * { box-sizing: border-box; }
+  ::-webkit-scrollbar { width: 0; height: 0; display: none; }
+  body {
+    margin: 0; padding: 28px 24px 60px;
+    background: var(--bg); color: var(--text);
+    font: 14px system-ui, sans-serif;
+  }
+  .inner { max-width: 900px; margin: 0 auto; }
+  h1 { font-size: 22px; margin: 0 0 6px; }
+  .sub { color: var(--dim); font-size: 12px; margin-bottom: 18px; }
+  .toolbar { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
+  .toolbar input, .toolbar button {
+    height: 32px; border: none; border-radius: 8px; font-size: 13px; outline: none;
+  }
+  #filter { flex: 1; min-width: 160px; padding: 0 12px; background: var(--field); color: var(--field-text); }
+  .toolbar button { padding: 0 14px; background: var(--card); color: var(--text); cursor: pointer; }
+  .toolbar button:hover { background: var(--hover); }
+
+  .node { border-radius: 8px; }
+  .folder {
+    display: flex; align-items: center; gap: 8px;
+    padding: 7px 8px; border-radius: 8px; cursor: pointer;
+    font-weight: 600;
+  }
+  .folder:hover { background: var(--hover); }
+  .folder .count { font-weight: 400; font-size: 11px; color: var(--dim); }
+  .folder .acts { margin-left: auto; display: flex; gap: 2px; visibility: hidden; }
+  .folder:hover .acts { visibility: visible; }
+  .bm {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 8px; border-radius: 8px; cursor: grab;
+  }
+  .bm:hover { background: var(--hover); }
+  .bm .t { min-width: 220px; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .bm .u {
+    flex: 1; font: 11px ui-monospace, monospace; color: var(--dim);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .bm .acts { display: flex; gap: 2px; visibility: hidden; }
+  .bm:hover .acts { visibility: visible; }
+  .iconbtn {
+    width: 24px; height: 24px; border: none; border-radius: 6px;
+    background: transparent; color: var(--text); font-size: 12px; cursor: pointer;
+  }
+  .iconbtn:hover { background: var(--hover); }
+  .kbd {
+    min-width: 18px; height: 18px; padding: 0 4px; border-radius: 4px;
+    background: var(--accent); color: #fff;
+    font: 700 10px ui-monospace, monospace;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+  .dropping { background: var(--drop) !important; outline: 1px dashed var(--accent); }
+  #root { min-height: 60px; }
+  .empty { color: var(--dim); padding: 20px 4px; }
+  .editform {
+    display: flex; flex-direction: column; gap: 6px;
+    padding: 10px; margin: 4px 0; background: var(--card); border-radius: 10px;
+  }
+  .editform input {
+    height: 30px; border: none; border-radius: 6px; padding: 0 10px;
+    background: var(--field); color: var(--field-text); font-size: 13px; outline: none;
+  }
+  .editform .btns { display: flex; gap: 6px; }
+  .editform .btns button {
+    flex: 1; height: 28px; border: none; border-radius: 6px;
+    background: var(--accent); color: #fff; font-size: 12px; cursor: pointer;
+  }
+  .editform .btns button.cancel { background: var(--hover); color: var(--text); }
+  .editform .btns button.danger { background: var(--danger); }
+</style>
+</head>
+<body>
+<div class="inner">
+  <h1>Bookmarks</h1>
+  <div class="sub">Drag a bookmark onto a folder to move it. Folders start collapsed; click to open.</div>
+  <div class="toolbar">
+    <input id="filter" type="text" placeholder="Search bookmarks" spellcheck="false">
+    <button id="newfolder">New folder</button>
+    <button id="collapse">Collapse all</button>
+    <button id="import">Import Firefox…</button>
+  </div>
+  <div id="root"></div>
+</div>
+<script>
+  let bms = [];
+  let keys = {};              // keyId -> {url,title}
+  const expanded = new Set(); // folder paths currently open (start empty)
+  let editing = null;         // bookmark id being edited
+
+  const keyForUrl = (url) => Object.keys(keys).find((k) => keys[k].url === url);
+
+  async function load() {
+    [bms, keys] = await Promise.all([wf.getBookmarks(), wf.getHotkeys()]);
+    render();
+  }
+  // Main tells us whenever bookmarks change anywhere else in the app.
+  wf.onBookmarksChanged(load);
+  load();
+
+  document.getElementById('filter').addEventListener('input', render);
+  document.getElementById('collapse').onclick = () => { expanded.clear(); render(); };
+  document.getElementById('import').onclick = async () => { await wf.importBookmarks(); load(); };
+  document.getElementById('newfolder').onclick = async () => {
+    const name = prompt('New folder name (use / to nest, e.g. Work/CI):');
+    if (!name) return;
+    // A folder exists only where a bookmark lives, so seed it by moving
+    // nothing — instead remember it as expanded and let the user drop into it.
+    pendingFolders.add(name.trim());
+    expanded.add(name.trim());
+    render();
+  };
+  const pendingFolders = new Set();
+
+  function tree(list) {
+    const root = { subs: new Map(), items: [] };
+    const ensure = (path) => {
+      let node = root;
+      for (const seg of path.split('/').filter(Boolean)) {
+        if (!node.subs.has(seg)) node.subs.set(seg, { subs: new Map(), items: [] });
+        node = node.subs.get(seg);
+      }
+      return node;
+    };
+    for (const f of pendingFolders) ensure(f);
+    for (const b of list) ensure(b.folder || '').items.push(b);
+    return root;
+  }
+
+  function countAll(node) {
+    let n = node.items.length;
+    for (const sub of node.subs.values()) n += countAll(sub);
+    return n;
+  }
+
+  function makeBookmark(b, depth) {
+    if (editing === b.id) return editForm(b, depth);
+    const el = document.createElement('div');
+    el.className = 'bm';
+    el.style.marginLeft = `${depth * 18}px`;
+    el.draggable = true;
+    el.ondragstart = (e) => {
+      e.dataTransfer.setData('text/plain', b.id);
+      e.dataTransfer.effectAllowed = 'move';
+    };
+    const bound = keyForUrl(b.url);
+    if (bound) {
+      el.appendChild(Object.assign(document.createElement('span'), { className: 'kbd', textContent: bound }));
+    }
+    const t = Object.assign(document.createElement('span'), { className: 't', textContent: b.title, title: 'Open' });
+    t.onclick = () => wf.openUrl(b.url, false);
+    el.appendChild(t);
+    el.appendChild(Object.assign(document.createElement('span'), { className: 'u', textContent: b.url }));
+    const acts = document.createElement('div');
+    acts.className = 'acts';
+    const edit = Object.assign(document.createElement('button'), { className: 'iconbtn', textContent: '✎', title: 'Edit' });
+    edit.onclick = () => { editing = b.id; render(); };
+    const key = Object.assign(document.createElement('button'), { className: 'iconbtn', textContent: '⌨', title: 'Set hotkey' });
+    key.onclick = () => captureKey(b);
+    const del = Object.assign(document.createElement('button'), { className: 'iconbtn', textContent: '✕', title: 'Delete' });
+    del.onclick = async () => { await wf.deleteBookmark(b.id); load(); };
+    acts.append(edit, key, del);
+    el.appendChild(acts);
+    return el;
+  }
+
+  function editForm(b, depth) {
+    const f = document.createElement('div');
+    f.className = 'editform';
+    f.style.marginLeft = `${depth * 18}px`;
+    const title = Object.assign(document.createElement('input'), { value: b.title || '', placeholder: 'Title' });
+    const url = Object.assign(document.createElement('input'), { value: b.url || '', placeholder: 'URL' });
+    const folder = Object.assign(document.createElement('input'), { value: b.folder || '', placeholder: 'Folder (use / to nest)' });
+    const btns = document.createElement('div');
+    btns.className = 'btns';
+    const save = Object.assign(document.createElement('button'), { textContent: 'Save' });
+    save.onclick = async () => {
+      await wf.saveBookmark({ id: b.id, title: title.value.trim(), url: url.value.trim(), folder: folder.value.trim() });
+      editing = null;
+      load();
+    };
+    const cancel = Object.assign(document.createElement('button'), { textContent: 'Cancel', className: 'cancel' });
+    cancel.onclick = () => { editing = null; render(); };
+    btns.append(save, cancel);
+    f.append(title, url, folder, btns);
+    return f;
+  }
+
+  function captureKey(b) {
+    const sub = document.createElement('div');
+    sub.className = 'sub';
+    sub.textContent = `Press a key for "${b.title}" — hold Shift for capitals, Del unbinds, Esc cancels`;
+    document.querySelector('.sub').replaceWith(sub);
+    const onKey = async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      window.removeEventListener('keydown', onKey, true);
+      if (e.key === 'Escape') { /* cancelled */ }
+      else if (e.key === 'Delete' || e.key === 'Backspace') {
+        const k = keyForUrl(b.url);
+        if (k) await wf.removeHotkey(k);
+      } else if (e.key.length === 1) {
+        const id = (e.ctrlKey ? 'Ctrl+' : '') + (e.altKey ? 'Alt+' : '') + e.key;
+        await wf.setHotkey(id, b.url, b.title);
+      }
+      sub.textContent = 'Drag a bookmark onto a folder to move it. Folders start collapsed; click to open.';
+      load();
+    };
+    window.addEventListener('keydown', onKey, true);
+  }
+
+  function dropTarget(el, folderPath) {
+    el.ondragover = (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; el.classList.add('dropping'); };
+    el.ondragleave = () => el.classList.remove('dropping');
+    el.ondrop = async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      el.classList.remove('dropping');
+      const id = e.dataTransfer.getData('text/plain');
+      if (!id) return;
+      await wf.moveBookmarks([id], folderPath);
+      pendingFolders.delete(folderPath);
+      load();
+    };
+  }
+
+  function render() {
+    const q = document.getElementById('filter').value.trim().toLowerCase();
+    const list = q
+      ? bms.filter((b) =>
+          (b.title || '').toLowerCase().includes(q) ||
+          (b.url || '').toLowerCase().includes(q) ||
+          (b.folder || '').toLowerCase().includes(q))
+      : bms;
+    const root = document.getElementById('root');
+    root.replaceChildren();
+    dropTarget(root, ''); // drop on empty space = move to top level
+
+    if (!list.length) {
+      root.appendChild(Object.assign(document.createElement('div'), {
+        className: 'empty',
+        textContent: q ? 'No bookmarks match.' : 'No bookmarks yet.',
+      }));
+      return;
+    }
+
+    // Searching flattens (always findable, ignoring collapse state).
+    if (q) {
+      for (const b of list) root.appendChild(makeBookmark(b, 0));
+      return;
+    }
+
+    const t = tree(list);
+    const emit = (node, path, depth, target) => {
+      for (const [name, sub] of [...node.subs.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+        const subPath = path ? `${path}/${name}` : name;
+        const open = expanded.has(subPath);
+        const row = document.createElement('div');
+        row.className = 'folder';
+        row.style.marginLeft = `${depth * 18}px`;
+        row.onclick = () => { open ? expanded.delete(subPath) : expanded.add(subPath); render(); };
+        row.append(
+          Object.assign(document.createElement('span'), { textContent: open ? '▾ 📂' : '▸ 📁' }),
+          Object.assign(document.createElement('span'), { textContent: name }),
+          Object.assign(document.createElement('span'), { className: 'count', textContent: countAll(sub) })
+        );
+        const acts = document.createElement('div');
+        acts.className = 'acts';
+        const ren = Object.assign(document.createElement('button'), { className: 'iconbtn', textContent: '✎', title: 'Rename folder' });
+        ren.onclick = async (e) => {
+          e.stopPropagation();
+          const to = prompt('Rename folder to:', subPath);
+          if (to && to !== subPath) { await wf.renameFolder(subPath, to.trim()); load(); }
+        };
+        const del = Object.assign(document.createElement('button'), { className: 'iconbtn', textContent: '✕', title: 'Delete folder (bookmarks move up)' });
+        del.onclick = async (e) => {
+          e.stopPropagation();
+          if (confirm(`Delete folder "${subPath}"? Its bookmarks move up a level — none are deleted.`)) {
+            await wf.deleteFolder(subPath);
+            pendingFolders.delete(subPath);
+            load();
+          }
+        };
+        acts.append(ren, del);
+        row.appendChild(acts);
+        dropTarget(row, subPath);
+        target.appendChild(row);
+        if (open) emit(sub, subPath, depth + 1, target);
+      }
+      for (const b of node.items) target.appendChild(makeBookmark(b, depth));
+    };
+    emit(t, '', 0, root);
+  }
+</script>
+</body>
+</html>

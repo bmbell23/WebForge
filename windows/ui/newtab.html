@@ -1,0 +1,80 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>New tab</title>
+<style>
+  /* #43: standalone page — it can't share index.html's tokens, so the OLED
+     palette is repeated here. */
+  :root {
+    color-scheme: light dark;
+    --bg: #f2f2f4; --text: #1c1c1e; --dim: #6e6e73;
+    --field: #ffffff; --field-text: #111111; --accent: #2f7cf6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #000000; --text: #e8e8ea; --dim: #7c7c82;
+      --field: #131315; --field-text: #e8e8ea; --accent: #3d9bff;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    display: grid;
+    place-items: center;
+    background: var(--bg);
+    color: var(--text);
+    font: 14px system-ui, sans-serif;
+  }
+  ::-webkit-scrollbar { width: 0; height: 0; display: none; }
+  .wrap { width: min(620px, 82vw); margin-top: -8vh; text-align: center; }
+  .mark { font-size: 15px; font-weight: 600; letter-spacing: 0.14em; color: var(--dim); }
+  input {
+    width: 100%; height: 48px;
+    margin-top: 18px;
+    border: 1px solid transparent; border-radius: 24px;
+    padding: 0 20px;
+    background: var(--field); color: var(--field-text);
+    font-size: 15px; outline: none;
+  }
+  input:focus { border-color: var(--accent); }
+  .hint { margin-top: 12px; font-size: 12px; color: var(--dim); }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="mark">WEBFORGE</div>
+    <input id="q" type="text" spellcheck="false" autofocus
+           placeholder="Search or enter address">
+    <div class="hint" id="hint"></div>
+  </div>
+<script>
+  // Engine arrives as a query param so this page needs no privileged IPC.
+  const ENGINES = {
+    google: { name: 'Google', url: 'https://www.google.com/search?q=' },
+    duckduckgo: { name: 'DuckDuckGo', url: 'https://duckduckgo.com/?q=' },
+    bing: { name: 'Bing', url: 'https://www.bing.com/search?q=' },
+    brave: { name: 'Brave', url: 'https://search.brave.com/search?q=' },
+  };
+  const key = new URLSearchParams(location.search).get('e') || 'google';
+  const engine = ENGINES[key] || ENGINES.google;
+  document.getElementById('hint').textContent = `Searches with ${engine.name}`;
+
+  const q = document.getElementById('q');
+  q.focus();
+  // Same resolution rules as the address bar: explicit scheme passes through,
+  // host-shaped text gets https://, anything else searches.
+  q.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter') return;
+    const t = q.value.trim();
+    if (!t) return;
+    let url;
+    if (/^https?:\/\//i.test(t)) url = t;
+    else if (!t.includes(' ') && t.includes('.')) url = `https://${t}`;
+    else url = engine.url + encodeURIComponent(t);
+    location.href = url;
+  });
+</script>
+</body>
+</html>

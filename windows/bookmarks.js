@@ -79,6 +79,55 @@ function update(id, fields) {
   return true;
 }
 
+// #29 v2: folder operations for the manager (drag & drop, rename, delete).
+function moveMany(ids, folder) {
+  const set = new Set(ids || []);
+  let n = 0;
+  for (const b of load()) {
+    if (set.has(b.id)) {
+      b.folder = folder || '';
+      b.updatedAt = Date.now();
+      n++;
+    }
+  }
+  if (n) save();
+  return n;
+}
+
+// Rename a folder and re-parent everything beneath it.
+function renameFolder(from, to) {
+  if (!from || !to || from === to) return 0;
+  let n = 0;
+  for (const b of load()) {
+    const f = b.folder || '';
+    if (f === from || f.startsWith(`${from}/`)) {
+      b.folder = to + f.slice(from.length);
+      b.updatedAt = Date.now();
+      n++;
+    }
+  }
+  if (n) save();
+  return n;
+}
+
+// Delete a folder: its bookmarks (and subfolders') move up to the parent
+// rather than being destroyed — deleting a folder should never lose links.
+function deleteFolder(folder) {
+  if (!folder) return 0;
+  const parent = folder.includes('/') ? folder.slice(0, folder.lastIndexOf('/')) : '';
+  let n = 0;
+  for (const b of load()) {
+    const f = b.folder || '';
+    if (f === folder || f.startsWith(`${folder}/`)) {
+      b.folder = parent;
+      b.updatedAt = Date.now();
+      n++;
+    }
+  }
+  if (n) save();
+  return n;
+}
+
 function remove(idOrUrl) {
   const list = load();
   const idx = list.findIndex((b) => b.id === idOrUrl || b.url === idOrUrl);
@@ -146,4 +195,7 @@ function importFile(filePath) {
   return { found: parsed.length, added, skipped: parsed.length - added };
 }
 
-module.exports = { all, has, add, update, remove, importFile, meta, replaceAll };
+module.exports = {
+  all, has, add, update, remove, importFile, meta, replaceAll,
+  moveMany, renameFolder, deleteFolder,
+};

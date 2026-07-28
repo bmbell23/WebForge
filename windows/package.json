@@ -32,6 +32,7 @@
       "credentials.js",
       "hotkeys.js",
       "content-preload.js",
+      "internal-preload.js",
       "ui/**"
     ],
     "win": {

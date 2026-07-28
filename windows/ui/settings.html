@@ -1,0 +1,209 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Settings</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f2f2f4; --surface: #e6e6e9; --card: #ffffff;
+    --text: #1c1c1e; --dim: #6e6e73; --hover: rgba(0,0,0,0.07);
+    --field: #ffffff; --field-text: #111; --accent: #2f7cf6; --danger: #a13030;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #000000; --surface: #0d0d0f; --card: #131315;
+      --text: #e8e8ea; --dim: #7c7c82; --hover: rgba(255,255,255,0.09);
+      --field: #131315; --field-text: #e8e8ea; --accent: #3d9bff; --danger: #c04040;
+    }
+  }
+  * { box-sizing: border-box; }
+  ::-webkit-scrollbar { width: 0; height: 0; display: none; }
+  body {
+    margin: 0; padding: 32px 24px 60px;
+    background: var(--bg); color: var(--text);
+    font: 14px system-ui, sans-serif;
+  }
+  .inner { max-width: 720px; margin: 0 auto; }
+  h1 { font-size: 22px; margin: 0 0 24px; }
+  h2 {
+    font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em;
+    color: var(--dim); margin: 30px 0 10px;
+  }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; }
+  .choice {
+    flex: 1; min-width: 110px; height: 36px;
+    border: none; border-radius: 8px;
+    background: var(--card); color: var(--text);
+    font-size: 13px; cursor: pointer;
+  }
+  .choice.sel { background: var(--accent); color: #fff; font-weight: 600; }
+  .card { background: var(--card); border-radius: 10px; padding: 14px 16px; }
+  .status { font-size: 13px; line-height: 1.7; }
+  .ok { color: #3aa85a; font-weight: 600; }
+  .bad { color: var(--danger); font-weight: 600; }
+  .grouprow {
+    display: flex; align-items: center; gap: 10px;
+    padding: 7px 4px; border-bottom: 1px solid var(--hover); font-size: 13px;
+  }
+  .grouprow .gn { font-weight: 600; min-width: 120px; }
+  .grouprow .gp {
+    flex: 1; font: 12px ui-monospace, monospace; color: var(--dim);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .grouprow button, .iconbtn {
+    width: 24px; height: 24px; border: none; border-radius: 50%;
+    background: transparent; color: var(--text); cursor: pointer;
+  }
+  .grouprow button:hover { background: var(--hover); }
+  .addrow { display: flex; gap: 8px; margin-top: 12px; }
+  .addrow input {
+    height: 32px; border: none; border-radius: 8px; padding: 0 12px;
+    background: var(--field); color: var(--field-text); font-size: 13px; outline: none;
+  }
+  #gname { width: 170px; }
+  #gpattern { flex: 1; }
+  .addrow button {
+    height: 32px; padding: 0 18px; border: none; border-radius: 8px;
+    background: var(--accent); color: #fff; font-size: 13px; font-weight: 600; cursor: pointer;
+  }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  td { padding: 6px 4px; border-bottom: 1px solid var(--hover); vertical-align: top; }
+  td:first-child { width: 190px; font: 600 12px ui-monospace, monospace; color: var(--dim); }
+</style>
+</head>
+<body>
+<div class="inner">
+  <h1>Settings</h1>
+
+  <h2>Appearance</h2>
+  <div class="row" id="themes">
+    <button class="choice" data-theme="system">System</button>
+    <button class="choice" data-theme="light">Light</button>
+    <button class="choice" data-theme="dark">Dark (OLED)</button>
+  </div>
+
+  <h2>Default search engine</h2>
+  <div class="row" id="engines">
+    <button class="choice" data-engine="google">Google</button>
+    <button class="choice" data-engine="duckduckgo">DuckDuckGo</button>
+    <button class="choice" data-engine="bing">Bing</button>
+    <button class="choice" data-engine="brave">Brave</button>
+  </div>
+
+  <h2>Sync (bookmarks)</h2>
+  <div class="card status" id="sync">Checking…</div>
+
+  <h2>Tab groups</h2>
+  <div id="grouplist"></div>
+  <div class="addrow">
+    <input id="gname" type="text" placeholder="Group name (e.g. Jenkins)" spellcheck="false">
+    <input id="gpattern" type="text" placeholder="URL pattern (e.g. https://ci.example.com:8080/*)" spellcheck="false">
+    <button id="gadd">Add</button>
+  </div>
+
+  <h2>Keybindings</h2>
+  <table>
+    <tr><td>Ctrl+Space, then key</td><td>Fire a bookmark hotkey — jumps to that site's tab; pressed inside it, returns it home. Works while typing. Esc cancels.</td></tr>
+    <tr><td>Ctrl+T</td><td>New tab</td></tr>
+    <tr><td>Ctrl+W / Ctrl+F4</td><td>Close tab</td></tr>
+    <tr><td>Ctrl+Tab / Ctrl+Shift+Tab</td><td>Next / previous tab</td></tr>
+    <tr><td>Ctrl+PgDn / Ctrl+PgUp</td><td>Next / previous tab</td></tr>
+    <tr><td>Alt+← / Alt+→</td><td>Back / forward</td></tr>
+    <tr><td>Ctrl+Shift+← / →</td><td>Back / forward</td></tr>
+    <tr><td>Ctrl+Shift+U</td><td>Duplicate tab</td></tr>
+    <tr><td>Ctrl+Shift+P</td><td>Pin / unpin tab</td></tr>
+    <tr><td>Ctrl+Shift+W</td><td>Close all normal tabs (spares pinned + hotkey tabs)</td></tr>
+    <tr><td>Ctrl+Shift+D</td><td>Detach hotkey tab into a normal tab</td></tr>
+    <tr><td>Ctrl+L</td><td>Focus address bar</td></tr>
+    <tr><td>Ctrl+R / F5</td><td>Reload</td></tr>
+    <tr><td>F11</td><td>Toggle fullscreen (hover screen edges to reveal UI)</td></tr>
+    <tr><td>Esc</td><td>Close dialog / panel / reveal</td></tr>
+    <tr><td>Ctrl+B</td><td>Bookmarks side panel</td></tr>
+    <tr><td>Ctrl+Shift+B</td><td>Bookmark manager (this kind of tab)</td></tr>
+    <tr><td>Ctrl+D</td><td>Bookmark this page (dialog)</td></tr>
+    <tr><td>Ctrl+Shift+K</td><td>Passwords panel</td></tr>
+    <tr><td>Ctrl+Shift+S</td><td>Settings</td></tr>
+    <tr><td>Ctrl+Shift+L</td><td>Lock WebForge</td></tr>
+    <tr><td>Ctrl+Q</td><td>Quit</td></tr>
+  </table>
+</div>
+<script>
+  let settings = {};
+  let groups = [];
+
+  function paint() {
+    const theme = settings.theme || 'system';
+    document.querySelectorAll('#themes .choice').forEach((b) =>
+      b.classList.toggle('sel', b.dataset.theme === theme));
+    const engine = settings.searchEngine || 'google';
+    document.querySelectorAll('#engines .choice').forEach((b) =>
+      b.classList.toggle('sel', b.dataset.engine === engine));
+    renderGroups();
+  }
+
+  function renderGroups() {
+    const list = document.getElementById('grouplist');
+    list.replaceChildren(...groups.map((g, i) => {
+      const row = document.createElement('div');
+      row.className = 'grouprow';
+      row.append(
+        Object.assign(document.createElement('span'), { className: 'gn', textContent: g.name }),
+        Object.assign(document.createElement('span'), { className: 'gp', textContent: g.pattern, title: g.pattern })
+      );
+      const rm = Object.assign(document.createElement('button'), { textContent: '✕', title: 'Delete group' });
+      rm.onclick = async () => {
+        groups = groups.filter((_x, j) => j !== i);
+        await wf.saveTabGroups(groups);
+        renderGroups();
+      };
+      row.appendChild(rm);
+      return row;
+    }));
+  }
+
+  document.querySelectorAll('#themes .choice').forEach((b) => {
+    b.onclick = async () => { settings.theme = b.dataset.theme; await wf.setTheme(b.dataset.theme); paint(); };
+  });
+  document.querySelectorAll('#engines .choice').forEach((b) => {
+    b.onclick = async () => { settings.searchEngine = b.dataset.engine; await wf.setEngine(b.dataset.engine); paint(); };
+  });
+  document.getElementById('gadd').onclick = async () => {
+    const name = document.getElementById('gname').value.trim();
+    const pattern = document.getElementById('gpattern').value.trim();
+    if (!name || !pattern) return;
+    groups = [...groups, { name, pattern }];
+    await wf.saveTabGroups(groups);
+    document.getElementById('gname').value = '';
+    document.getElementById('gpattern').value = '';
+    renderGroups();
+  };
+
+  async function refreshSync() {
+    const el = document.getElementById('sync');
+    const s = await wf.syncStatus();
+    if (!s.reachable) {
+      el.innerHTML = `<span class="bad">Server unreachable</span> — you're off the tailnet, which is fine: ` +
+        `bookmarks stay local and sync catches up automatically next time you're home.<br>` +
+        `Local bookmarks: <b>${s.local}</b>`;
+      return;
+    }
+    const when = s.updatedAt ? new Date(s.updatedAt).toLocaleString() : 'never';
+    const match = s.local === s.remote;
+    el.innerHTML =
+      `<span class="${match ? 'ok' : 'bad'}">Server reachable</span> — ` +
+      `local <b>${s.local}</b> · server <b>${s.remote}</b>${match ? ' (in sync)' : ' (sync pending)'}<br>` +
+      `Last server update: ${when}`;
+  }
+
+  async function load() {
+    settings = await wf.getSettings();
+    groups = settings.tabGroups || [];
+    paint();
+    refreshSync();
+  }
+  load();
+  setInterval(refreshSync, 30000);
+</script>
+</body>
+</html>

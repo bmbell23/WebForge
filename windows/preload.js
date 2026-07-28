@@ -17,6 +17,7 @@ contextBridge.exposeInMainWorld('webforge', {
   toggleBookmarksPanel: () => ipcRenderer.send('toggle-bookmarks-panel'),
   openBookmark: (url, background) => ipcRenderer.send('open-bookmark', { url, background }),
   removeBookmark: (id) => ipcRenderer.send('remove-bookmark', id),
+  moveBookmark: (id, folder) => ipcRenderer.send('move-bookmark', { id, folder }),
   importBookmarks: () => ipcRenderer.invoke('import-bookmarks'),
   importPasswords: () => ipcRenderer.send('import-passwords'), // #23
   // credentials manager (#26)
