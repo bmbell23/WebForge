@@ -212,12 +212,14 @@ function setupAutoUpdate() {
   const check = () => autoUpdater.checkForUpdates().catch(() => {});
 
   // #5: a long-running window must notice releases staged after launch —
-  // startup + every 4h + on window focus (throttled to one check per 10 min).
+  // startup + every 4h + on window focus. Focus checks are throttled to one
+  // per 2 min (#6: 10 min made a freshly staged release feel broken; a check
+  // against the LAN endpoint costs nothing).
   check();
   setInterval(check, 4 * 60 * 60 * 1000);
   let lastFocusCheck = Date.now();
   win.on('focus', () => {
-    if (Date.now() - lastFocusCheck < 10 * 60 * 1000) return;
+    if (Date.now() - lastFocusCheck < 2 * 60 * 1000) return;
     lastFocusCheck = Date.now();
     check();
   });
