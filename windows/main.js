@@ -36,6 +36,7 @@ const INTERNAL_PAGES = {
   settings: path.join(__dirname, 'ui', 'settings.html'),
   manager: path.join(__dirname, 'ui', 'manager.html'),
   about: path.join(__dirname, 'ui', 'about.html'), // #61
+  passwords: path.join(__dirname, 'ui', 'passwords.html'), // #62
 };
 const fileUrl = (p) => `file://${p.replace(/\\/g, '/')}`;
 const isInternalUrl = (u) =>
@@ -371,6 +372,7 @@ function tabState() {
     const internal = isInternalUrl(rawUrl)
       ? rawUrl.includes('settings.html') ? 'Settings'
         : rawUrl.includes('about.html') ? 'About'
+        : rawUrl.includes('passwords.html') ? 'Saved logins'
         : 'Bookmarks'
       : null;
     return {
@@ -1038,6 +1040,7 @@ function menuTemplate() {
           { label: 'Bookmarks Panel', accelerator: 'CmdOrCtrl+B', click: () => locked || toggleBookmarksPanel() },
           { label: 'Bookmark Manager', accelerator: 'CmdOrCtrl+Shift+B', click: () => locked || toggleBmManager() },
           { label: 'Settings', accelerator: 'CmdOrCtrl+Shift+S', click: () => locked || toggleSettings() },
+          { label: 'Saved Logins', accelerator: 'CmdOrCtrl+Shift+K', click: () => locked || openInternalTab('passwords') },
           { label: 'About WebForge', click: () => locked || openInternalTab('about') },
           { label: 'Bookmark This Page', accelerator: 'CmdOrCtrl+D', click: () => locked || starCurrent() },
           { label: 'Lock WebForge', accelerator: 'CmdOrCtrl+Shift+L', click: () => showLock() },
@@ -1301,6 +1304,7 @@ ipcMain.on('move-bookmark', (_e, { id, folder }) => {
   afterBookmarkChange();
 });
 ipcMain.on('int:open-about', () => locked || openInternalTab('about'));
+ipcMain.on('int:open-passwords', () => locked || openInternalTab('passwords')); // #62
 ipcMain.on('int:open-url', (_e, { url, background }) => {
   if (!locked && typeof url === 'string') openOrFocus(url, Boolean(background));
 });
