@@ -91,6 +91,7 @@ class MainActivity : Activity() {
         urlBar.setOnFocusChangeListener { _, has -> urlEditing = has } // #64
         tabsBtn.setOnClickListener { showTabSheet() }
         findViewById<TextView>(R.id.bookmarksBtn).setOnClickListener { showBookmarks() } // #87
+        refreshPersonaPicker() // #92
 
         newTab(START_URL)
         BookmarkStore.sync(this) { }
@@ -169,6 +170,7 @@ class MainActivity : Activity() {
     // even over a scrolling list.
     override fun dispatchTouchEvent(ev: android.view.MotionEvent): Boolean {
         if (overlay.visibility == View.VISIBLE) panelSwipe.onTouchEvent(ev)
+        else pageSwipe.onTouchEvent(ev) // #92: pull-to-reload on the page
         return super.dispatchTouchEvent(ev)
     }
 
@@ -316,6 +318,7 @@ class MainActivity : Activity() {
         activeIndex = index
         tabs[index].lastActiveAt = System.currentTimeMillis() // #79
         Personas.setActive(this, tabs[index].persona) // #88
+        refreshPersonaPicker() // #92: dropdown follows the tab we landed on
         webContainer.removeAllViews()
         val wv = tabs[index].webView
         (wv.parent as? ViewGroup)?.removeView(wv)
@@ -364,6 +367,31 @@ class MainActivity : Activity() {
         TabSync.sync(this, local) { }
     }
 
+    // #92: pull down on a page to reload — replaces the Reload menu action.
+    private val pageSwipe by lazy {
+        android.view.GestureDetector(this, object : android.view.GestureDetector.SimpleOnGestureListener() {
+            override fun onFling(
+                e1: android.view.MotionEvent?,
+                e2: android.view.MotionEvent,
+                vx: Float,
+                vy: Float
+            ): Boolean {
+                val start = e1 ?: return false
+                val dy = e2.y - start.y
+                val dx = e2.x - start.x
+                // Only when the page is already at the top, so it can't fight scrolling.
+                val atTop = (active?.webView?.scrollY ?: 1) == 0
+                if (atTop && dy > dp(120) && kotlin.math.abs(dy) > kotlin.math.abs(dx) * 2 && vy > 0) {
+                    active?.webView?.reload()
+                    android.widget.Toast
+                        .makeText(this@MainActivity, "Reloading…", android.widget.Toast.LENGTH_SHORT).show()
+                    return true
+                }
+                return false
+            }
+        })
+    }
+
     private fun sweepStaleTabs() {
         val hours = Prefs.expiryHours(this)
         if (hours <= 0) return
@@ -383,10 +411,38 @@ class MainActivity : Activity() {
         (active ?: newTab(url).also { return }).webView.loadUrl(url)
     }
 
+    /** #92: Persona dropdown in the top bar, mirroring the Windows switcher. */
+    private fun refreshPersonaPicker() {
+        val spinner = findViewById<android.widget.Spinner>(R.id.personaPick)
+        val list = Personas.ordered(this)
+        val labels = list.map { it.name }
+        val adapter = android.widget.ArrayAdapter(this, android.R.layout.simple_spinner_item, labels)
+        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        spinner.adapter = adapter
+        spinner.onItemSelectedListener = null
+        val activeIdx = list.indexOfFirst { it.id == Personas.activeId(this) }.coerceAtLeast(0)
+        spinner.setSelection(activeIdx, false)
+        spinner.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(p: android.widget.AdapterView<*>?, v: View?, pos: Int, id: Long) {
+                val target = list.getOrNull(pos) ?: return
+                if (target.id == Personas.activeId(this@MainActivity)) return
+                Personas.setActive(this@MainActivity, target.id)
+                val mine = tabs.indices.filter { tabs[it].persona == target.id }
+                if (mine.isNotEmpty()) {
+                    // most recently used tab in that Persona, as on Windows (#83)
+                    activateTab(mine.maxByOrNull { tabs[it].lastActiveAt } ?: mine.first())
+                } else {
+                    newTab(START_URL)
+                }
+            }
+            override fun onNothingSelected(p: android.widget.AdapterView<*>?) {}
+        }
+    }
+
     private fun syncChrome() {
         val t = active ?: return
         if (!urlEditing) urlBar.setText(if (t.url == "about:blank") "" else t.url)
-        tabsBtn.text = tabs.size.toString()
+        tabsBtn.text = tabs.count { it.persona == Personas.activeId(this) }.toString() // #92
     }
 
     private fun hideKeyboard() {
@@ -640,25 +696,8 @@ class MainActivity : Activity() {
         action(actions, "＋ New tab") { closePanel(); newTab(START_URL) }
         action(actions, "Reload this page") { closePanel(); active?.webView?.reload() } // #87
 
-        // #88: Persona switcher — the phone's equivalent of Ctrl+Space + digit.
-        val activePersona = Personas.activeId(this)
-        val pcard = card(col)
-        for (p in Personas.ordered(this)) {
-            val count = tabs.count { it.persona == p.id }
-            option(pcard, "${p.name}  ·  $count", p.id == activePersona) {
-                Personas.setActive(this, p.id)
-                val mine = tabs.indices.filter { tabs[it].persona == p.id }
-                if (mine.isNotEmpty()) {
-                    // land on the most recently used tab, as Windows does (#83)
-                    activateTab(mine.maxByOrNull { tabs[it].lastActiveAt } ?: mine.first())
-                } else {
-                    newTab(START_URL)
-                }
-                showTabSheet()
-            }
-        }
-
         // Only this Persona's tabs are listed; quick/pinned still float to the top.
+        val activePersona = Personas.activeId(this) // #92
         val order = tabs.indices
             .filter { tabs[it].persona == activePersona }
             .sortedWith(compareBy({ if (tabs[it].quick) 0 else if (tabs[it].pinned) 1 else 2 }, { it }))
