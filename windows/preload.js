@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld('webforge', {
   closeTabs: (ids) => ipcRenderer.send('close-tabs', ids), // #46
   switchPersona: (id) => ipcRenderer.send('switch-persona', id), // #25
   onPersonas: (cb) => ipcRenderer.on('personas-updated', (_e, d) => cb(d)),
+  onRemoteTabs: (cb) => ipcRenderer.on('remote-tabs', (_e, l) => cb(l)), // #57
   onTabsUpdated: (cb) => ipcRenderer.on('tabs-updated', (_e, state) => cb(state)),
   onFocusUrl: (cb) => ipcRenderer.on('focus-url', () => cb()),
   // bookmarks (#11)

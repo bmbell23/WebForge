@@ -60,6 +60,9 @@ class MainActivity : Activity() {
     private val sweepHandler = android.os.Handler(android.os.Looper.getMainLooper()) // #79
     private var bmEditMode = false // #89: long-press a BOOKMARK to organise
     private var pendingBmFolder: String? = null // #89: created, awaiting its first bookmark
+    private val bmExpanded = mutableSetOf<String>() // #91: folders survive a re-render
+    private var currentScroll: ScrollView? = null   // #91: so does scroll position
+    private var pendingScrollY = 0
     private var nextTabId = 1
 
     private val active: Tab? get() = tabs.getOrNull(activeIndex)
@@ -91,7 +94,8 @@ class MainActivity : Activity() {
 
         newTab(START_URL)
         BookmarkStore.sync(this) { }
-        Personas.sync(this) { } // #88 // warm the cache for the bookmarks panel
+        Personas.sync(this) { } // #88
+        syncTabsAcrossDevices() // #57 // warm the cache for the bookmarks panel
         UpdateManager(this).checkForUpdate()
     }
 
@@ -349,6 +353,17 @@ class MainActivity : Activity() {
 
     // #79: close normal tabs untouched for too long. Pinned and quick-launch
     // tabs are exempt, as is whichever tab is open, and the last tab standing.
+    // #57: publish this device's tabs per Persona and pick up the others'.
+    private fun syncTabsAcrossDevices() {
+        val local = HashMap<String, MutableList<RemoteTab>>()
+        for (t in tabs) {
+            val u = t.url
+            if (u.isBlank() || u == "about:blank") continue
+            local.getOrPut(t.persona) { mutableListOf() }.add(RemoteTab(t.title, u))
+        }
+        TabSync.sync(this, local) { }
+    }
+
     private fun sweepStaleTabs() {
         val hours = Prefs.expiryHours(this)
         if (hours <= 0) return
@@ -405,6 +420,7 @@ class MainActivity : Activity() {
 
     private fun openPanel(build: (LinearLayout) -> Unit) {
         val scroll = ScrollView(this)
+        currentScroll = scroll // #91
         val col = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(16), dp(6), dp(16), dp(28)) // #89: header lines up with the top bar
@@ -414,6 +430,11 @@ class MainActivity : Activity() {
         overlay.removeAllViews()
         overlay.addView(scroll)
         overlay.visibility = View.VISIBLE
+        if (pendingScrollY > 0) { // #91: land where we were, not at the top
+            val y = pendingScrollY
+            pendingScrollY = 0
+            scroll.post { scroll.scrollTo(0, y) }
+        }
         // #85: the swipe listener used to live here, but the panel's ScrollView
         // is a child and swallowed the gesture. Handled in dispatchTouchEvent.
     }
@@ -681,6 +702,16 @@ class MainActivity : Activity() {
             header(col, "OPEN TABS")
             for (i in loose) tabRow(col, i, 0)
         }
+
+        // #57: what's open on the other device, in this Persona. Tapping opens
+        // it here; nothing here can close anything there.
+        for (dev in TabSync.remoteFor(activePersona)) {
+            header(col, "ON ${dev.name.uppercase()}")
+            val c = card(col)
+            for (rt in dev.tabs.take(40)) {
+                action(c, rt.title, rt.url) { closePanel(); newTab(rt.url) }
+            }
+        }
     }
 
     /** #86: name a new tab folder (never window.prompt — inline, as everywhere). */
@@ -809,7 +840,12 @@ class MainActivity : Activity() {
             isClickable = true
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
             setOnClickListener { if (!bmEditMode) { closePanel(); navigate(b.url) } }
-            setOnLongClickListener { bmEditMode = true; showBookmarks(); true } // #89
+            setOnLongClickListener { // #91: keep place when entering edit mode
+                pendingScrollY = currentScroll?.scrollY ?: 0
+                bmEditMode = true
+                showBookmarks()
+                true
+            }
         }
         line.addView(TextView(this).apply {
             text = b.title
@@ -843,14 +879,15 @@ class MainActivity : Activity() {
             val full = if (path.isEmpty()) name else "$path/$name" // #89
             val childBox = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
-                visibility = View.GONE // collapsed by default, like Windows
+                // #91: remembered across re-renders instead of always collapsing
+                visibility = if (bmExpanded.contains(full)) View.VISIBLE else View.GONE
             }
             val headerRow = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
             }
             val header = TextView(this).apply {
-                text = "▸  📁  $name   ${countAll(sub)}"
+                text = "${if (bmExpanded.contains(full)) "▾" else "▸"}  📁  $name   ${countAll(sub)}"
                 setTextColor(0xFFE8E8EA.toInt())
                 textSize = 15f
                 setTypeface(null, android.graphics.Typeface.BOLD)
@@ -858,6 +895,7 @@ class MainActivity : Activity() {
                 setOnClickListener {
                     val open = childBox.visibility == View.VISIBLE
                     childBox.visibility = if (open) View.GONE else View.VISIBLE
+                    if (open) bmExpanded.remove(full) else bmExpanded.add(full) // #91
                     text = "${if (open) "▸" else "▾"}  📁  $name   ${countAll(sub)}"
                 }
             }
@@ -1279,6 +1317,7 @@ class MainActivity : Activity() {
         // never appeared until a cold start. Refresh every time we come back.
         BookmarkStore.sync(this) { }
         Personas.sync(this) { } // #88
+        syncTabsAcrossDevices() // #57
         sweepHandler.removeCallbacksAndMessages(null)
         sweepHandler.postDelayed(object : Runnable {
             override fun run() {

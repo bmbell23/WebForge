@@ -138,6 +138,9 @@
   .tab .spinner { font-size: 11px; }
   .tab .pin { font-size: 10px; }
   .tab.pinned .close { display: none; } /* #9: unpin to close */
+  /* #57: another device's tab — visibly not one of yours */
+  .tab.remote { background: transparent; opacity: 0.72; font-style: italic; }
+  .tab.remote:hover { background: var(--hover); opacity: 1; }
   /* #16: hotkey group */
   .favicon { width: 14px; height: 14px; flex: 0 0 auto; border-radius: 3px; }
   .favdot {
@@ -870,6 +873,13 @@
     renderTabs(state);
   });
 
+  // #57: tabs open on your other devices, in this Persona.
+  let remoteTabs = [];
+  webforge.onRemoteTabs((list) => {
+    remoteTabs = list || [];
+    renderTabs(lastTabsState);
+  });
+
   function renderTabs(state) {
     // #16: sidebar sections — Hotkeys, Pinned, then normal tabs.
     const hot = state
@@ -905,6 +915,20 @@
       if (singles.length) {
         if (nodes.length) nodes.push(groupHdr('Tabs'));
         nodes.push(...singles.map(makeTab));
+      }
+    }
+    for (const dev of remoteTabs) {
+      nodes.push(groupHdr(`On ${dev.device}`));
+      for (const rt of dev.tabs) {
+        const el = document.createElement('div');
+        el.className = 'tab remote';
+        el.title = rt.url;
+        el.appendChild(Object.assign(document.createElement('span'), { className: 'favdot' }));
+        el.appendChild(Object.assign(document.createElement('span'), {
+          className: 'title', textContent: rt.title || rt.url,
+        }));
+        el.onclick = () => webforge.openBookmark(rt.url, false); // open it here
+        nodes.push(el);
       }
     }
     tablist.replaceChildren(...nodes);

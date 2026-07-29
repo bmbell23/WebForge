@@ -8,6 +8,7 @@
 const { app, BaseWindow, WebContentsView, ipcMain, dialog, Menu, nativeTheme, session } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto'); // #57: stable device id
 
 // #38: two-finger back/forward on a precision touchpad is Chromium's
 // "overscroll history navigation", which Electron ships DISABLED — that's why
@@ -444,6 +445,17 @@ function orderedPersonas() {
   ];
 }
 
+// #57: other devices' tabs in the Persona we're currently looking at.
+function remoteTabsForActive() {
+  const active = personas.activeId();
+  const out = [];
+  for (const [id, dev] of Object.entries(remoteDevices)) {
+    const list = (dev.personas || {})[active] || [];
+    if (list.length) out.push({ device: dev.name || id, at: dev.at || 0, tabs: list.slice(0, 40) });
+  }
+  return out;
+}
+
 function pushPersonas() {
   if (!chrome) return;
   const active = personas.activeId();
@@ -473,6 +485,7 @@ function pushStateNow() {
   if (!chrome) return;
   pushPersonas(); // #25
   chrome.webContents.send('tabs-updated', tabState());
+  chrome.webContents.send('remote-tabs', remoteTabsForActive()); // #57
   const wc = activeWc();
   const title = wc?.getTitle();
   win.setTitle(title ? `${title} — WebForge` : 'WebForge');
@@ -1004,6 +1017,7 @@ async function setupAdblock() {
 // case): purely offline-first, catches up whenever home is reachable.
 const SYNC_URL = 'http://100.69.184.113:8013/store/bookmarks';
 const PERSONA_SYNC_URL = 'http://100.69.184.113:8013/store/personas'; // #88
+const TABS_SYNC_URL = 'http://100.69.184.113:8013/store/tabs'; // #57
 let syncTimer = null;
 let syncing = false;
 
@@ -1063,6 +1077,63 @@ async function syncPersonas() {
     // off the tailnet — local definitions stand
   } finally {
     personaSyncing = false;
+  }
+}
+
+// #57: cross-device tabs. Each device publishes its own per-Persona tab list
+// under a stable device id; every device reads the others'. Phase 1 is
+// deliberately NON-DESTRUCTIVE — a remote close never closes anything here.
+// Full mirroring comes once the undo / recently-closed net exists, because a
+// mis-tap on the phone would otherwise destroy a desktop tab irrecoverably.
+function deviceId() {
+  const s = getSettings();
+  if (!s.deviceId) {
+    s.deviceId = `win-${crypto.randomUUID().slice(0, 8)}`;
+    saveSettings();
+  }
+  return s.deviceId;
+}
+
+let remoteDevices = {}; // deviceId -> { name, personas: {pid: [{url,title}]}, at }
+let tabsSyncing = false;
+
+function localTabPayload() {
+  const byPersona = {};
+  for (const id of tabOrder) {
+    const view = tabs.get(id);
+    const pending = lazyTabs.get(id);
+    const url = pending ? pending.url : view.webContents.getURL();
+    if (!url || isNewTabUrl(url) || isInternalUrl(url)) continue; // nothing worth sharing
+    const pid = personaByTab.get(id) || personas.UNASSIGNED;
+    (byPersona[pid] ||= []).push({
+      url,
+      title: pending ? pending.title : view.webContents.getTitle() || url,
+    });
+  }
+  return byPersona;
+}
+
+async function syncTabs() {
+  if (tabsSyncing || locked) return;
+  tabsSyncing = true;
+  try {
+    const res = await fetch(TABS_SYNC_URL, { signal: AbortSignal.timeout(5000) });
+    const remote = await res.json();
+    const devices = (remote.data && remote.data.devices) || {};
+    const me = deviceId();
+    remoteDevices = Object.fromEntries(Object.entries(devices).filter(([k]) => k !== me));
+    devices[me] = { name: 'Windows', personas: localTabPayload(), at: Date.now() };
+    await fetch(TABS_SYNC_URL, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ data: { devices }, updatedAt: Date.now() }),
+      signal: AbortSignal.timeout(5000),
+    });
+    pushState();
+  } catch {
+    // off the tailnet — nothing to do, we publish again next cycle
+  } finally {
+    tabsSyncing = false;
   }
 }
 
@@ -1197,6 +1268,7 @@ function onUnlocked() {
   broadcastHotkeys(); // #16: chrome badges + per-tab bound-key lists
   syncBookmarks(); // #13: catch up whenever a session starts
   syncPersonas(); // #88
+  syncTabs(); // #57
   sweepStaleTabs(); // #79: a machine left off overnight cleans up on return
 }
 
@@ -1761,6 +1833,7 @@ app.whenReady().then(() => {
   setupAutoUpdate();
   setInterval(syncBookmarks, 10 * 60 * 1000); // #13: periodic catch-up
   setInterval(syncPersonas, 10 * 60 * 1000); // #88
+  setInterval(syncTabs, 60 * 1000); // #57: tab rosters refresh every minute
   setInterval(sweepStaleTabs, 5 * 60 * 1000); // #79
 });
 
