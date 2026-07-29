@@ -5,6 +5,11 @@ contextBridge.exposeInMainWorld('webforge', {
   goBack: () => ipcRenderer.send('go-back'),
   goForward: () => ipcRenderer.send('go-forward'),
   reload: () => ipcRenderer.send('reload'),
+  // find in page (#101)
+  findRun: (text, opts) => ipcRenderer.send('find-run', { text, ...opts }),
+  findClose: () => ipcRenderer.send('find-close'),
+  onFindBar: (cb) => ipcRenderer.on('find-bar', (_e, s) => cb(s)),
+  onFindResult: (cb) => ipcRenderer.on('find-result', (_e, r) => cb(r)),
   stop: () => ipcRenderer.send('stop'),
   newTab: () => ipcRenderer.send('new-tab'),
   closeTab: (id) => ipcRenderer.send('close-tab', id),

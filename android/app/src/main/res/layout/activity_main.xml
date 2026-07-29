@@ -77,6 +77,73 @@
                     android:textSize="19sp" />
             </LinearLayout>
 
+            <!-- #101: find in page. Sits under the address row inside the same
+                 bar container, so it pushes the web view down rather than
+                 covering the text you are trying to read. -->
+            <LinearLayout
+                android:id="@+id/findBar"
+                android:layout_width="match_parent"
+                android:layout_height="46dp"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:paddingHorizontal="8dp"
+                android:paddingBottom="6dp"
+                android:visibility="gone">
+
+                <EditText
+                    android:id="@+id/findInput"
+                    android:layout_width="0dp"
+                    android:layout_height="36dp"
+                    android:layout_weight="1"
+                    android:background="@drawable/urlbar_bg"
+                    android:hint="Find in page"
+                    android:textColorHint="#7C7C82"
+                    android:textColor="#E8E8EA"
+                    android:textSize="14sp"
+                    android:paddingHorizontal="14dp"
+                    android:inputType="text"
+                    android:imeOptions="actionSearch"
+                    android:maxLines="1"
+                    android:importantForAutofill="no" />
+
+                <TextView
+                    android:id="@+id/findCount"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:minWidth="46dp"
+                    android:gravity="center"
+                    android:textColor="#7C7C82"
+                    android:textSize="12sp" />
+
+                <TextView
+                    android:id="@+id/findPrev"
+                    android:layout_width="38dp"
+                    android:layout_height="36dp"
+                    android:gravity="center"
+                    android:text="↑"
+                    android:textColor="#E8E8EA"
+                    android:textSize="17sp" />
+
+                <TextView
+                    android:id="@+id/findNext"
+                    android:layout_width="38dp"
+                    android:layout_height="36dp"
+                    android:gravity="center"
+                    android:text="↓"
+                    android:textColor="#E8E8EA"
+                    android:textSize="17sp" />
+
+                <TextView
+                    android:id="@+id/findClose"
+                    android:layout_width="38dp"
+                    android:layout_height="36dp"
+                    android:gravity="center"
+                    android:text="✕"
+                    android:textColor="#E8E8EA"
+                    android:textSize="15sp" />
+            </LinearLayout>
+
             <ProgressBar
                 android:id="@+id/progress"
                 style="?android:attr/progressBarStyleHorizontal"

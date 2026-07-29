@@ -68,6 +68,7 @@ class MainActivity : Activity() {
     private var pendingScrollY = 0
     private var currentPanel: String? = null // #95
     private var nextTabId = 1
+    private var findOpen = false // #101: find in page
 
     private val active: Tab? get() = tabs.getOrNull(activeIndex)
 
@@ -95,12 +96,78 @@ class MainActivity : Activity() {
         urlBar.setOnFocusChangeListener { _, has -> urlEditing = has } // #64
         tabsBtn.setOnClickListener { showTabSheet() }
         findViewById<TextView>(R.id.bookmarksBtn).setOnClickListener { showBookmarks() } // #87
+        wireFindBar() // #101
 
         newTab(START_URL)
         BookmarkStore.sync(this) { }
         Personas.sync(this) { runOnUiThread { rehomeTabs() } } // #88/#96
         syncTabsAcrossDevices() // #57 // warm the cache for the bookmarks panel
         UpdateManager(this).checkForUpdate()
+    }
+
+    // --- #101: find in page. The phone has no Ctrl+F, so this is opened from
+    // Settings; everything else matches the Windows bar — live search, a match
+    // counter, next/previous, and the back gesture closing it first. ---
+    private fun wireFindBar() {
+        val bar = findViewById<LinearLayout>(R.id.findBar)
+        val input = findViewById<EditText>(R.id.findInput)
+        val count = findViewById<TextView>(R.id.findCount)
+
+        input.addTextChangedListener(object : android.text.TextWatcher {
+            override fun afterTextChanged(s: android.text.Editable?) {
+                val q = s?.toString() ?: ""
+                if (q.isEmpty()) {
+                    active?.webView?.clearMatches()
+                    count.text = ""
+                } else {
+                    active?.webView?.findAllAsync(q)
+                }
+            }
+            override fun beforeTextChanged(cs: CharSequence?, a: Int, b: Int, c: Int) {}
+            override fun onTextChanged(cs: CharSequence?, a: Int, b: Int, c: Int) {}
+        })
+        input.setOnEditorActionListener { _, _, _ -> active?.webView?.findNext(true); true }
+        findViewById<TextView>(R.id.findPrev).setOnClickListener { active?.webView?.findNext(false) }
+        findViewById<TextView>(R.id.findNext).setOnClickListener { active?.webView?.findNext(true) }
+        findViewById<TextView>(R.id.findClose).setOnClickListener { closeFind() }
+        bar.visibility = View.GONE
+    }
+
+    /** Match counts arrive per WebView, from the listener set up in [newTab]. */
+    private fun onFindResults(activeMatch: Int, total: Int) {
+        if (!findOpen) return
+        val count = findViewById<TextView>(R.id.findCount)
+        val input = findViewById<EditText>(R.id.findInput)
+        count.text = when {
+            input.text.isNullOrEmpty() -> ""
+            total == 0 -> "0/0"
+            else -> "${activeMatch + 1}/$total" // the callback's index is 0-based
+        }
+    }
+
+    private fun openFind() {
+        findOpen = true
+        val bar = findViewById<LinearLayout>(R.id.findBar)
+        val input = findViewById<EditText>(R.id.findInput)
+        bar.visibility = View.VISIBLE
+        input.requestFocus()
+        input.selectAll()
+        (getSystemService(INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager)
+            .showSoftInput(input, 0)
+        if (input.text.isNotEmpty()) active?.webView?.findAllAsync(input.text.toString())
+    }
+
+    private fun closeFind() {
+        if (!findOpen) return
+        findOpen = false
+        val bar = findViewById<LinearLayout>(R.id.findBar)
+        val input = findViewById<EditText>(R.id.findInput)
+        active?.webView?.clearMatches()
+        bar.visibility = View.GONE
+        findViewById<TextView>(R.id.findCount).text = ""
+        (getSystemService(INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager)
+            .hideSoftInputFromWindow(input.windowToken, 0)
+        goFullscreen() // the keyboard leaving can bring the system bars back
     }
 
     // --- #58: status bar VISIBLE above our bar; navigation bar hidden ------
@@ -199,6 +266,12 @@ class MainActivity : Activity() {
             javaScriptCanOpenWindowsAutomatically = true
             // Self-hosted services are often plain HTTP behind an HTTPS page.
             mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+        }
+        // #101: find-in-page counts come back here. Only the visible tab's may
+        // reach the bar — a background tab still settling would clobber the
+        // count you are reading.
+        wv.setFindListener { activeMatch, total, isDoneCounting ->
+            if (isDoneCounting && wv === active?.webView) onFindResults(activeMatch, total)
         }
         val tab = Tab(nextTabId++, wv)
         // #96: URL rules decide the Persona at creation, so tabs never sit in
@@ -323,6 +396,9 @@ class MainActivity : Activity() {
 
     private fun activateTab(index: Int) {
         if (index !in tabs.indices) return
+        // #101: close the bar before activeIndex moves, so clearMatches lands on
+        // the tab that was actually searched and its highlights don't linger.
+        if (findOpen) closeFind()
         activeIndex = index
         tabs[index].pendingUrl?.let { u -> // #93: adopted tab loads when opened
             tabs[index].pendingUrl = null
@@ -1316,6 +1392,15 @@ class MainActivity : Activity() {
         title(col, "Settings")
         caption(col, "Swipe right to go back.")
 
+        header(col, "THIS PAGE")
+        val page = card(col)
+        // #101: the phone's stand-in for Ctrl+F. Closing the panel first means
+        // the bar and the page are both visible the moment it opens.
+        action(page, "🔍 Find in page", "Search the text of the page you're on") {
+            closePanel()
+            openFind()
+        }
+
         header(col, "SEARCH")
         val engines = card(col)
         val current = Prefs.engineKey(this)
@@ -1452,6 +1537,7 @@ class MainActivity : Activity() {
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
         when {
+            findOpen -> closeFind() // #101: the find bar is the topmost thing
             overlay.visibility == View.VISIBLE -> closePanel()
             active?.webView?.canGoBack() == true -> active?.webView?.goBack()
             tabs.size > 1 -> closeTab(activeIndex)

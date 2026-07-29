@@ -209,6 +209,48 @@
     font-size: 13px; outline: none;
   }
 
+  /* --- #101: find in page. Row 2 of the content column, pinned to the top;
+     main.js pushes the page view down by FIND_H so this is never covered. --- */
+  #findbar {
+    grid-column: 2;
+    grid-row: 2;
+    align-self: start;
+    display: none;
+    align-items: center;
+    gap: 6px;
+    height: 38px;
+    padding: 0 10px;
+    background: var(--bg);
+    border-bottom: 1px solid var(--border);
+  }
+  #findbar.open { display: flex; }
+  #findinput {
+    width: 260px;
+    height: 26px;
+    padding: 0 8px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--field-bg);
+    color: var(--field-text);
+    font: 13px system-ui, sans-serif;
+    outline: none;
+  }
+  #findinput:focus { border-color: var(--accent); }
+  #findinput.nomatch { border-color: #e5534b; }
+  #findcount {
+    min-width: 62px;
+    color: var(--text-dim);
+    font-variant-numeric: tabular-nums;
+  }
+  #findbar button {
+    width: 26px; height: 26px;
+    border: none; border-radius: 6px;
+    background: transparent; color: var(--text-dim);
+    font-size: 13px; cursor: pointer;
+  }
+  #findbar button:hover { background: var(--hover); }
+  #findbar button:disabled { color: var(--disabled); cursor: default; background: transparent; }
+
   /* --- right-side panels: bookmarks (#11) and passwords (#26) --- */
   #bmpanel, #pwpanel {
     position: absolute;
@@ -356,6 +398,12 @@
     position: static;
     width: 100%; height: 100vh;
     border-left: none;
+  }
+  /* #101: in fullscreen the find bar is the only chrome on screen. */
+  body[data-fs="find"] #findbar {
+    display: flex !important;
+    width: 100%; height: 100vh;
+    border-bottom: none;
   }
 
   /* --- bookmark edit dialog (#29): centered popup; main raises chrome --- */
@@ -591,6 +639,15 @@
     <button id="star" title="Bookmark this page (Ctrl+D)">☆</button>
     <button id="settingsbtn" title="Settings (Ctrl+Shift+S)">⚙</button>
     <div id="progress"></div>
+  </div>
+  <!-- #101: find in page. Docked under the nav; main.js shrinks the page view
+       by FIND_H so this strip is real estate, not an overlay the page covers. -->
+  <div id="findbar">
+    <input id="findinput" type="text" placeholder="Find in page" spellcheck="false">
+    <span id="findcount"></span>
+    <button id="findprev" title="Previous match (Shift+Enter)">↑</button>
+    <button id="findnext" title="Next match (Enter)">↓</button>
+    <button id="findclose" title="Close (Esc)">✕</button>
   </div>
   <div id="bmpanel">
     <header>
@@ -1374,6 +1431,64 @@
   // --- bookmark search (#27) ---
   const bmsearch = document.getElementById('bmsearch');
   bmsearch.addEventListener('input', () => renderBookmarks(lastBookmarks));
+
+  // --- find in page (#101) ---
+  const findbar = document.getElementById('findbar');
+  const findinput = document.getElementById('findinput');
+  const findcount = document.getElementById('findcount');
+  const findprev = document.getElementById('findprev');
+  const findnext = document.getElementById('findnext');
+
+  function findStep(forward) {
+    const text = findinput.value;
+    if (!text) return;
+    webforge.findRun(text, { forward, again: true });
+  }
+
+  findinput.addEventListener('input', () => {
+    // A fresh search (again:false) re-highlights every match and jumps to the
+    // first; passing again:true here would advance through matches as you type.
+    webforge.findRun(findinput.value, { forward: true, again: false });
+    if (!findinput.value) {
+      findcount.textContent = '';
+      findinput.classList.remove('nomatch');
+    }
+  });
+  findinput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      findStep(!e.shiftKey);
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      webforge.findClose();
+    }
+    e.stopPropagation(); // typing here must never fire hotkeys
+  });
+  findprev.addEventListener('click', () => findStep(false));
+  findnext.addEventListener('click', () => findStep(true));
+  document.getElementById('findclose').addEventListener('click', () => webforge.findClose());
+
+  webforge.onFindBar(({ open, refocus }) => {
+    findbar.classList.toggle('open', open);
+    if (!open) return;
+    // Ctrl+F on an already-open bar selects what's there, the way every other
+    // browser does, so a second search overwrites rather than appends.
+    findinput.focus();
+    findinput.select();
+    // Re-running the existing query on re-open keeps the count honest after a
+    // reveal; a fresh open with an empty box is a no-op.
+    if (refocus && findinput.value) {
+      webforge.findRun(findinput.value, { forward: true, again: false });
+    }
+  });
+
+  webforge.onFindResult(({ matches, active }) => {
+    const none = !matches;
+    findcount.textContent = findinput.value ? (none ? 'No results' : `${active}/${matches}`) : '';
+    findinput.classList.toggle('nomatch', Boolean(findinput.value) && none);
+    findprev.disabled = none;
+    findnext.disabled = none;
+  });
 
   webforge.onBookmarksPanel((open) => {
     bmpanel.classList.toggle('open', open);

@@ -51,8 +51,10 @@ const isNewTabUrl = (u) => typeof u === 'string' && u.startsWith('file://') && u
 const SIDEBAR_W = 240;
 const TOPBAR_H = 44;
 const BM_PANEL_W = 280; // #11 bookmarks panel / #26 passwords panel, right side
+const FIND_H = 38; // #101: find bar, docked under the nav bar
 let bmPanelOpen = false;
 let pwPanelOpen = false; // #26 — shares the right-panel slot with bookmarks
+let findOpen = false; // #101
 
 let win, chrome, lockView;
 const tabs = new Map(); // id -> WebContentsView
@@ -67,6 +69,10 @@ const personaByTab = new Map(); // #25: tabId -> personaId
 // and fetching a page for every saved tab is what made startup take seconds.
 const lazyTabs = new Map(); // tabId -> { url, title }
 const lastActiveAt = new Map(); // #79: tabId -> ms, for inactivity expiry
+// #101: Ctrl+Shift+T — closed tabs, most recent last. Capped so a long session
+// can't grow it without bound; pinned tabs never reach here (closeTab refuses).
+const closedTabs = [];
+const CLOSED_STACK_MAX = 25;
 let locked = true;           // #15: the app is a brick until the vault unlocks
 
 // #25: switch persona — land on one of its tabs, creating one if it has none.
@@ -165,11 +171,15 @@ function layout() {
   }
   chrome.setBounds({ x: 0, y: 0, width, height });
   if (view) {
+    // #101: an open find bar takes a strip under the nav rather than floating
+    // over the page — the page view is a separate native view and would draw
+    // straight over anything the chrome painted in its region.
+    const top = TOPBAR_H + (findOpen ? FIND_H : 0);
     view.setBounds({
       x: SIDEBAR_W,
-      y: TOPBAR_H,
+      y: top,
       width: width - SIDEBAR_W - (bmPanelOpen || pwPanelOpen ? BM_PANEL_W : 0),
-      height: height - TOPBAR_H,
+      height: height - top,
     });
   }
 }
@@ -181,6 +191,9 @@ let fsPollTimer = null;
 
 function fsRegionBounds() {
   const { width, height } = win.getContentBounds();
+  // #101: find beats a hover-reveal — you asked for the bar, so it stays put
+  // until you close it, even as the mouse wanders off the top edge.
+  if (findOpen) return { x: 0, y: 0, width, height: FIND_H };
   switch (fsRevealed) {
     case 'tabs':
       return { x: 0, y: 0, width: SIDEBAR_W, height };
@@ -203,6 +216,9 @@ function fsPoll() {
     return;
   }
   if (!fullscreen || locked) return;
+  // #101: while the find bar owns the top strip, the hover-reveal stays out of
+  // it — otherwise moving the mouse would swap the bar for the nav mid-search.
+  if (findOpen) return;
   const { screen } = require('electron');
   const pt = screen.getCursorScreenPoint();
   const wb = win.getBounds();
@@ -341,6 +357,53 @@ function togglePwPanel() {
   chrome?.webContents.send('pw-panel', pwPanelOpen);
   if (pwPanelOpen) pushCreds();
   layout();
+}
+
+// --- #101: find in page (Ctrl+F) ---
+// The bar lives in the chrome UI; main owns the state because layout() has to
+// give it room and Electron's find API hangs off the page's webContents.
+function openFind() {
+  if (locked) return;
+  const wasOpen = findOpen;
+  findOpen = true;
+  // In fullscreen the page owns every pixel and chrome sits underneath it —
+  // raise chrome or the bar is invisible while very much capturing your keys.
+  if (fullscreen) {
+    win.contentView.addChildView(chrome);
+    // The chrome renderer lays itself out from data-fs; without this it would
+    // try to draw the whole sidebar-and-nav grid into a 38px-tall viewport.
+    chrome.webContents.send('fs-mode', 'find');
+  }
+  chrome.webContents.send('find-bar', { open: true, refocus: !wasOpen });
+  layout();
+  chrome.webContents.focus();
+}
+
+function closeFind({ refocus = true } = {}) {
+  if (!findOpen) return;
+  findOpen = false;
+  activeWc()?.stopFindInPage('clearSelection');
+  chrome.webContents.send('find-bar', { open: false });
+  if (fullscreen) chrome.webContents.send('fs-mode', fsRevealed);
+  layout();
+  // Hand the top of the screen back to the page we borrowed it from.
+  if (fullscreen && !fsRevealed) {
+    const view = tabs.get(activeId);
+    if (view) win.contentView.addChildView(view);
+  }
+  if (refocus) activeWc()?.focus();
+}
+
+function runFind(text, { forward = true, again = false } = {}) {
+  const wc = activeWc();
+  if (!wc) return;
+  if (!text) {
+    // Emptying the box clears the highlights instead of searching for "".
+    wc.stopFindInPage('clearSelection');
+    chrome.webContents.send('find-result', { matches: 0, active: 0 });
+    return;
+  }
+  wc.findInPage(text, { forward, findNext: again });
 }
 
 // #29: starring opens a dialog (title + folder picker) instead of instantly
@@ -606,6 +669,16 @@ function createTab(url = null, background = false, personaId = null, opts = {}) 
       pushState();
     }
   });
+  // #101: findInPage results come back asynchronously per webContents; only the
+  // active tab's may reach the bar, or a background tab still settling would
+  // overwrite the count you are looking at.
+  wc.on('found-in-page', (_e2, result) => {
+    if (id !== activeId || !findOpen) return;
+    chrome?.webContents.send('find-result', {
+      matches: result.matches,
+      active: result.activeMatchOrdinal,
+    });
+  });
   wc.on('did-finish-load', () => tryAutofill(wc)); // #12
   wc.on('dom-ready', () => {
     wc.send('sticky-mode', hotkeyByTab.has(id)); // #33
@@ -630,6 +703,9 @@ function activateTab(id) {
     errorlog.record('activateTab', new Error(`no such tab id=${id} (known: ${[...tabs.keys()].join(',')})`));
     return;
   }
+  // #101: close the find bar before activeId moves, so stopFindInPage lands on
+  // the tab that was actually searched and its highlights don't linger.
+  if (findOpen) closeFind({ refocus: false });
   const owner = personaByTab.get(id) || personas.UNASSIGNED;
   if (owner !== personas.activeId()) personas.setActive(owner); // #25
   const leaving = activeId; // #82 — must be captured BEFORE the reassignment
@@ -676,6 +752,11 @@ function closeTab(id, opts = {}) {
     if (shareable(url)) {
       closedFacts.set(url, Date.now());
       setTimeout(syncTabs, 400); // #95: propagate the close right away
+      // #101: remember it for Ctrl+Shift+T. shareable() already screens out
+      // new-tab and internal file:// pages, which nobody wants to "reopen",
+      // and remote closes are excluded so another device can't stuff our stack.
+      closedTabs.push({ url, personaId: personaByTab.get(id) || null });
+      if (closedTabs.length > CLOSED_STACK_MAX) closedTabs.shift();
     }
   }
   const idx = tabOrder.indexOf(id);
@@ -725,6 +806,54 @@ function openOrFocus(url, background) {
 function duplicateActiveTab() {
   const url = activeWc()?.getURL();
   if (url) createTab(url, false);
+}
+
+// --- #101: the browser basics that were never wired ---
+
+// Ctrl+Shift+R. The existing Ctrl+R / F5 call .reload(), which honours the HTTP
+// cache — there was no way to bypass it at all.
+function hardReload() {
+  if (locked) return;
+  activeWc()?.reloadIgnoringCache();
+}
+
+// Ctrl+= / Ctrl+- / Ctrl+0. Electron zoom levels are 1.2^level, so ±1 a step
+// lands close to Chrome's 120% / 144% ladder. Clamped to roughly 40%–250%.
+const ZOOM_MIN = -5;
+const ZOOM_MAX = 5;
+function zoomBy(delta) {
+  const wc = activeWc();
+  if (!wc || locked) return;
+  const next = delta === 0 ? 0 : Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, wc.getZoomLevel() + delta));
+  wc.setZoomLevel(next);
+}
+
+// Ctrl+P. Electron's print() throws rather than rejecting on some Windows
+// configurations, so it is guarded — a missing printer must not kill the app.
+function printPage() {
+  if (locked) return;
+  try {
+    activeWc()?.print({}, () => {});
+  } catch (err) {
+    errorlog.record('print', err);
+  }
+}
+
+// Ctrl+U. view-source: only means anything for real web pages; running it on
+// our own file:// chrome pages would just expose the app's internals.
+function viewSource() {
+  if (locked) return;
+  const url = activeWc()?.getURL();
+  if (!url || !/^https?:\/\//i.test(url)) return;
+  createTab(`view-source:${url}`, false);
+}
+
+// Ctrl+Shift+T. Walks back through recently closed tabs, most recent first.
+function reopenClosedTab() {
+  if (locked) return;
+  const last = closedTabs.pop();
+  if (!last) return;
+  createTab(last.url, false, last.personaId);
 }
 
 function cycleTab(dir) {
@@ -779,6 +908,7 @@ function wireLeaderShortcut() {
 
 // #42: Esc closes the topmost open thing, from wherever focus happens to be.
 function handleEscape() {
+  if (findOpen) return closeFind(); // #101: the find bar is the topmost thing
   if (bmDialogOpen) return closeBookmarkDialog();
   if (bmPanelOpen) return toggleBookmarksPanel();
   if (pwPanelOpen) return togglePwPanel();
@@ -844,14 +974,11 @@ function wireChords(wc) {
     }
     if (!input.control || input.alt || input.meta) return;
     const key = rawKey.toLowerCase();
-    // #38: Ctrl+Shift+Left/Right back/forward (user request).
-    if (input.shift && (key === 'arrowleft' || key === 'arrowright')) {
-      event.preventDefault();
-      const h = activeWc()?.navigationHistory;
-      if (key === 'arrowleft') h?.goBack();
-      else h?.goForward();
-      return;
-    }
+    // #101: Ctrl+Shift+Left/Right is the standard word-wise text-selection
+    // chord and used to be swallowed here for back/forward (#38). Stealing it
+    // meant selection could not work in WebForge at all. Alt+Left / Alt+Right
+    // above are the browser-standard back/forward and still do the job, so the
+    // binding was pure duplication. Deliberately NOT handled — let it through.
     if (key === 'tab') {
       event.preventDefault();
       cycleTab(input.shift ? -1 : 1);
@@ -1442,6 +1569,16 @@ function menuTemplate() {
           },
           { label: 'Reload', accelerator: 'CmdOrCtrl+R', click: () => activeWc()?.reload() },
           { label: 'Reload', accelerator: 'F5', visible: false, click: () => activeWc()?.reload() },
+          // #101: the basics that were missing.
+          { label: 'Hard Reload', accelerator: 'CmdOrCtrl+Shift+R', click: () => hardReload() },
+          { label: 'Find in Page', accelerator: 'CmdOrCtrl+F', click: () => openFind() },
+          { label: 'Reopen Closed Tab', accelerator: 'CmdOrCtrl+Shift+T', click: () => reopenClosedTab() },
+          { label: 'Zoom In', accelerator: 'CmdOrCtrl+=', click: () => zoomBy(1) },
+          { label: 'Zoom In', accelerator: 'CmdOrCtrl+Plus', visible: false, click: () => zoomBy(1) },
+          { label: 'Zoom Out', accelerator: 'CmdOrCtrl+-', click: () => zoomBy(-1) },
+          { label: 'Actual Size', accelerator: 'CmdOrCtrl+0', click: () => zoomBy(0) },
+          { label: 'Print', accelerator: 'CmdOrCtrl+P', click: () => printPage() },
+          { label: 'View Source', accelerator: 'CmdOrCtrl+U', click: () => viewSource() },
           { label: 'Full Screen', accelerator: 'F11', click: () => setFullscreenMode(!fullscreen) },
           { type: 'separator' },
           { label: 'Quit', accelerator: 'CmdOrCtrl+Q', role: 'quit' },
@@ -1457,6 +1594,9 @@ ipcMain.on('navigate', (_e, input) => {
 ipcMain.on('go-back', () => activeWc()?.navigationHistory.goBack());
 ipcMain.on('go-forward', () => activeWc()?.navigationHistory.goForward());
 ipcMain.on('reload', () => activeWc()?.reload());
+// #101: find bar — the UI lives in the chrome renderer, the search runs here.
+ipcMain.on('find-run', (_e, { text, forward, again }) => runFind(String(text || ''), { forward, again }));
+ipcMain.on('find-close', () => closeFind());
 ipcMain.on('stop', () => activeWc()?.stop());
 ipcMain.on('new-tab', () => openNewTab()); // #82
 ipcMain.on('close-tab', (_e, id) => closeTab(id));
