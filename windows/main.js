@@ -63,6 +63,21 @@ const faviconByTab = new Map(); // #45: tabId -> icon URL
 const personaByTab = new Map(); // #25: tabId -> personaId
 let locked = true;           // #15: the app is a brick until the vault unlocks
 
+// #25: switch persona — land on one of its tabs, creating one if it has none.
+function switchPersona(personaId) {
+  if (locked || !personas.get(personaId)) return;
+  personas.setActive(personaId);
+  const mine = tabOrder.filter((t) => (personaByTab.get(t) || personas.UNASSIGNED) === personaId);
+  if (mine.length) {
+    const target = mine.includes(activeId) ? activeId : mine[0];
+    activeId = null; // force re-activation so view visibility is recomputed
+    activateTab(target);
+  } else {
+    createTab(null, false, personaId);
+  }
+  pushState();
+}
+
 function sortTabOrder() {
   const weight = (id) => (hotkeyByTab.has(id) ? 0 : pinnedIds.has(id) ? 1 : 2);
   tabOrder = [...tabOrder].sort((a, b) => weight(a) - weight(b));
@@ -129,7 +144,9 @@ function layout() {
     // settings) is open — then chrome needs the full window to show it.
     view?.setBounds({ x: 0, y: 0, width, height });
     chrome.setBounds(
-      bmDialogOpen || settingsOpen || managerOpen ? { x: 0, y: 0, width, height } : fsRegionBounds()
+      bmDialogOpen || settingsOpen || managerOpen || bmPanelOpen || pwPanelOpen
+        ? { x: 0, y: 0, width, height }
+        : fsRegionBounds()
     );
     return;
   }
