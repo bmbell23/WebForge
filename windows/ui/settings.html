@@ -142,8 +142,18 @@
     Named workspaces with their own tab list and their own hotkey bindings.
     Opening a URL that matches a Persona's rules switches you to it automatically;
     anything unmatched lands in <b>Unassigned</b>. Switch with <b>Ctrl+Space</b> then
-    the Persona's number. One rule per line — prefix match, e.g.
-    <code>https://jira.company.com</code>.
+    the Persona's number.
+    <br><br>
+    One rule per line. Every rule is anchored at the start and open-ended at the end,
+    so <code>https://host</code> also matches <code>https://host/deep/path</code>.
+    <br>
+    • <b>prefix</b> — <code>https://jira.company.com</code><br>
+    • <b>wildcard</b> — <code>https://*.devops.example.com</code> matches any subdomain.
+      <code>*</code> can match nothing, so <code>https://*devops.example.com</code> also
+      covers the bare domain.<br>
+    • <b>regex</b> — wrap in slashes:
+      <code>/^https:\/\/(ci|cd)\.example\.com/</code>. An invalid pattern simply
+      matches nothing rather than breaking routing.
   </div>
   <div id="personalist"></div>
   <div class="addrow">
@@ -291,7 +301,7 @@
         value: (p.rules || []).join('\n'),
         placeholder: p.builtin
           ? 'Unassigned catches everything no other Persona claims — it needs no rules.'
-          : 'https://jira.company.com\nhttps://100.69.184.113:8007',
+          : 'https://jira.company.com\nhttps://*.devops.example.com\n/^https:\\/\\/(ci|cd)\\.example\\.com/',
         disabled: Boolean(p.builtin),
       });
       card.appendChild(rules);
