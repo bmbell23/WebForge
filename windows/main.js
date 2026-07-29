@@ -611,6 +611,7 @@ function activateTab(id) {
   tabs.get(activeId)?.setVisible(false);
   activeId = id;
   const view = tabs.get(id);
+  const leaving = activeId; // #82
   lastActiveAt.set(id, Date.now()); // #79: expiry is measured from last use
   const pending = lazyTabs.get(id); // #78
   if (pending) {
@@ -628,6 +629,10 @@ function activateTab(id) {
   // #30: keyboard focus MUST follow activation — if it stays on a hidden view
   // (or nothing), key events vanish and hotkey swapping "stops working".
   view.webContents.focus();
+  // #82: dispose of the new tab we just walked away from.
+  if (leaving !== null && leaving !== id && tabs.has(leaving) && isUnusedNewTab(leaving)) {
+    closeTab(leaving);
+  }
   pushState();
 }
 
@@ -920,6 +925,7 @@ function createWindow() {
     if (cmd === 'browser-forward') activeWc()?.navigationHistory.goForward();
   });
   wireLeaderShortcut(); // #41
+  win.on('blur', () => closeStrayNewTabs()); // #82: Alt+Tab away disposes of it
 
   chrome = new WebContentsView({
     webPreferences: { preload: path.join(__dirname, 'preload.js') },
@@ -1167,7 +1173,7 @@ function menuTemplate() {
       {
         label: 'WebForge',
         submenu: [
-          { label: 'New Tab', accelerator: 'CmdOrCtrl+T', click: () => createTab() },
+          { label: 'New Tab', accelerator: 'CmdOrCtrl+T', click: () => openNewTab() }, // #82
           { label: 'Close Tab', accelerator: 'CmdOrCtrl+W', click: () => closeTab(activeId) },
           { label: 'Duplicate Tab', accelerator: 'CmdOrCtrl+Shift+U', click: () => locked || duplicateActiveTab() },
           { label: 'Pin/Unpin Tab', accelerator: 'CmdOrCtrl+Shift+P', click: () => togglePin(activeId) },
@@ -1210,7 +1216,7 @@ ipcMain.on('go-back', () => activeWc()?.navigationHistory.goBack());
 ipcMain.on('go-forward', () => activeWc()?.navigationHistory.goForward());
 ipcMain.on('reload', () => activeWc()?.reload());
 ipcMain.on('stop', () => activeWc()?.stop());
-ipcMain.on('new-tab', () => createTab());
+ipcMain.on('new-tab', () => openNewTab()); // #82
 ipcMain.on('close-tab', (_e, id) => closeTab(id));
 ipcMain.on('activate-tab', errorlog.guard('activate-tab', (_e, id) => activateTab(Number(id))));
 ipcMain.on('toggle-pin', (_e, id) => togglePin(id));
@@ -1241,6 +1247,40 @@ ipcMain.handle('int:delete-persona', (_e, id) => {
   pushState();
   return ok;
 });
+// #82: a new tab is scratch space — it exists only while you're on it. Any
+// tab still showing the new-tab page hasn't been used (typing a URL navigates
+// it, so it stops qualifying), and leaving it means you didn't want it.
+function isUnusedNewTab(id) {
+  if (pinnedIds.has(id) || hotkeyByTab.has(id)) return false;
+  const view = tabs.get(id);
+  if (!view) return false;
+  const pending = lazyTabs.get(id);
+  return isNewTabUrl(pending ? pending.url : view.webContents.getURL());
+}
+
+function closeStrayNewTabs(exceptId = null) {
+  if (locked) return;
+  for (const id of [...tabOrder]) {
+    if (id === exceptId) continue;
+    if (tabOrder.length <= 1) break; // never leave the window tabless
+    if (isUnusedNewTab(id)) closeTab(id);
+  }
+}
+
+// Ctrl+T / the + button: reuse this Persona's new tab rather than stacking.
+function openNewTab() {
+  if (locked) return;
+  const active = personas.activeId();
+  const existing = tabOrder.find(
+    (id) => (personaByTab.get(id) || personas.UNASSIGNED) === active && isUnusedNewTab(id)
+  );
+  if (existing !== undefined) {
+    activateTab(existing);
+    return;
+  }
+  createTab(null, false);
+}
+
 // #79: close normal tabs left untouched for too long. Pinned and hotkey tabs
 // are exempt (same survivors as Ctrl+Shift+X), the active tab never expires,
 // and the last tab standing is always kept.
