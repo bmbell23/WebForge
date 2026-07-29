@@ -1,0 +1,123 @@
+{
+  "_comment": "Single source of truth for the About page on BOTH platforms. Windows reads it directly; build-apk.sh stages it into Android assets. Static facts only — live version numbers are read from the running device so they can never drift.",
+  "sections": [
+    {
+      "platform": "common",
+      "title": "What WebForge is",
+      "items": [
+        {
+          "label": "Project",
+          "value": "A personal browser for Windows and Android, built from scratch on top of existing browser engines.",
+          "note": "Repo: github.com/bmbell23/WebForge · issues are the source of truth for all work."
+        },
+        {
+          "label": "Nothing is forked",
+          "value": "We did NOT fork Chromium or any browser.",
+          "note": "A Chromium fork means ~100 GB checkouts, multi-hour builds, a Windows build machine, and re-merging upstream forever. Instead each platform consumes a maintained engine as a dependency, and 'following upstream' is a version bump we do deliberately."
+        },
+        {
+          "label": "Versioning",
+          "value": "version.txt at the repo root is the single source of truth; the gvc shell function bumps, commits and tags.",
+          "note": "Both apps stamp their build from it. The Windows build injects it via electron-builder extraMetadata; Android derives versionCode as major*10000 + minor*100 + patch."
+        },
+        {
+          "label": "Distribution",
+          "value": "Self-hosted on dockerhost over Tailscale — no app stores involved.",
+          "note": "nginx:alpine serves /releases on port 8012. Both apps check it and update themselves in place."
+        },
+        {
+          "label": "Sync service",
+          "value": "A ~90-line stdlib-only Python HTTP service (python:3.12-alpine) on port 8013.",
+          "note": "Last-write-wins JSON store for bookmarks. Offline-first by design: every client renders its local copy and syncs opportunistically, so being off the tailnet never blocks anything."
+        },
+        {
+          "label": "Data storage",
+          "value": "Everything is local to the device.",
+          "note": "Bookmarks, settings, hotkeys as JSON. On Windows, credentials and the session live in an AES-256-GCM vault whose key is derived from your master password with scrypt (N=2^15) and exists only in memory while unlocked."
+        }
+      ]
+    },
+    {
+      "platform": "windows",
+      "title": "Windows app",
+      "items": [
+        {
+          "label": "Engine",
+          "value": "Chromium, bundled via Electron.",
+          "note": "Electron tracks Chromium stable within weeks. Upgrading the browser engine = bumping the Electron dependency."
+        },
+        {
+          "label": "Architecture",
+          "value": "One BaseWindow holding a chrome WebContentsView (the sidebar + nav bar UI) plus one WebContentsView per tab.",
+          "note": "Only the active tab's view is attached. The chrome UI is a dumb renderer of state broadcast from the main process. WebForge's own pages (Settings, Bookmark manager, New tab, this page) are real tabs loaded from local files with a separate privileged preload; web content never gets that bridge."
+        },
+        {
+          "label": "Ad blocking",
+          "value": "@ghostery/adblocker-electron with the full prebuilt list set (EasyList, EasyPrivacy, uBlock lists incl. Annoyances), plus extra cosmetic rules for fandom.com.",
+          "note": "The compiled engine is cached in userData, so blocking keeps working offline."
+        },
+        {
+          "label": "Auto-update",
+          "value": "electron-updater, generic HTTP provider pointed at the dockerhost release server.",
+          "note": "Differential updates via blockmap — a typical update transfers about 1 MB rather than the full ~83 MB installer."
+        },
+        {
+          "label": "How it's built",
+          "value": "electron-builder produces an NSIS installer, cross-built on a Linux server.",
+          "note": "The host has no wine, which electron-builder needs to stamp Windows exe metadata, so the build runs inside the official electronuserland/builder:wine Docker image. Electron and NSIS downloads are cached on the host. Script: scripts/build-windows.sh"
+        },
+        {
+          "label": "Not code-signed",
+          "value": "The installer is unsigned, so SmartScreen warns on first run.",
+          "note": "Expected for a self-hosted personal build; a code-signing certificate would remove it."
+        }
+      ]
+    },
+    {
+      "platform": "android",
+      "title": "Android app",
+      "items": [
+        {
+          "label": "Engine",
+          "value": "Android System WebView — Chromium, kept up to date by the OS through Google Play.",
+          "note": "The engine updates itself independently of this app, so the browser core stays current with no work on our side. GeckoView was considered and deferred; it would be revisited only if WebView proves too limiting."
+        },
+        {
+          "label": "Architecture",
+          "value": "A native Kotlin shell (single Activity, no UI frameworks or third-party dependencies) hosting one WebView per tab.",
+          "note": "Only the active tab is attached to the view tree. Drawn edge-to-edge: the status bar sits above a padded strip in the bar colour, and the navigation bar is hidden."
+        },
+        {
+          "label": "Dependencies",
+          "value": "None. The app uses only the Android framework and Kotlin's standard library.",
+          "note": "Deliberate — it keeps the APK tiny (well under 1 MB) and the build hermetic."
+        },
+        {
+          "label": "Self-update",
+          "value": "On resume, the app compares its version against the release server and offers the newer APK.",
+          "note": "Downloaded with DownloadManager and handed to the system installer. The signing key stays constant, so Android treats it as an upgrade rather than requiring an uninstall."
+        },
+        {
+          "label": "How it's built",
+          "value": "Gradle + Android Gradle Plugin, built on the Linux server; the APK and version endpoint are staged to the release server.",
+          "note": "Script: scripts/build-apk.sh"
+        }
+      ]
+    },
+    {
+      "platform": "common",
+      "title": "Toolchain versions (pinned at build time)",
+      "items": [
+        { "label": "Electron", "value": "34.5.8" },
+        { "label": "electron-builder", "value": "25.1.8" },
+        { "label": "electron-updater", "value": "6.8.9" },
+        { "label": "@ghostery/adblocker-electron", "value": "2.18.1" },
+        { "label": "Android Gradle Plugin", "value": "8.1.0" },
+        { "label": "Gradle", "value": "8.3" },
+        { "label": "Kotlin", "value": "1.9.10" },
+        { "label": "Android SDK", "value": "compile 34 · target 34 · min 26 (Android 8.0)" },
+        { "label": "Java", "value": "17" }
+      ]
+    }
+  ]
+}

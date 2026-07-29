@@ -33,7 +33,8 @@
       "hotkeys.js",
       "content-preload.js",
       "internal-preload.js",
-      "ui/**"
+      "ui/**",
+      { "from": "../shared", "to": "shared" }
     ],
     "win": {
       "target": "nsis"

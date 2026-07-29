@@ -15,6 +15,13 @@ cd "$REPO_ROOT/android"
 VERSION="$(cat "$REPO_ROOT/version.txt" 2>/dev/null || echo unknown)"
 echo "🔨 Building WebForge debug APK (version: $VERSION)"
 
+# #61: the About page content is shared with the Windows app — stage it into
+# APK assets so both platforms render identical documentation.
+ASSETS="$REPO_ROOT/android/app/src/main/assets"
+mkdir -p "$ASSETS"
+cp "$REPO_ROOT/shared/about.json" "$ASSETS/about.json"
+echo "📄 Staged shared/about.json -> assets/"
+
 if [ "$1" = "--clean" ]; then
     ./gradlew clean
 fi

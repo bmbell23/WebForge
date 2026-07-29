@@ -35,6 +35,7 @@ const NEWTAB_FILE = path.join(__dirname, 'ui', 'newtab.html');
 const INTERNAL_PAGES = {
   settings: path.join(__dirname, 'ui', 'settings.html'),
   manager: path.join(__dirname, 'ui', 'manager.html'),
+  about: path.join(__dirname, 'ui', 'about.html'), // #61
 };
 const fileUrl = (p) => `file://${p.replace(/\\/g, '/')}`;
 const isInternalUrl = (u) =>
@@ -368,7 +369,9 @@ function tabState() {
     const rawUrl = wc.getURL();
     const isNew = isNewTabUrl(rawUrl); // #43: don't surface the file:// path
     const internal = isInternalUrl(rawUrl)
-      ? rawUrl.includes('settings.html') ? 'Settings' : 'Bookmarks'
+      ? rawUrl.includes('settings.html') ? 'Settings'
+        : rawUrl.includes('about.html') ? 'About'
+        : 'Bookmarks'
       : null;
     return {
       id,
@@ -1035,6 +1038,7 @@ function menuTemplate() {
           { label: 'Bookmarks Panel', accelerator: 'CmdOrCtrl+B', click: () => locked || toggleBookmarksPanel() },
           { label: 'Bookmark Manager', accelerator: 'CmdOrCtrl+Shift+B', click: () => locked || toggleBmManager() },
           { label: 'Settings', accelerator: 'CmdOrCtrl+Shift+S', click: () => locked || toggleSettings() },
+          { label: 'About WebForge', click: () => locked || openInternalTab('about') },
           { label: 'Bookmark This Page', accelerator: 'CmdOrCtrl+D', click: () => locked || starCurrent() },
           { label: 'Lock WebForge', accelerator: 'CmdOrCtrl+Shift+L', click: () => showLock() },
           { label: 'Import Passwords (CSV)…', click: () => locked || importPasswordsCsv() },
@@ -1211,6 +1215,38 @@ ipcMain.handle('int:save-cred', (_e, cred) => {
   return credentials.upsert(cred || {});
 });
 ipcMain.handle('int:delete-cred', (_e, id) => (locked ? false : credentials.removeById(String(id))));
+ipcMain.handle('int:about', () => {
+  let shared = { sections: [] };
+  try {
+    // shared/about.json is one level up from windows/ in the repo, and beside
+    // the app resources once packaged.
+    const candidates = [
+      path.join(__dirname, '..', 'shared', 'about.json'),
+      path.join(process.resourcesPath || '', 'shared', 'about.json'),
+      path.join(__dirname, 'shared', 'about.json'),
+    ];
+    for (const c of candidates) {
+      if (fs.existsSync(c)) {
+        shared = JSON.parse(fs.readFileSync(c, 'utf8'));
+        break;
+      }
+    }
+  } catch {}
+  return {
+    version: app.getVersion(),
+    // Measured, not asserted — these come from the running process.
+    runtime: {
+      'WebForge': app.getVersion(),
+      'Chromium (engine)': process.versions.chrome,
+      'Electron': process.versions.electron,
+      'Node.js': process.versions.node,
+      'V8': process.versions.v8,
+      'Platform': `${process.platform} ${process.arch}`,
+      'Release channel': 'self-hosted (dockerhost :8012)',
+    },
+    sections: shared.sections || [],
+  };
+});
 ipcMain.handle('int:get-bookmarks', () => bookmarks.all());
 ipcMain.handle('int:get-hotkeys', () => hotkeys.all());
 ipcMain.handle('int:save-bookmark', (_e, b) => {
@@ -1264,6 +1300,7 @@ ipcMain.on('move-bookmark', (_e, { id, folder }) => {
   bookmarks.moveMany([id], folder || '');
   afterBookmarkChange();
 });
+ipcMain.on('int:open-about', () => locked || openInternalTab('about'));
 ipcMain.on('int:open-url', (_e, { url, background }) => {
   if (!locked && typeof url === 'string') openOrFocus(url, Boolean(background));
 });

@@ -421,6 +421,7 @@ class MainActivity : Activity() {
         })
         row(col, "Bookmarks", "Browse your synced bookmarks") { showBookmarks() }
         row(col, "Settings", "Search engine, sync, updates") { showSettings() }
+        row(col, "About", "Architecture, engines, dependencies, build") { showAbout() }
         row(col, "New tab") { closePanel(); newTab(START_URL) }
         active?.let { t ->
             row(col, if (t.quick) "Unset quick launch" else "Set as quick launch",
@@ -516,6 +517,85 @@ class MainActivity : Activity() {
         header(col, "ABOUT")
         row(col, "Version ${BuildConfig.VERSION_NAME}", "Tap to check for updates") {
             UpdateManager(this).checkForUpdate()
+        }
+        row(col, "Close") { closePanel() }
+    }
+
+    private fun showAbout(): Unit = openPanel { col ->
+        col.addView(TextView(this).apply {
+            text = "About WebForge"
+            setTextColor(0xFFE8E8EA.toInt())
+            textSize = 22f
+        })
+
+        // Live facts read from the device, never hardcoded.
+        header(col, "THIS BUILD, RIGHT NOW")
+        val wv = try {
+            android.webkit.WebView.getCurrentWebViewPackage()
+        } catch (e: Exception) {
+            null
+        }
+        val live = linkedMapOf(
+            "WebForge" to BuildConfig.VERSION_NAME,
+            "Engine (System WebView)" to (wv?.let { "${it.packageName} ${it.versionName}" } ?: "unknown"),
+            "Android" to "${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})",
+            "Device" to "${Build.MANUFACTURER} ${Build.MODEL}",
+            "Release channel" to "self-hosted (dockerhost :8012)",
+        )
+        for ((k, v) in live) {
+            col.addView(TextView(this).apply {
+                text = "$k\n$v"
+                setTextColor(0xFFE8E8EA.toInt())
+                textSize = 13f
+                setPadding(0, dp(6), 0, dp(6))
+            })
+        }
+
+        // Shared documentation, identical to the Windows About page.
+        val sections = try {
+            val raw = assets.open("about.json").bufferedReader().use { it.readText() }
+            org.json.JSONObject(raw).optJSONArray("sections")
+        } catch (e: Exception) {
+            null
+        }
+        if (sections == null) {
+            row(col, "Documentation unavailable", "shared/about.json missing from assets") { }
+        } else {
+            for (i in 0 until sections.length()) {
+                val sec = sections.optJSONObject(i) ?: continue
+                val platform = sec.optString("platform")
+                val tag = when (platform) {
+                    "windows" -> "WINDOWS"
+                    "android" -> "ANDROID"
+                    else -> "BOTH PLATFORMS"
+                }
+                header(col, "${sec.optString("title").uppercase()}  ·  $tag")
+                val items = sec.optJSONArray("items") ?: continue
+                for (j in 0 until items.length()) {
+                    val it = items.optJSONObject(j) ?: continue
+                    col.addView(TextView(this).apply {
+                        text = it.optString("label")
+                        setTextColor(0xFFE8E8EA.toInt())
+                        textSize = 14f
+                        setTypeface(null, android.graphics.Typeface.BOLD)
+                        setPadding(0, dp(10), 0, 0)
+                    })
+                    col.addView(TextView(this).apply {
+                        text = it.optString("value")
+                        setTextColor(0xFFE8E8EA.toInt())
+                        textSize = 13f
+                    })
+                    val note = it.optString("note")
+                    if (note.isNotEmpty()) {
+                        col.addView(TextView(this).apply {
+                            text = note
+                            setTextColor(0xFF7C7C82.toInt())
+                            textSize = 12f
+                            setPadding(0, dp(3), 0, 0)
+                        })
+                    }
+                }
+            }
         }
         row(col, "Close") { closePanel() }
     }

@@ -135,6 +135,11 @@
     <button id="gadd">Add</button>
   </div>
 
+  <h2>About</h2>
+  <div class="row">
+    <button class="choice" id="aboutbtn">About WebForge — architecture, engines, dependencies, build</button>
+  </div>
+
   <h2>Keybindings</h2>
   <table>
     <tr><td>Ctrl+Space, then key</td><td>Fire a bookmark hotkey — jumps to that site's tab; pressed inside it, returns it home. Works while typing. Esc cancels.</td></tr>
@@ -294,6 +299,7 @@
     }
   };
 
+  document.getElementById('aboutbtn').onclick = () => wf.openAbout();
   document.getElementById('impbm').onclick = async () => {
     const r = await wf.importBookmarks();
     const msg = document.getElementById('impmsg');

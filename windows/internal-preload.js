@@ -10,6 +10,8 @@ contextBridge.exposeInMainWorld('wf', {
   setEngine: (e) => ipcRenderer.invoke('int:set-engine', e),
   saveTabGroups: (list) => ipcRenderer.invoke('int:save-tab-groups', list),
   syncStatus: () => ipcRenderer.invoke('int:sync-status'),
+  about: () => ipcRenderer.invoke('int:about'), // #61
+  openAbout: () => ipcRenderer.send('int:open-about'),
   // credentials (#47 — moved here from the chrome panel)
   getCreds: () => ipcRenderer.invoke('int:get-creds'),
   saveCred: (c) => ipcRenderer.invoke('int:save-cred', c),
