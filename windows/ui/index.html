@@ -1378,9 +1378,17 @@
   webforge.onBookmarksPanel((open) => {
     bmpanel.classList.toggle('open', open);
     bmExpanded.clear(); // #35: every open starts fully collapsed
+    bmsearch.value = ''; // #99: leaving the panel drops the query too
     if (open) renderBookmarks(lastBookmarks);
   });
   webforge.onFsMode((mode) => { // #14
+    // #99: the fullscreen edge-reveal shows/hides #bmpanel without ever firing
+    // bookmarks-panel, so leaving the revealed panel has to reset it here too.
+    if (document.body.dataset.fs === 'bookmarks' && mode !== 'bookmarks') {
+      bmExpanded.clear();
+      bmsearch.value = '';
+      renderBookmarks(lastBookmarks);
+    }
     if (mode) document.body.dataset.fs = mode;
     else delete document.body.dataset.fs;
   });

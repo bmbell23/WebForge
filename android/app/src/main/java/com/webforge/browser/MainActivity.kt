@@ -534,7 +534,19 @@ class MainActivity : Activity() {
         })
     }
 
-    private fun openPanel(build: (LinearLayout) -> Unit) {
+    /** #99: the bookmarks panel is throwaway UI — leaving it drops edit mode and
+     *  every expanded folder, so the next visit starts clean. (Its search box is
+     *  rebuilt empty on each [showBookmarks], so there is no query to clear.) */
+    private fun resetBookmarkUi() {
+        bmEditMode = false
+        bmExpanded.clear()
+    }
+
+    /** [panel] names the section this screen belongs to; screens inside the same
+     *  section keep each other's state, moving between sections resets it (#99). */
+    private fun openPanel(panel: String? = null, build: (LinearLayout) -> Unit) {
+        if (panel != "bookmarks") resetBookmarkUi() // #99
+        currentPanel = panel
         val scroll = ScrollView(this)
         currentScroll = scroll // #91
         val col = LinearLayout(this).apply {
@@ -557,6 +569,7 @@ class MainActivity : Activity() {
 
     private fun closePanel() {
         currentPanel = null // #95
+        resetBookmarkUi() // #99
         overlay.visibility = View.GONE
         overlay.removeAllViews()
         goFullscreen()
@@ -748,8 +761,7 @@ class MainActivity : Activity() {
         showTabSheet()
     }
 
-    private fun showTabSheet(): Unit = openPanel { col ->
-        currentPanel = "tabs" // #95
+    private fun showTabSheet(): Unit = openPanel("tabs") { col -> // #95
         syncTabsAcrossDevices() // #95: opening the menu is a refresh
         title(col, "Tabs")
         caption(col, "Tap to switch · long-press to rename or pin · swipe right to go back.")
@@ -855,7 +867,7 @@ class MainActivity : Activity() {
     }
 
     /** #86: name a new tab folder (never window.prompt — inline, as everywhere). */
-    private fun showFolderCreator(): Unit = openPanel { col ->
+    private fun showFolderCreator(): Unit = openPanel("tabs") { col ->
         title(col, "New tab folder")
         val name = EditText(this).apply {
             hint = "Folder name"
@@ -876,7 +888,7 @@ class MainActivity : Activity() {
         action(c, "Cancel") { showTabSheet() }
     }
 
-    private fun showFolderEditor(folder: String): Unit = openPanel { col ->
+    private fun showFolderEditor(folder: String): Unit = openPanel("tabs") { col ->
         title(col, "Edit folder")
         val name = EditText(this).apply {
             setText(folder)
@@ -899,7 +911,7 @@ class MainActivity : Activity() {
         action(c, "Cancel") { showTabSheet() }
     }
 
-    private fun showTabEditor(index: Int): Unit = openPanel { col ->
+    private fun showTabEditor(index: Int): Unit = openPanel("tabs") { col ->
         val t = tabs.getOrNull(index) ?: return@openPanel
         title(col, "Edit tab")
         caption(col, t.url)
@@ -1096,7 +1108,7 @@ class MainActivity : Activity() {
         emitFolders(container, tree, 0)
     }
 
-    private fun showBookmarks(): Unit = openPanel { col ->
+    private fun showBookmarks(): Unit = openPanel("bookmarks") { col ->
         titleWithAction(col, "Bookmarks", "⚙") { showSettings() } // #87
         caption(
             col,
@@ -1152,7 +1164,7 @@ class MainActivity : Activity() {
 
     // #85: long-press editor — the phone could only open bookmarks before.
     /** #89: rename or dissolve a bookmark folder. */
-    private fun showBmFolderEditor(folder: String): Unit = openPanel { col ->
+    private fun showBmFolderEditor(folder: String): Unit = openPanel("bookmarks") { col ->
         title(col, "Edit folder")
         caption(col, folder)
         val name = EditText(this).apply {
@@ -1183,7 +1195,7 @@ class MainActivity : Activity() {
         action(c, "Cancel") { showBookmarks() }
     }
 
-    private fun showBmFolderCreator(): Unit = openPanel { col ->
+    private fun showBmFolderCreator(): Unit = openPanel("bookmarks") { col ->
         title(col, "New bookmark folder")
         caption(col, "Use Work/CI to nest. Drag bookmarks onto it afterwards.")
         val name = EditText(this).apply {
@@ -1203,7 +1215,7 @@ class MainActivity : Activity() {
         action(c, "Cancel") { showBookmarks() }
     }
 
-    private fun showBookmarkEditor(b: Bookmark): Unit = openPanel { col ->
+    private fun showBookmarkEditor(b: Bookmark): Unit = openPanel("bookmarks") { col ->
         title(col, "Edit bookmark")
         caption(col, "Changes sync back to your other devices when you're on the home network.")
 
@@ -1234,16 +1246,14 @@ class MainActivity : Activity() {
         action(actions, "Save changes") {
             BookmarkStore.update(this, b.id, title.text.toString().trim(),
                 url.text.toString().trim(), folder.text.toString().trim())
-            closePanel()
-            showBookmarks()
+            showBookmarks() // #99: no closePanel — that would drop edit mode
         }
         action(actions, "Open this bookmark") { closePanel(); navigate(b.url) }
         action(actions, "Delete bookmark", "Removes it here and on your other devices") {
             BookmarkStore.remove(this, b.id)
-            closePanel()
-            showBookmarks()
+            showBookmarks() // #99
         }
-        action(actions, "Cancel") { closePanel(); showBookmarks() }
+        action(actions, "Cancel") { showBookmarks() } // #99
     }
 
     private fun showPersonaCreator(): Unit = openPanel { col ->
