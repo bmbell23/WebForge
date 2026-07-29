@@ -654,7 +654,7 @@
     personaPick.onchange = () => webforge.switchPersona(personaPick.value);
     webforge.onPersonas(({ personas, active }) => {
       personaPick.replaceChildren(
-        ...personas.map((p, i) => new Option(`${i + 1}. ${p.name} (${p.tabCount})`, p.id))
+        ...personas.map((p, i) => new Option(`${i + 1}. ${p.name}`, p.id))
       );
       personaPick.value = active;
     });
