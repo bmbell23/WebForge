@@ -33,7 +33,11 @@ contextBridge.exposeInMainWorld('wf', {
   renameFolder: (from, to) => ipcRenderer.invoke('int:rename-folder', { from, to }),
   deleteFolder: (folder) => ipcRenderer.invoke('int:delete-folder', folder),
   setHotkey: (keyId, url, title) => ipcRenderer.invoke('int:set-hotkey', { keyId, url, title }),
-  removeHotkey: (keyId) => ipcRenderer.invoke('int:remove-hotkey', keyId),
+  removeHotkey: (keyId, personaId) => ipcRenderer.invoke('int:remove-hotkey', { keyId, personaId }),
+  getAllHotkeys: () => ipcRenderer.invoke('int:get-all-hotkeys'), // #74
+  getErrors: () => ipcRenderer.invoke('int:get-errors'), // #75
+  clearErrors: () => ipcRenderer.invoke('int:clear-errors'),
+  moveHotkey: (keyId, from, to, force) => ipcRenderer.invoke('int:move-hotkey', { keyId, from, to, force }),
   openUrl: (url, background) => ipcRenderer.send('int:open-url', { url, background }),
   importBookmarks: () => ipcRenderer.invoke('import-bookmarks'),
   importPasswords: () => ipcRenderer.send('import-passwords'),

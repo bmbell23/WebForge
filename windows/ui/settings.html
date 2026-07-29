@@ -161,11 +161,11 @@
     <button id="padd">Add persona</button>
   </div>
 
-  <h2>Hotkeys in the active Persona</h2>
+  <h2>Hotkeys</h2>
   <div class="sub" style="margin-bottom:10px">
     Bindings belong to one Persona — <code>g</code> in Personal and <code>g</code> in Work
-    are different bookmarks. This lists the <b>currently active</b> Persona's bindings;
-    switch Personas to see another's. Bind from the bookmarks panel with ⌨.
+    are different bookmarks. Every Persona's bindings are listed below; use the picker on a
+    row to move it. Bind new ones from the bookmarks panel with ⌨.
   </div>
   <div id="hotkeylist"></div>
 
@@ -180,6 +180,16 @@
   <h2>About</h2>
   <div class="row">
     <button class="choice" id="aboutbtn">About WebForge — architecture, engines, dependencies, build</button>
+  </div>
+
+  <h2>Diagnostics</h2>
+  <div class="sub" style="margin-bottom:8px">
+    Errors the app hit in the background. If something "does nothing", this is where
+    the reason shows up — paste it into an issue.
+  </div>
+  <div class="card"><pre id="errlog" style="margin:0;white-space:pre-wrap;font:11px ui-monospace,monospace;max-height:260px;overflow:auto">…</pre></div>
+  <div class="row" style="margin-top:8px">
+    <button class="choice" id="errclear">Clear error log</button>
   </div>
 
   <h2>Keybindings</h2>
@@ -277,29 +287,70 @@
 
   document.getElementById('pwbtn').onclick = () => wf.openPasswords(); // #63
 
-  // --- hotkeys in the active persona (#73) ---
+  // --- diagnostics (#75) ---
+  async function loadErrors() {
+    const txt = await wf.getErrors();
+    document.getElementById('errlog').textContent = txt && txt.trim()
+      ? txt.trim().slice(-6000)
+      : 'No errors recorded.';
+  }
+  document.getElementById('errclear').onclick = async () => { await wf.clearErrors(); loadErrors(); };
+  loadErrors();
+
+  // --- hotkeys across every persona (#74) ---
   async function loadHotkeys() {
-    const map = await wf.getHotkeys();
+    const { byPersona, personas: plist, active } = await wf.getAllHotkeys();
     const box = document.getElementById('hotkeylist');
-    const keys = Object.keys(map).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
-    if (!keys.length) {
-      box.innerHTML = '<div class="sub">No hotkeys bound in this Persona yet.</div>';
+    const nameOf = (id) => (plist.find((p) => p.id === id) || {}).name || 'Unknown Persona';
+    const nodes = [];
+    let total = 0;
+
+    for (const p of plist) {
+      const bag = byPersona[p.id] || {};
+      const keys = Object.keys(bag).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+      total += keys.length;
+      if (!keys.length) continue;
+      nodes.push(Object.assign(document.createElement('h2'), {
+        textContent: p.id === active ? `${p.name} — active` : p.name,
+        style: 'margin:18px 0 6px',
+      }));
+      for (const k of keys) {
+        const row = document.createElement('div');
+        row.className = 'grouprow';
+        row.append(
+          Object.assign(document.createElement('span'), { className: 'gn', textContent: k }),
+          Object.assign(document.createElement('span'), {
+            className: 'gp', textContent: `${bag[k].title} — ${bag[k].url}`, title: bag[k].url,
+          })
+        );
+        const move = document.createElement('select');
+        move.style.cssText = 'height:26px;border:none;border-radius:6px;background:var(--field);color:var(--field-text);font-size:12px';
+        move.replaceChildren(
+          new Option('move to…', ''),
+          ...plist.filter((x) => x.id !== p.id).map((x) => new Option(x.name, x.id))
+        );
+        move.onchange = async () => {
+          if (!move.value) return;
+          let res = await wf.moveHotkey(k, p.id, move.value, false);
+          if (res && res.needsConfirm) {
+            if (!confirm(`${res.error}\n\nOverwrite it?`)) { move.value = ''; return; }
+            res = await wf.moveHotkey(k, p.id, move.value, true);
+          }
+          if (res && !res.ok) alert(res.error || 'Could not move that binding.');
+          loadHotkeys();
+        };
+        row.appendChild(move);
+        const rm = Object.assign(document.createElement('button'), { textContent: '✕', title: 'Remove binding' });
+        rm.onclick = async () => { await wf.removeHotkey(k, p.id); loadHotkeys(); };
+        row.appendChild(rm);
+        nodes.push(row);
+      }
+    }
+    if (!total) {
+      box.innerHTML = '<div class="sub">No hotkeys bound in any Persona yet.</div>';
       return;
     }
-    box.replaceChildren(...keys.map((k) => {
-      const row = document.createElement('div');
-      row.className = 'grouprow';
-      row.append(
-        Object.assign(document.createElement('span'), { className: 'gn', textContent: k }),
-        Object.assign(document.createElement('span'), {
-          className: 'gp', textContent: `${map[k].title} — ${map[k].url}`, title: map[k].url,
-        })
-      );
-      const rm = Object.assign(document.createElement('button'), { textContent: '✕', title: 'Remove binding' });
-      rm.onclick = async () => { await wf.removeHotkey(k); loadHotkeys(); };
-      row.appendChild(rm);
-      return row;
-    }));
+    box.replaceChildren(...nodes);
   }
   loadHotkeys();
 

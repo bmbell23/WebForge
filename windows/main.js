@@ -22,6 +22,7 @@ const vault = require('./vault');
 const credentials = require('./credentials');
 const hotkeys = require('./hotkeys');
 const personas = require('./personas'); // #25
+const errorlog = require('./errorlog'); // #75
 
 // #43: new tabs land on our own search page; Google is the default engine.
 const ENGINES = {
@@ -564,7 +565,10 @@ function createTab(url = null, background = false, personaId = null) {
 }
 
 function activateTab(id) {
-  if (!tabs.has(id)) return;
+  if (!tabs.has(id)) {
+    errorlog.record('activateTab', new Error(`no such tab id=${id} (known: ${[...tabs.keys()].join(',')})`));
+    return;
+  }
   const owner = personaByTab.get(id) || personas.UNASSIGNED;
   if (owner !== personas.activeId()) personas.setActive(owner); // #25
   tabs.get(activeId)?.setVisible(false);
@@ -631,9 +635,14 @@ function duplicateActiveTab() {
 }
 
 function cycleTab(dir) {
-  if (tabOrder.length < 2) return;
-  const idx = tabOrder.indexOf(activeId);
-  activateTab(tabOrder[(idx + dir + tabOrder.length) % tabOrder.length]);
+  // #75: cycle within the ACTIVE Persona only — walking the global tabOrder
+  // jumped into other Personas' tabs and yanked the workspace out from under
+  // the user, which reads as "Ctrl+Tab does nothing sensible".
+  const mine = visibleTabs();
+  if (mine.length < 2) return;
+  const idx = mine.indexOf(activeId);
+  const next = mine[(Math.max(idx, 0) + dir + mine.length) % mine.length];
+  activateTab(next);
 }
 
 // #22: navigation-critical chords intercepted at the input level on every
@@ -1152,7 +1161,7 @@ ipcMain.on('reload', () => activeWc()?.reload());
 ipcMain.on('stop', () => activeWc()?.stop());
 ipcMain.on('new-tab', () => createTab());
 ipcMain.on('close-tab', (_e, id) => closeTab(id));
-ipcMain.on('activate-tab', (_e, id) => activateTab(id));
+ipcMain.on('activate-tab', errorlog.guard('activate-tab', (_e, id) => activateTab(Number(id))));
 ipcMain.on('toggle-pin', (_e, id) => togglePin(id));
 // #25: persona IPC
 ipcMain.on('switch-persona', (_e, id) => switchPersona(String(id)));
@@ -1375,6 +1384,26 @@ ipcMain.handle('int:assign-persona', (_e, { url, personaId, force }) => {
 });
 ipcMain.handle('int:get-bookmarks', () => bookmarks.all());
 ipcMain.handle('int:get-hotkeys', () => hotkeys.all(personas.activeId()));
+// #74: the whole picture, so misfiled bindings are visible and fixable.
+ipcMain.handle('int:get-errors', () => errorlog.read());
+ipcMain.handle('int:clear-errors', () => {
+  errorlog.clear();
+  return true;
+});
+ipcMain.handle('int:get-all-hotkeys', () => ({
+  byPersona: hotkeys.allByPersona(),
+  personas: orderedPersonas().map((p) => ({ id: p.id, name: p.name })),
+  active: personas.activeId(),
+}));
+ipcMain.handle('int:move-hotkey', (_e, { keyId, from, to, force }) => {
+  if (locked) return { ok: false, error: 'Locked.' };
+  const res = hotkeys.move(String(keyId), String(from), String(to), { force: Boolean(force) });
+  if (res.ok) {
+    broadcastHotkeys();
+    pushState();
+  }
+  return res;
+});
 ipcMain.handle('int:save-bookmark', (_e, b) => {
   if (locked || !b?.url) return false;
   if (b.id) bookmarks.update(b.id, b);
@@ -1409,11 +1438,13 @@ ipcMain.handle('int:set-hotkey', (_e, { keyId, url, title }) => {
   pushState();
   return true;
 });
-ipcMain.handle('int:remove-hotkey', (_e, keyId) => {
+ipcMain.handle('int:remove-hotkey', (_e, arg) => {
   if (locked) return false;
+  const keyId = typeof arg === 'object' && arg ? arg.keyId : arg;
+  const personaId = typeof arg === 'object' && arg && arg.personaId ? arg.personaId : personas.activeId();
   const tabId = tabForHotkey(String(keyId));
   if (tabId !== null) hotkeyByTab.delete(tabId);
-  hotkeys.remove(String(keyId), personas.activeId());
+  hotkeys.remove(String(keyId), personaId);
   broadcastHotkeys();
   sortTabOrder();
   pushStickyModes();
@@ -1563,5 +1594,8 @@ app.on('window-all-closed', () => app.quit());
 // #20: a stray throw must never brick the browser in a modal-dialog storm —
 // log it and keep running instead of Electron's default uncaught dialog.
 process.on('uncaughtException', (err) => {
-  console.error('webforge: uncaught exception', err);
+  errorlog.record('uncaughtException', err); // #75: visible in Settings
+});
+process.on('unhandledRejection', (err) => {
+  errorlog.record('unhandledRejection', err);
 });

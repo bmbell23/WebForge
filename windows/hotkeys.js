@@ -113,4 +113,40 @@ function keyForUrl(url, personaId) {
   return Object.keys(b).find((k) => b[k].url === url) || null;
 }
 
-module.exports = { all, get, set, remove, keyIds, keyForUrl, migrateInto };
+/** #74: every Persona's bindings, for the Settings overview. */
+function allByPersona() {
+  const store = load();
+  const out = {};
+  for (const [pid, bag] of Object.entries(store)) {
+    if (pid === '__migrated' || !bag || typeof bag !== 'object') continue;
+    out[pid] = { ...bag };
+  }
+  return out;
+}
+
+/** #74: relocate a binding from one Persona to another. */
+function move(keyId, fromId, toId, opts = {}) {
+  if (!keyId || !fromId || !toId) return { ok: false, error: 'Missing arguments.' };
+  if (fromId === toId) return { ok: true, unchanged: true };
+  const from = bucket(fromId);
+  const entry = from[keyId];
+  if (!entry) return { ok: false, error: 'That binding no longer exists.' };
+  const to = bucket(toId);
+  if (to[keyId] && !opts.force) {
+    return {
+      ok: false,
+      needsConfirm: true,
+      error: `"${keyId}" is already bound to ${to[keyId].title} in that Persona.`,
+    };
+  }
+  // Same rule as set(): one hotkey per bookmark within a Persona.
+  for (const k of Object.keys(to)) {
+    if (k !== keyId && to[k] && to[k].url === entry.url) delete to[k];
+  }
+  to[keyId] = entry;
+  delete from[keyId];
+  save();
+  return { ok: true };
+}
+
+module.exports = { all, get, set, remove, keyIds, keyForUrl, migrateInto, allByPersona, move };
