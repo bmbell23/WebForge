@@ -710,6 +710,13 @@ function wireChords(wc) {
     // #38: Alt+Left/Right — the browser-standard back/forward I never wired.
     if (input.alt && !input.control && !input.meta) {
       const k = rawKey.toLowerCase();
+      // #68: Alt+F4 was being eaten before it reached Windows' close path.
+      // Own it here so it always works; before-quit flushes the session.
+      if (k === 'f4') {
+        event.preventDefault();
+        win.close();
+        return;
+      }
       if (k === 'arrowleft') {
         event.preventDefault();
         activeWc()?.navigationHistory.goBack();
