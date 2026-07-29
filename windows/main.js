@@ -499,6 +499,7 @@ function createTab(url = null, background = false, personaId = null, opts = {}) 
   const lazy = Boolean(opts.lazy);
   if (lazy) lazyTabs.set(id, { url, title: opts.title || url }); // #78
   lastActiveAt.set(id, opts.lastActiveAt || Date.now()); // #79
+  openedAt.set(id, opts.openedAt || Date.now()); // #57
   // #25: a tab belongs to whichever persona claims its URL; unclaimed URLs go
   // to Unassigned so the real personas stay clean.
   personaByTab.set(id, personaId || personas.forUrl(url));
@@ -658,10 +659,16 @@ function activateTab(id) {
   pushState();
 }
 
-function closeTab(id) {
+function closeTab(id, opts = {}) {
   const view = tabs.get(id);
   if (!view) return;
   if (pinnedIds.has(id)) return; // #9: pinned tabs don't close — unpin first
+  // #57: a close is a fact other devices must learn about — unless we're only
+  // applying someone else's close, which must not echo back.
+  if (!opts.remote) {
+    const url = tabUrlOf(id);
+    if (shareable(url)) closedFacts.set(url, Date.now());
+  }
   const idx = tabOrder.indexOf(id);
   tabs.delete(id);
   hotkeyByTab.delete(id); // #16: the binding survives; only the open tab dies
@@ -669,6 +676,7 @@ function closeTab(id) {
   personaByTab.delete(id);
   lazyTabs.delete(id);
   lastActiveAt.delete(id);
+  openedAt.delete(id);
   for (const [page, tid] of internalTabs) if (tid === id) internalTabs.delete(page);
   tabOrder = tabOrder.filter((t) => t !== id);
   win.contentView.removeChildView(view);
@@ -1097,20 +1105,87 @@ function deviceId() {
 let remoteDevices = {}; // deviceId -> { name, personas: {pid: [{url,title}]}, at }
 let tabsSyncing = false;
 
+// #57 phase 2: state changes are timestamped FACTS, never snapshots — a
+// snapshot can't tell "you closed it" from "I opened it while offline".
+const openedAt = new Map();      // tabId -> ms this tab was opened here
+const closedFacts = new Map();   // url -> ms we closed it (tombstone to publish)
+const recentlyClosed = [];       // #57: anything a REMOTE instruction closed
+const TOMBSTONE_TTL = 30 * 24 * 3600 * 1000;
+
+function tabUrlOf(id) {
+  const pending = lazyTabs.get(id);
+  return pending ? pending.url : tabs.get(id)?.webContents.getURL() || '';
+}
+
+function shareable(url) {
+  return Boolean(url) && !isNewTabUrl(url) && !isInternalUrl(url);
+}
+
 function localTabPayload() {
   const byPersona = {};
   for (const id of tabOrder) {
-    const view = tabs.get(id);
-    const pending = lazyTabs.get(id);
-    const url = pending ? pending.url : view.webContents.getURL();
-    if (!url || isNewTabUrl(url) || isInternalUrl(url)) continue; // nothing worth sharing
+    const url = tabUrlOf(id);
+    if (!shareable(url)) continue;
     const pid = personaByTab.get(id) || personas.UNASSIGNED;
-    (byPersona[pid] ||= []).push({
-      url,
-      title: pending ? pending.title : view.webContents.getTitle() || url,
-    });
+    const pending = lazyTabs.get(id);
+    (byPersona[pid] ||= {}).open ||= {};
+    byPersona[pid].open[url] = {
+      title: pending ? pending.title : tabs.get(id).webContents.getTitle() || url,
+      at: openedAt.get(id) || Date.now(),
+      dev: deviceId(),
+    };
+  }
+  // our tombstones ride along so other devices learn about closes
+  const cutoff = Date.now() - TOMBSTONE_TTL;
+  for (const [url, at] of closedFacts) {
+    if (at < cutoff) {
+      closedFacts.delete(url);
+      continue;
+    }
+    const pid = personas.forUrl(url);
+    (byPersona[pid] ||= {}).closed ||= {};
+    byPersona[pid].closed[url] = at;
   }
   return byPersona;
+}
+
+/**
+ * #57: apply the merged view. A URL is open iff its open stamp beats its
+ * tombstone. Never touches the tab you're on, pinned tabs or hotkey tabs.
+ */
+function applyRemoteTabState(merged) {
+  const active = personas.activeId();
+  const forPersona = merged[active];
+  if (!forPersona) return;
+  const closed = forPersona.closed || {};
+  const open = forPersona.open || {};
+
+  for (const id of [...tabOrder]) {
+    const url = tabUrlOf(id);
+    if (!shareable(url)) continue;
+    const closedAt = closed[url] || 0;
+    const mineAt = openedAt.get(id) || 0;
+    if (closedAt <= mineAt) continue; // our copy is newer — keep it
+
+    if (id === activeId || pinnedIds.has(id) || hotkeyByTab.has(id)) {
+      // "unless I'm literally on the tab right now" — resurrect it instead,
+      // which republishes a newer open stamp and revives it everywhere.
+      openedAt.set(id, Date.now());
+      continue;
+    }
+    recentlyClosed.unshift({ url, title: tabs.get(id).webContents.getTitle() || url, at: Date.now() });
+    recentlyClosed.length = Math.min(recentlyClosed.length, 25);
+    closeTab(id, { remote: true }); // don't re-broadcast someone else's close
+  }
+
+  // Tabs opened elsewhere and still alive appear here too.
+  for (const [url, info] of Object.entries(open)) {
+    if ((closed[url] || 0) > info.at) continue;
+    if (info.dev === deviceId()) continue; // our own echo
+    if (findTabByUrl(url) !== null) continue;
+    const id = createTab(url, true, active, { lazy: true, title: info.title });
+    if (id !== null) openedAt.set(id, info.at);
+  }
 }
 
 async function syncTabs() {
@@ -1122,6 +1197,22 @@ async function syncTabs() {
     const devices = (remote.data && remote.data.devices) || {};
     const me = deviceId();
     remoteDevices = Object.fromEntries(Object.entries(devices).filter(([k]) => k !== me));
+
+    // #57: merge every device's facts per Persona, latest stamp wins per URL.
+    const merged = {};
+    for (const [devId, dev] of Object.entries(devices)) {
+      for (const [pid, block] of Object.entries(dev.personas || {})) {
+        const m = (merged[pid] ||= { open: {}, closed: {} });
+        for (const [url, info] of Object.entries(block.open || {})) {
+          if (!m.open[url] || info.at > m.open[url].at) m.open[url] = { ...info, dev: info.dev || devId };
+        }
+        for (const [url, at] of Object.entries(block.closed || {})) {
+          if (at > (m.closed[url] || 0)) m.closed[url] = at;
+        }
+      }
+    }
+    applyRemoteTabState(merged);
+
     devices[me] = { name: 'Windows', personas: localTabPayload(), at: Date.now() };
     await fetch(TABS_SYNC_URL, {
       method: 'PUT',
@@ -1635,6 +1726,13 @@ ipcMain.handle('int:assign-persona', (_e, { url, personaId, force }) => {
 ipcMain.handle('int:get-bookmarks', () => bookmarks.all());
 ipcMain.handle('int:get-hotkeys', () => hotkeys.all(personas.activeId()));
 // #74: the whole picture, so misfiled bindings are visible and fixable.
+ipcMain.handle('int:recently-closed', () => recentlyClosed.slice(0, 25)); // #57
+ipcMain.handle('int:restore-closed', (_e, url) => {
+  if (locked || !url) return false;
+  closedFacts.delete(String(url)); // stop republishing the tombstone
+  const id = createTab(String(url), false);
+  return id !== null;
+});
 ipcMain.handle('int:get-errors', () => errorlog.read());
 ipcMain.handle('int:clear-errors', () => {
   errorlog.clear();

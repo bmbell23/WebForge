@@ -22,6 +22,18 @@ object TabSync {
     private const val URL_STR = "http://100.69.184.113:8013/store/tabs"
     private var devices: Map<String, Map<String, List<RemoteTab>>> = emptyMap()
     private var names: Map<String, String> = emptyMap()
+    // #57 phase 2: merged facts per persona — open[url]=at, closed[url]=at.
+    var mergedOpen: MutableMap<String, MutableMap<String, Pair<String, Long>>> = HashMap()
+    var mergedClosed: MutableMap<String, MutableMap<String, Long>> = HashMap()
+    private val tombstones = HashMap<String, Long>() // url -> when WE closed it
+
+    fun recordClose(url: String) {
+        if (url.isNotBlank()) tombstones[url] = System.currentTimeMillis()
+    }
+
+    fun forgetClose(url: String) {
+        tombstones.remove(url)
+    }
 
     private fun prefs(c: Context) = c.getSharedPreferences("webforge", Context.MODE_PRIVATE)
 
@@ -44,7 +56,7 @@ object TabSync {
      * Publish [local] (personaId -> tabs) and refresh what other devices show.
      * Runs entirely off the main thread; silent when the server is unreachable.
      */
-    fun sync(c: Context, local: Map<String, List<RemoteTab>>, done: () -> Unit = {}) {
+    fun sync(c: Context, local: Map<String, List<Triple<String, String, Long>>>, done: () -> Unit = {}) {
         val me = deviceId(c)
         Thread {
             try {
@@ -67,12 +79,21 @@ object TabSync {
                     val byPersona = HashMap<String, List<RemoteTab>>()
                     val ps = d.optJSONObject("personas") ?: JSONObject()
                     for (pid in ps.keys()) {
-                        val arr = ps.optJSONArray(pid) ?: continue
-                        val list = ArrayList<RemoteTab>(arr.length())
-                        for (i in 0 until arr.length()) {
-                            val o = arr.optJSONObject(i) ?: continue
-                            val u = o.optString("url")
-                            if (u.isNotEmpty()) list.add(RemoteTab(o.optString("title", u), u))
+                        val block = ps.optJSONObject(pid) ?: continue
+                        val openObj = block.optJSONObject("open") ?: JSONObject()
+                        val list = ArrayList<RemoteTab>()
+                        for (u in openObj.keys()) {
+                            val o = openObj.optJSONObject(u) ?: continue
+                            list.add(RemoteTab(o.optString("title", u), u))
+                            val m = mergedOpen.getOrPut(pid) { HashMap() }
+                            val at = o.optLong("at", 0)
+                            if (at > (m[u]?.second ?: 0)) m[u] = Pair(o.optString("title", u), at)
+                        }
+                        val closedObj = block.optJSONObject("closed") ?: JSONObject()
+                        for (u in closedObj.keys()) {
+                            val m = mergedClosed.getOrPut(pid) { HashMap() }
+                            val at = closedObj.optLong(u, 0)
+                            if (at > (m[u] ?: 0)) m[u] = at
                         }
                         byPersona[pid] = list
                     }
@@ -82,11 +103,22 @@ object TabSync {
                 names = parsedNames
 
                 // Publish ours alongside, leaving other devices' entries intact.
+                // Publish facts: what we have open (with when) and what we closed.
                 val mine = JSONObject()
                 for ((pid, list) in local) {
-                    val arr = JSONArray()
-                    for (t in list) arr.put(JSONObject().put("title", t.title).put("url", t.url))
-                    mine.put(pid, arr)
+                    val openObj = JSONObject()
+                    for ((url, title, at) in list) {
+                        openObj.put(url, JSONObject().put("title", title).put("at", at).put("dev", me))
+                    }
+                    mine.put(pid, JSONObject().put("open", openObj))
+                }
+                val cutoff = System.currentTimeMillis() - 30L * 24 * 3600 * 1000
+                tombstones.entries.removeAll { it.value < cutoff }
+                for ((url, at) in tombstones) {
+                    val pid = Personas.forUrl(c, url)
+                    val block = mine.optJSONObject(pid) ?: JSONObject().also { mine.put(pid, it) }
+                    val closedObj = block.optJSONObject("closed") ?: JSONObject().also { block.put("closed", it) }
+                    closedObj.put(url, at)
                 }
                 devs.put(
                     me,

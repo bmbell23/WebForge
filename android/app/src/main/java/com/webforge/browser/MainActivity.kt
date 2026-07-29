@@ -35,6 +35,7 @@ class Tab(val id: Int, val webView: WebView) {
     var pinned = false
     var quick = false // #54: quick-launch (the phone's answer to hotkey tabs)
     var lastActiveAt = System.currentTimeMillis() // #79: for inactivity expiry
+    var openedAt = System.currentTimeMillis()     // #57: when this tab was opened here
     var folder = ""      // #86: manual grouping, set in tab edit mode
     var persona = Personas.UNASSIGNED // #88
     var label: String? = null // #86: user-given name overriding the page title
@@ -332,9 +333,10 @@ class MainActivity : Activity() {
         syncChrome()
     }
 
-    private fun closeTab(index: Int) {
+    private fun closeTab(index: Int, remote: Boolean = false) {
         val tab = tabs.getOrNull(index) ?: return
         if (tab.pinned) return
+        if (!remote) TabSync.recordClose(tab.url) // #57: tell the other devices
         // #79: only follow the close if it was the tab you were ON. This
         // unconditionally re-activated, so closing a background tab (or the
         // idle sweep closing several) yanked you to a different page.
@@ -358,13 +360,40 @@ class MainActivity : Activity() {
     // tabs are exempt, as is whichever tab is open, and the last tab standing.
     // #57: publish this device's tabs per Persona and pick up the others'.
     private fun syncTabsAcrossDevices() {
-        val local = HashMap<String, MutableList<RemoteTab>>()
+        // #57: publish facts (url, title, opened-at) rather than a snapshot.
+        val local = HashMap<String, MutableList<Triple<String, String, Long>>>()
         for (t in tabs) {
             val u = t.url
             if (u.isBlank() || u == "about:blank") continue
-            local.getOrPut(t.persona) { mutableListOf() }.add(RemoteTab(t.title, u))
+            local.getOrPut(t.persona) { mutableListOf() }.add(Triple(u, t.title, t.openedAt))
         }
-        TabSync.sync(this, local) { }
+        TabSync.sync(this, local) {
+            runOnUiThread { applyRemoteTabState() }
+        }
+    }
+
+    /**
+     * #57: a URL is open iff its open stamp beats its tombstone. Never closes
+     * the tab you're on (that one gets resurrected instead), nor pinned or
+     * quick-launch tabs.
+     */
+    private fun applyRemoteTabState() {
+        val pid = Personas.activeId(this)
+        val closed = TabSync.mergedClosed[pid] ?: return
+        val doomed = mutableListOf<Int>()
+        for (i in tabs.indices) {
+            val t = tabs[i]
+            val closedAt = closed[t.url] ?: 0L
+            if (closedAt <= t.openedAt) continue
+            if (i == activeIndex || t.pinned || t.quick) {
+                t.openedAt = System.currentTimeMillis() // resurrect and republish
+                continue
+            }
+            doomed.add(i)
+        }
+        if (doomed.isEmpty() || doomed.size >= tabs.size) return
+        for (i in doomed.sortedDescending()) closeTab(i, remote = true)
+        syncChrome()
     }
 
     // #92: pull down on a page to reload — replaces the Reload menu action.
