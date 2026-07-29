@@ -66,6 +66,7 @@ class MainActivity : Activity() {
     private val bmExpanded = mutableSetOf<String>() // #91: folders survive a re-render
     private var currentScroll: ScrollView? = null   // #91: so does scroll position
     private var pendingScrollY = 0
+    private var currentPanel: String? = null // #95
     private var nextTabId = 1
 
     private val active: Tab? get() = tabs.getOrNull(activeIndex)
@@ -373,7 +374,16 @@ class MainActivity : Activity() {
             local.getOrPut(t.persona) { mutableListOf() }.add(Triple(u, t.title, t.openedAt))
         }
         TabSync.sync(this, local) {
-            runOnUiThread { applyRemoteTabState() }
+            runOnUiThread {
+                val before = tabs.size
+                applyRemoteTabState()
+                // #95: if the tab menu is open, show what just arrived — without
+                // this you'd sit staring at a stale list waiting for a re-open.
+                if (currentPanel == "tabs" && tabs.size != before) {
+                    pendingScrollY = currentScroll?.scrollY ?: 0
+                    showTabSheet()
+                }
+            }
         }
     }
 
@@ -522,6 +532,7 @@ class MainActivity : Activity() {
     }
 
     private fun closePanel() {
+        currentPanel = null // #95
         overlay.visibility = View.GONE
         overlay.removeAllViews()
         goFullscreen()
@@ -674,9 +685,11 @@ class MainActivity : Activity() {
             setPadding(dp(8 + indent), dp(11), dp(8), dp(11))
         }
 
+        if (index == activeIndex) row.setBackgroundResource(R.drawable.pill_bg) // #95: selected, not annotated
         row.addView(TextView(this).apply {
-            text = (if (index == activeIndex) "▸ " else "") + t.title
-            setTextColor(if (index == activeIndex) 0xFF3D9BFF.toInt() else 0xFFE8E8EA.toInt())
+            text = t.title
+            setTextColor(0xFFE8E8EA.toInt())
+            if (index == activeIndex) setTypeface(null, android.graphics.Typeface.BOLD)
             textSize = 15f
             maxLines = 1
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
@@ -712,6 +725,8 @@ class MainActivity : Activity() {
     }
 
     private fun showTabSheet(): Unit = openPanel { col ->
+        currentPanel = "tabs" // #95
+        syncTabsAcrossDevices() // #95: opening the menu is a refresh
         title(col, "Tabs")
         caption(col, "Tap to switch · long-press to rename or pin · swipe right to go back.")
 
@@ -1399,9 +1414,10 @@ class MainActivity : Activity() {
         sweepHandler.postDelayed(object : Runnable {
             override fun run() {
                 sweepStaleTabs()
-                sweepHandler.postDelayed(this, 5 * 60_000L)
+                syncTabsAcrossDevices() // #95: keep tabs live, not just on resume
+                sweepHandler.postDelayed(this, 30_000L)
             }
-        }, 5 * 60_000L)
+        }, 30_000L)
     }
 
     override fun onPause() {

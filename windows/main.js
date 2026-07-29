@@ -667,7 +667,10 @@ function closeTab(id, opts = {}) {
   // applying someone else's close, which must not echo back.
   if (!opts.remote) {
     const url = tabUrlOf(id);
-    if (shareable(url)) closedFacts.set(url, Date.now());
+    if (shareable(url)) {
+      closedFacts.set(url, Date.now());
+      setTimeout(syncTabs, 400); // #95: propagate the close right away
+    }
   }
   const idx = tabOrder.indexOf(id);
   tabs.delete(id);
@@ -1931,7 +1934,7 @@ app.whenReady().then(() => {
   setupAutoUpdate();
   setInterval(syncBookmarks, 10 * 60 * 1000); // #13: periodic catch-up
   setInterval(syncPersonas, 10 * 60 * 1000); // #88
-  setInterval(syncTabs, 60 * 1000); // #57: tab rosters refresh every minute
+  setInterval(syncTabs, 30 * 1000); // #95: 30s, matching Android — a minute felt dead
   setInterval(sweepStaleTabs, 5 * 60 * 1000); // #79
 });
 
