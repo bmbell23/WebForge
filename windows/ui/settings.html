@@ -214,7 +214,7 @@
       `Last server update: ${when}`;
   }
 
-  document.getElementById('pwbtn').onclick = () => wf.openPasswords(); // #62
+  document.getElementById('pwbtn').onclick = () => wf.openPasswords(); // #63
 
   document.getElementById('impbm').onclick = async () => {
     const r = await wf.importBookmarks();
@@ -224,7 +224,7 @@
   };
   document.getElementById('imppw').onclick = () => {
     wf.importPasswords();
-    // Results show on the Saved logins page (#62).
+    // Results show on the Saved logins page (#63).
   };
 
   async function load() {

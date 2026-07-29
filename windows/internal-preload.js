@@ -12,7 +12,7 @@ contextBridge.exposeInMainWorld('wf', {
   syncStatus: () => ipcRenderer.invoke('int:sync-status'),
   about: () => ipcRenderer.invoke('int:about'), // #61
   openAbout: () => ipcRenderer.send('int:open-about'),
-  openPasswords: () => ipcRenderer.send('int:open-passwords'), // #62
+  openPasswords: () => ipcRenderer.send('int:open-passwords'), // #63
   // credentials (#47 — moved here from the chrome panel)
   getCreds: () => ipcRenderer.invoke('int:get-creds'),
   saveCred: (c) => ipcRenderer.invoke('int:save-cred', c),
