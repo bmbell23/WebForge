@@ -604,12 +604,14 @@ class MainActivity : Activity() {
     /** #86: move a tab to a new position, optionally re-filing it. */
     private fun moveTab(from: Int, to: Int, folder: String) {
         if (from !in tabs.indices || to !in tabs.indices) return
+        // Track the active TAB, not its index: indices shift as we reorder, and
+        // resolving them afterwards lands on whichever tab took that slot.
+        val activeTab = tabs.getOrNull(activeIndex)
         val moving = tabs[from]
-        val wasActive = from == activeIndex
         moving.folder = folder
         tabs.removeAt(from)
         tabs.add(to.coerceIn(0, tabs.size), moving)
-        activeIndex = tabs.indexOf(if (wasActive) moving else tabs.getOrNull(activeIndex) ?: moving)
+        activeIndex = activeTab?.let { tabs.indexOf(it) }?.takeIf { it >= 0 } ?: 0
         showTabSheet()
     }
 
