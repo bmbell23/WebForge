@@ -1245,16 +1245,28 @@ ipcMain.on('bm-save', (_e, { id, title, url, folder }) => {
   scheduleSyncSoon();
 });
 ipcMain.on('bm-close', () => closeBookmarkDialog());
-ipcMain.on('open-bookmark', (_e, { url, background }) => {
+ipcMain.on('open-bookmark', errorlog.guard('open-bookmark', (_e, { url, background }) => {
   // #31: an already-open copy of the bookmark wins over navigating/spawning.
   const existing = findTabByUrl(url);
   if (existing !== null) {
     if (!background) activateTab(existing);
-    return;
+  } else if (background) {
+    createTab(url, true);
+  } else {
+    activeWc()?.loadURL(url);
   }
-  if (background) createTab(url, true);
-  else activeWc()?.loadURL(url);
-});
+  // #76: get out of the way. In fullscreen an open panel covers the WHOLE
+  // window, so without this the page loaded behind it and the click looked
+  // like it did nothing. Background opens keep the panel up on purpose.
+  if (!background) {
+    if (bmPanelOpen) toggleBookmarksPanel();
+    if (fsRevealed) {
+      clearFsReveal();
+      layout();
+    }
+    activeWc()?.focus();
+  }
+}));
 ipcMain.on('remove-bookmark', (_e, id) => {
   bookmarks.remove(id);
   closeBookmarkDialog(); // no-op unless the dialog's Remove triggered this

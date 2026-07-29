@@ -755,15 +755,42 @@
   let lastTabsState = [];
   webforge.onTabGroups((list) => {
     tabGroups = list || [];
+    reCache.clear(); // #77: recompile edited patterns
     renderTabs(lastTabsState);
     renderSettingsGroups();
   });
 
+  // #77: same three syntaxes as Persona rules (prefix / glob / regex), so a
+  // pattern behaves identically wherever you type it. Kept in sync with
+  // personas.js compile().
+  const reCache = new Map();
+  function compilePattern(pattern) {
+    if (reCache.has(pattern)) return reCache.get(pattern);
+    let re = null;
+    const raw = String(pattern).trim();
+    const asRegex = raw.match(/^\/(.*)\/([a-z]*)$/);
+    try {
+      if (asRegex) {
+        const flags = asRegex[2].includes('i') ? asRegex[2] : `${asRegex[2]}i`;
+        re = new RegExp(asRegex[1], flags);
+      } else if (raw.includes('*')) {
+        const body = raw
+          .replace(/\*+$/, '')
+          .replace(/[.+?^${}()|[\]\\]/g, '\\$&')
+          .replace(/\*/g, '.*');
+        re = new RegExp(`^${body}`, 'i');
+      }
+    } catch {
+      re = null; // invalid pattern matches nothing rather than breaking grouping
+    }
+    reCache.set(pattern, re);
+    return re;
+  }
+
   function matchPattern(url, pattern) {
     if (!pattern || !url) return false;
-    // Always a prefix match. Requiring an exact URL when the pattern had no
-    // trailing '*' meant a perfectly reasonable pattern like
-    // "https://host.example.com" never matched anything (#34 round 2).
+    const re = compilePattern(pattern);
+    if (re) return re.test(String(url));
     const p = String(pattern).trim().replace(/\*+$/, '').toLowerCase();
     return p ? url.toLowerCase().startsWith(p) : false;
   }
