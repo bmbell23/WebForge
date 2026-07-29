@@ -434,12 +434,111 @@ class MainActivity : Activity() {
         row(col, "Close") { closePanel() }
     }
 
+    // #52 v2: a real nested folder tree, matching the Windows sidebar —
+    // tap the folder ROW to expand, subfolders nest and indent, everything
+    // starts collapsed, and search flattens across the whole set.
+    private class FolderNode {
+        val subs = LinkedHashMap<String, FolderNode>()
+        val items = ArrayList<Bookmark>()
+    }
+
+    private fun buildTree(list: List<Bookmark>): FolderNode {
+        val root = FolderNode()
+        for (b in list) {
+            var node = root
+            for (seg in b.folder.split('/').filter { it.isNotBlank() }) {
+                node = node.subs.getOrPut(seg) { FolderNode() }
+            }
+            node.items.add(b)
+        }
+        return root
+    }
+
+    private fun countAll(node: FolderNode): Int =
+        node.items.size + node.subs.values.sumOf { countAll(it) }
+
+    private fun bookmarkRow(parent: LinearLayout, b: Bookmark, depth: Int) {
+        val line = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(8 + depth * 16), dp(9), dp(8), dp(9))
+            isClickable = true
+            setOnClickListener { closePanel(); navigate(b.url) }
+        }
+        line.addView(TextView(this).apply {
+            text = b.title
+            setTextColor(0xFFE8E8EA.toInt())
+            textSize = 15f
+            maxLines = 1
+        })
+        line.addView(TextView(this).apply {
+            text = b.url
+            setTextColor(0xFF7C7C82.toInt())
+            textSize = 11f
+            maxLines = 1
+        })
+        parent.addView(line)
+    }
+
+    /** Renders one folder level; children live in a container we show/hide,
+     *  so expanding never rebuilds the panel or loses scroll position. */
+    private fun emitFolders(parent: LinearLayout, node: FolderNode, depth: Int) {
+        for ((name, sub) in node.subs.entries.sortedBy { it.key.lowercase() }) {
+            val childBox = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                visibility = View.GONE // collapsed by default, like Windows
+            }
+            val header = TextView(this).apply {
+                text = "▸  📁  $name   ${countAll(sub)}"
+                setTextColor(0xFFE8E8EA.toInt())
+                textSize = 15f
+                setTypeface(null, android.graphics.Typeface.BOLD)
+                setPadding(dp(8 + depth * 16), dp(11), dp(8), dp(11))
+                setOnClickListener {
+                    val open = childBox.visibility == View.VISIBLE
+                    childBox.visibility = if (open) View.GONE else View.VISIBLE
+                    text = "${if (open) "▸" else "▾"}  📁  $name   ${countAll(sub)}"
+                }
+            }
+            parent.addView(header)
+            parent.addView(childBox)
+            emitFolders(childBox, sub, depth + 1)
+            for (b in sub.items.sortedBy { it.title.lowercase() }) bookmarkRow(childBox, b, depth + 1)
+        }
+    }
+
+    private fun renderBookmarks(container: LinearLayout, query: String) {
+        container.removeAllViews()
+        val all = BookmarkStore.all(this)
+        val q = query.trim().lowercase()
+        if (q.isNotEmpty()) {
+            // Search always finds everything, ignoring collapse state.
+            val hits = all.filter {
+                it.title.lowercase().contains(q) ||
+                    it.url.lowercase().contains(q) ||
+                    it.folder.lowercase().contains(q)
+            }
+            if (hits.isEmpty()) {
+                container.addView(TextView(this).apply {
+                    text = "No bookmarks match."
+                    setTextColor(0xFF7C7C82.toInt())
+                    setPadding(dp(8), dp(14), 0, 0)
+                })
+            }
+            for (b in hits.take(300)) bookmarkRow(container, b, 0)
+            return
+        }
+        val tree = buildTree(all)
+        for (b in tree.items.sortedBy { it.title.lowercase() }) bookmarkRow(container, b, 0)
+        emitFolders(container, tree, 0)
+    }
+
     private fun showBookmarks(): Unit = openPanel { col ->
         col.addView(TextView(this).apply {
             text = "Bookmarks"
             setTextColor(0xFFE8E8EA.toInt())
             textSize = 22f
         })
+
         val all = BookmarkStore.all(this)
         if (all.isEmpty()) {
             row(col, "Nothing cached yet", "Connect to your home network to sync") { }
@@ -449,30 +548,28 @@ class MainActivity : Activity() {
             row(col, "Close") { closePanel() }
             return@openPanel
         }
-        // Root-level bookmarks first, then one collapsed section per folder.
-        val byFolder = all.groupBy { it.folder }
-        byFolder[""]?.forEach { b -> row(col, b.title, b.url) { closePanel(); navigate(b.url) } }
-        for (folder in byFolder.keys.filter { it.isNotEmpty() }.sorted()) {
-            val items = byFolder[folder] ?: continue
-            header(col, "$folder  (${items.size})")
-            val box = LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-                visibility = View.GONE
-            }
-            items.forEach { b -> row(box, b.title, b.url) { closePanel(); navigate(b.url) } }
-            col.addView(TextView(this).apply {
-                text = "▸ open folder"
-                setTextColor(0xFF3D9BFF.toInt())
-                textSize = 13f
-                setPadding(0, 0, 0, dp(6))
-                setOnClickListener {
-                    box.visibility = if (box.visibility == View.GONE) View.VISIBLE else View.GONE
-                    text = if (box.visibility == View.VISIBLE) "▾ close folder" else "▸ open folder"
+
+        val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        col.addView(EditText(this).apply {
+            hint = "Search bookmarks"
+            setHintTextColor(0xFF7C7C82.toInt())
+            setTextColor(0xFFE8E8EA.toInt())
+            textSize = 14f
+            setBackgroundResource(R.drawable.urlbar_bg)
+            setPadding(dp(14), dp(8), dp(14), dp(8))
+            maxLines = 1
+            addTextChangedListener(object : android.text.TextWatcher {
+                override fun afterTextChanged(sx: android.text.Editable?) {
+                    renderBookmarks(list, sx?.toString() ?: "")
                 }
+                override fun beforeTextChanged(cs: CharSequence?, a: Int, b: Int, c: Int) {}
+                override fun onTextChanged(cs: CharSequence?, a: Int, b: Int, c: Int) {}
             })
-            col.addView(box)
-        }
-        row(col, "Sync now") {
+        })
+        col.addView(list)
+        renderBookmarks(list, "")
+
+        row(col, "Sync now", "${all.size} cached") {
             BookmarkStore.sync(this) { ok -> runOnUiThread { if (ok) showBookmarks() } }
         }
         row(col, "Close") { closePanel() }
