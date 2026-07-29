@@ -74,8 +74,12 @@ function switchPersona(personaId) {
   personas.setActive(personaId);
   const mine = tabOrder.filter((t) => (personaByTab.get(t) || personas.UNASSIGNED) === personaId);
   if (mine.length) {
-    const target = mine.includes(activeId) ? activeId : mine[0];
-    activeId = null; // force re-activation so view visibility is recomputed
+    // #83: land on the tab you were last using in this Persona, not the first
+    // in list order. NOTE: never blank activeId here — activateTab hides the
+    // outgoing view through it, and nulling it left two views visible at once.
+    const target = mine.includes(activeId)
+      ? activeId
+      : mine.reduce((best, id) => ((lastActiveAt.get(id) || 0) > (lastActiveAt.get(best) || 0) ? id : best), mine[0]);
     activateTab(target);
   } else {
     createTab(null, false, personaId);
@@ -608,10 +612,15 @@ function activateTab(id) {
   }
   const owner = personaByTab.get(id) || personas.UNASSIGNED;
   if (owner !== personas.activeId()) personas.setActive(owner); // #25
-  tabs.get(activeId)?.setVisible(false);
+  const leaving = activeId; // #82 — must be captured BEFORE the reassignment
+  // #83: hide every other view, not just the outgoing one. Relying on a single
+  // setVisible(false) meant any missed bookkeeping left two views stacked and
+  // z-order picked the winner — the 'wrong tab' the user was seeing.
+  for (const [tid, v] of tabs) {
+    if (tid !== id) v.setVisible(false);
+  }
   activeId = id;
   const view = tabs.get(id);
-  const leaving = activeId; // #82
   lastActiveAt.set(id, Date.now()); // #79: expiry is measured from last use
   const pending = lazyTabs.get(id); // #78
   if (pending) {
