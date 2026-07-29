@@ -91,6 +91,33 @@ active lane is clear for the next ticket.
 **Update tickets + comment profusely** as work moves — scope, findings, decisions, what
 was built, why. The issues (not memory, not docs) are what the next session trusts.
 
+## Start here on a cold session
+1. **`README.md`** — repo map, both build paths, release mechanics, ports, sync
+   protocol, and the traps that have already cost us a day (unimplemented
+   `prompt()`, the packaging allowlist that bricked startup, `git stash -u`
+   killing the sync container's bind mount).
+2. **`gh issue list` + [Project #9](https://github.com/users/bmbell23/projects/9)** —
+   the real backlog and what state everything is in.
+3. **`git log --oneline -15` and `git status`** — a dirty tree means an active
+   In-Review ticket; find out which one before touching anything.
+
+A session can be lost at any moment and cannot always be resumed. Anything that
+matters must be in the issues, the repo, or memory **at the time you learn it** —
+never only in the conversation.
+
+## Two apps, one set of semantics
+Persona matching, hotkey resolution and the tab-sync fact model exist **twice** —
+`windows/*.js` and `android/.../*.kt`. They must agree, because they reconcile
+against each other through the sync service. **A behavior change on one platform
+is unfinished until the other matches**, and the ticket says so explicitly.
+
+## Verification before claiming (learned in #92)
+Never report something done without evidence in the transcript: grep for the
+symbol you deleted, `curl` the endpoint, show the build output, `node --check`
+the file. Claiming three Android fixes that hadn't landed cost more trust than
+the bugs did. "I didn't verify this" is always an acceptable thing to say; a
+false completion never is.
+
 ## Autonomy & permissions
 - **Work freely without asking for routine, reversible steps** — as long as the
   ticket process above is followed (every change has an issue, work moves to **In

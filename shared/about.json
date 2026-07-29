@@ -28,12 +28,48 @@
         {
           "label": "Sync service",
           "value": "A ~90-line stdlib-only Python HTTP service (python:3.12-alpine) on port 8013.",
-          "note": "Last-write-wins JSON store for bookmarks. Offline-first by design: every client renders its local copy and syncs opportunistically, so being off the tailnet never blocks anything."
+          "note": "A last-write-wins JSON store carrying bookmarks, Persona definitions and open tabs. Offline-first by design: every client renders its local copy and syncs opportunistically with a 5s timeout, so being off the tailnet never blocks or loses anything. Saved logins are deliberately NOT synced — that needs end-to-end encryption first."
+        },
+        {
+          "label": "How tabs sync",
+          "value": "Devices publish per-URL facts — when a URL was opened, when it was closed — rather than a snapshot of what's open.",
+          "note": "A snapshot cannot tell 'closed on the other device' apart from 'opened here while that device was offline'. With facts, a URL is open iff its open stamp beats every tombstone for it, which reconciles correctly after either device has been off the tailnet. Tombstones expire after 30 days."
         },
         {
           "label": "Data storage",
           "value": "Everything is local to the device.",
           "note": "Bookmarks, settings, hotkeys as JSON. On Windows, credentials and the session live in an AES-256-GCM vault whose key is derived from your master password with scrypt (N=2^15) and exists only in memory while unlocked."
+        }
+      ]
+    },
+    {
+      "platform": "common",
+      "title": "How WebForge works",
+      "items": [
+        {
+          "label": "Personas",
+          "value": "Named workspaces — Personal, Work, and so on — each owning its own set of tabs.",
+          "note": "URL rules route tabs automatically, so a work link opens in Work without being told. Anything no rule claims lands in the built-in Unassigned Persona, which keeps the real ones clean. Definitions sync across devices; which Persona is currently showing is per-device."
+        },
+        {
+          "label": "Matching rules",
+          "value": "Three syntaxes, identical wherever you type them: prefix, glob with *, or regex between slashes.",
+          "note": "Anchored at the start and open-ended at the end, so a rule for a site covers everything under it. Persona rules and tab groups share one matcher, so a pattern behaves the same in both places. A malformed pattern matches nothing rather than breaking routing."
+        },
+        {
+          "label": "Keyboard",
+          "value": "Ctrl+Space is a leader key: press it, then a key.",
+          "note": "Digits switch Persona; letters jump to that Persona's bound URL, opening it if it isn't already there. Bindings are per-Persona, so the same letter can mean different sites in Work and Personal. Bare single-key shortcuts were tried first and proved far too fragile."
+        },
+        {
+          "label": "Tabs follow you",
+          "value": "Open a tab on one device and it appears on the other; close it and it closes there too.",
+          "note": "With three exceptions that are resurrected rather than closed: the tab you are literally looking at, pinned tabs, and hotkey tabs. Tabs bucket into groups by site when a host has more than one open."
+        },
+        {
+          "label": "Bookmarks",
+          "value": "Shared across both devices, organized in folders, editable from either one.",
+          "note": "Imported wholesale from Firefox. The local copy is always what gets rendered, so bookmarks work with no network at all."
         }
       ]
     },
@@ -85,7 +121,17 @@
         {
           "label": "Architecture",
           "value": "A native Kotlin shell (single Activity, no UI frameworks or third-party dependencies) hosting one WebView per tab.",
-          "note": "Only the active tab is attached to the view tree. Drawn edge-to-edge: the status bar sits above a padded strip in the bar colour, and the navigation bar is hidden."
+          "note": "Only the active tab is attached to the view tree. Drawn edge-to-edge: the status bar sits above a padded strip in the bar colour, and the gesture navigation bar stays visible so you can still swipe out of the app."
+        },
+        {
+          "label": "One bar, at the top",
+          "value": "Tabs on the left, address in the middle, bookmarks on the right — mirroring the two Windows sidebars.",
+          "note": "Panels are dismissed by swiping, pages reload by pulling down, and settings live behind the gear on the bookmarks page. Bookmarks are edited in place with drag handles and folders."
+        },
+        {
+          "label": "Feature parity",
+          "value": "Personas, Persona routing rules, tab groups, bookmark editing and cross-device tab sync all work the same as on Windows.",
+          "note": "The matching and tab-sync logic are deliberate ports of the Windows implementations, kept in step so both devices agree. The master-password vault and ad blocking are Windows-only so far."
         },
         {
           "label": "Dependencies",
