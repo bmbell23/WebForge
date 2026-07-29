@@ -21,6 +21,7 @@ const bookmarks = require('./bookmarks');
 const vault = require('./vault');
 const credentials = require('./credentials');
 const hotkeys = require('./hotkeys');
+const personas = require('./personas'); // #25
 
 // #43: new tabs land on our own search page; Google is the default engine.
 const ENGINES = {
@@ -59,9 +60,9 @@ let nextTabId = 1;
 const pinnedIds = new Set(); // #9
 const hotkeyByTab = new Map(); // #16: tabId -> keyId (a tab per bound hotkey)
 const faviconByTab = new Map(); // #45: tabId -> icon URL
+const personaByTab = new Map(); // #25: tabId -> personaId
 let locked = true;           // #15: the app is a brick until the vault unlocks
 
-// #16: sidebar ordering — hotkey group first, then pinned, then normal.
 function sortTabOrder() {
   const weight = (id) => (hotkeyByTab.has(id) ? 0 : pinnedIds.has(id) ? 1 : 2);
   tabOrder = [...tabOrder].sort((a, b) => weight(a) - weight(b));
@@ -79,6 +80,7 @@ function sessionSnapshot() {
         url: tabs.get(id).webContents.getURL(),
         pinned: pinnedIds.has(id),
         hotkey: hotkeyByTab.get(id) || null,
+        persona: personaByTab.get(id) || personas.UNASSIGNED, // #25
       }))
       .filter((t) => t.url),
     active: Math.max(0, tabOrder.indexOf(activeId)),
@@ -364,8 +366,14 @@ function starCurrent() {
   });
 }
 
+function visibleTabs() {
+  // #25: the sidebar only ever shows the ACTIVE persona's tabs.
+  const active = personas.activeId();
+  return tabOrder.filter((id) => (personaByTab.get(id) || personas.UNASSIGNED) === active);
+}
+
 function tabState() {
-  return tabOrder.map((id) => {
+  return visibleTabs().map((id) => {
     const wc = tabs.get(id).webContents;
     const rawUrl = wc.getURL();
     const isNew = isNewTabUrl(rawUrl); // #43: don't surface the file:// path
@@ -391,8 +399,24 @@ function tabState() {
   });
 }
 
+function pushPersonas() {
+  if (!chrome) return;
+  const active = personas.activeId();
+  chrome.webContents.send('personas-updated', {
+    personas: personas.all().map((p) => ({
+      id: p.id,
+      name: p.name,
+      builtin: Boolean(p.builtin),
+      rules: p.rules,
+      tabCount: tabOrder.filter((t) => (personaByTab.get(t) || personas.UNASSIGNED) === p.id).length,
+    })),
+    active,
+  });
+}
+
 function pushState() {
   if (!chrome) return;
+  pushPersonas(); // #25
   chrome.webContents.send('tabs-updated', tabState());
   const wc = activeWc();
   const title = wc?.getTitle();
@@ -400,10 +424,13 @@ function pushState() {
   saveSessionSoon();
 }
 
-function createTab(url = null, background = false) {
+function createTab(url = null, background = false, personaId = null) {
   if (locked) return null; // #15
   const id = nextTabId++;
   if (!url) url = newTabUrl(); // #43: default landing page is our search page
+  // #25: a tab belongs to whichever persona claims its URL; unclaimed URLs go
+  // to Unassigned so the real personas stay clean.
+  personaByTab.set(id, personaId || personas.forUrl(url));
   const view = new WebContentsView({
     // #41: hotkeys fire from the main process now (Ctrl+Space leader), so no
     // page-side key capture — and no need for subframe node integration (#39).
@@ -476,6 +503,16 @@ function createTab(url = null, background = false) {
       pushState();
     }
   });
+  wc.on('did-navigate', (_e2, navUrl) => {
+    // Re-home the tab if it navigated into another persona's territory (#25).
+    const claimed = personas.forUrl(navUrl);
+    const current = personaByTab.get(id);
+    if (claimed !== personas.UNASSIGNED && claimed !== current) {
+      personaByTab.set(id, claimed);
+      if (id === activeId) personas.setActive(claimed);
+      pushState();
+    }
+  });
   wc.on('did-finish-load', () => tryAutofill(wc)); // #12
   wc.on('dom-ready', () => {
     wc.send('sticky-mode', hotkeyByTab.has(id)); // #33
@@ -497,6 +534,8 @@ function createTab(url = null, background = false) {
 
 function activateTab(id) {
   if (!tabs.has(id)) return;
+  const owner = personaByTab.get(id) || personas.UNASSIGNED;
+  if (owner !== personas.activeId()) personas.setActive(owner); // #25
   tabs.get(activeId)?.setVisible(false);
   activeId = id;
   const view = tabs.get(id);
@@ -522,6 +561,7 @@ function closeTab(id) {
   tabs.delete(id);
   hotkeyByTab.delete(id); // #16: the binding survives; only the open tab dies
   faviconByTab.delete(id);
+  personaByTab.delete(id);
   for (const [page, tid] of internalTabs) if (tid === id) internalTabs.delete(page);
   tabOrder = tabOrder.filter((t) => t !== id);
   win.contentView.removeChildView(view);
@@ -628,9 +668,15 @@ function wireChords(wc) {
       if (['control', 'shift', 'alt', 'meta'].includes(rawKey.toLowerCase())) return;
       event.preventDefault();
       leaderUntil = 0;
-      if (rawKey.toLowerCase() !== 'escape' && !locked) {
-        handleHotkeyPress((input.control ? 'Ctrl+' : '') + (input.alt ? 'Alt+' : '') + rawKey);
+      if (rawKey.toLowerCase() === 'escape' || locked) return;
+      // #25: bare digits switch Persona (reserved — see hotkeys.set).
+      if (/^[1-9]$/.test(rawKey) && !input.control && !input.alt) {
+        const list = personas.all();
+        const target = list[Number(rawKey) - 1];
+        if (target) switchPersona(target.id);
+        return;
       }
+      handleHotkeyPress((input.control ? 'Ctrl+' : '') + (input.alt ? 'Alt+' : '') + rawKey);
       return;
     }
     // #32: F11 at the input level — the menu accelerator only fired reliably
@@ -728,7 +774,8 @@ function pushStickyModes() {
 function broadcastHotkeys() {
   // #41: tabs no longer need the bound-key list (firing is leader-driven in
   // main); chrome still needs the map for badges and the binding UX.
-  chrome?.webContents.send('hotkeys-updated', hotkeys.all());
+  // #25: bindings are scoped to the active persona.
+  chrome?.webContents.send('hotkeys-updated', hotkeys.all(personas.activeId()));
 }
 
 function tabForHotkey(keyId) {
@@ -738,7 +785,7 @@ function tabForHotkey(keyId) {
 
 function handleHotkeyPress(keyId) {
   if (locked) return;
-  const entry = hotkeys.get(keyId);
+  const entry = hotkeys.get(keyId, personas.activeId()); // #25
   if (!entry) return;
   const tabId = tabForHotkey(keyId);
   if (tabId !== null && tabs.has(tabId)) {
@@ -992,7 +1039,7 @@ function onUnlocked() {
   const session = vault.readFile('session');
   if (session?.tabs?.length) {
     for (const t of session.tabs) {
-      const id = createTab(t.url, true);
+      const id = createTab(t.url, true, t.persona || null);
       if (id === null) continue;
       if (t.pinned) pinnedIds.add(id);
       if (t.hotkey && hotkeys.get(t.hotkey)) hotkeyByTab.set(id, t.hotkey); // #16
@@ -1077,6 +1124,33 @@ ipcMain.on('new-tab', () => createTab());
 ipcMain.on('close-tab', (_e, id) => closeTab(id));
 ipcMain.on('activate-tab', (_e, id) => activateTab(id));
 ipcMain.on('toggle-pin', (_e, id) => togglePin(id));
+// #25: persona IPC
+ipcMain.on('switch-persona', (_e, id) => switchPersona(String(id)));
+ipcMain.handle('int:get-personas', () => ({ personas: personas.all(), active: personas.activeId() }));
+ipcMain.handle('int:add-persona', (_e, name) => {
+  const p = personas.add(name);
+  pushState();
+  return p;
+});
+ipcMain.handle('int:update-persona', (_e, { id, name, rules }) => {
+  const ok = personas.update(String(id), { name, rules });
+  // Re-home every tab against the new rules so edits take effect immediately.
+  for (const tid of tabOrder) {
+    const claimed = personas.forUrl(tabs.get(tid).webContents.getURL());
+    personaByTab.set(tid, claimed);
+  }
+  pushState();
+  return ok;
+});
+ipcMain.handle('int:delete-persona', (_e, id) => {
+  const ok = personas.remove(String(id));
+  // Its tabs fall back to Unassigned rather than disappearing.
+  for (const [tid, pid] of personaByTab) {
+    if (pid === String(id)) personaByTab.set(tid, personas.UNASSIGNED);
+  }
+  pushState();
+  return ok;
+});
 // #46: close every tab in a sidebar group (chrome knows the grouping).
 ipcMain.on('close-tabs', (_e, ids) => {
   if (locked || !Array.isArray(ids)) return;
@@ -1091,7 +1165,7 @@ ipcMain.on('open-in-new-tab', (_e, url) => {
 });
 ipcMain.on('set-hotkey', (_e, { keyId, url, title }) => {
   if (locked) return;
-  hotkeys.set(String(keyId), { url, title });
+  if (!hotkeys.set(String(keyId), { url, title }, personas.activeId())) return; // digits reserved
   broadcastHotkeys();
   pushState();
 });
@@ -1099,7 +1173,7 @@ ipcMain.on('remove-hotkey', (_e, keyId) => {
   if (locked) return;
   const tabId = tabForHotkey(String(keyId));
   if (tabId !== null) hotkeyByTab.delete(tabId); // open tab becomes normal
-  hotkeys.remove(String(keyId));
+  hotkeys.remove(String(keyId), personas.activeId());
   broadcastHotkeys();
   sortTabOrder();
   pushStickyModes(); // #33
@@ -1251,7 +1325,7 @@ ipcMain.handle('int:about', () => {
   };
 });
 ipcMain.handle('int:get-bookmarks', () => bookmarks.all());
-ipcMain.handle('int:get-hotkeys', () => hotkeys.all());
+ipcMain.handle('int:get-hotkeys', () => hotkeys.all(personas.activeId()));
 ipcMain.handle('int:save-bookmark', (_e, b) => {
   if (locked || !b?.url) return false;
   if (b.id) bookmarks.update(b.id, b);
@@ -1281,7 +1355,7 @@ ipcMain.handle('int:delete-folder', (_e, folder) => {
 });
 ipcMain.handle('int:set-hotkey', (_e, { keyId, url, title }) => {
   if (locked) return false;
-  hotkeys.set(String(keyId), { url, title });
+  if (!hotkeys.set(String(keyId), { url, title }, personas.activeId())) return false;
   broadcastHotkeys();
   pushState();
   return true;
@@ -1290,7 +1364,7 @@ ipcMain.handle('int:remove-hotkey', (_e, keyId) => {
   if (locked) return false;
   const tabId = tabForHotkey(String(keyId));
   if (tabId !== null) hotkeyByTab.delete(tabId);
-  hotkeys.remove(String(keyId));
+  hotkeys.remove(String(keyId), personas.activeId());
   broadcastHotkeys();
   sortTabOrder();
   pushStickyModes();

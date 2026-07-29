@@ -75,6 +75,14 @@
     font-size: 16px; cursor: pointer;
   }
   #newtab:hover { background: var(--hover); }
+  /* #25: persona switcher */
+  #personaPick {
+    flex: 1; height: 26px; margin-right: 6px;
+    border: none; border-radius: 6px;
+    background: var(--tab-active); color: var(--text);
+    font: 600 12px system-ui, sans-serif;
+    outline: none; cursor: pointer;
+  }
   #settingsbtn {
     width: 26px; height: 26px;
     border: none; border-radius: 6px;
@@ -632,6 +640,15 @@
   let lastActiveTabId = null; // #64
 
   document.getElementById('newtab').onclick = () => webforge.newTab();
+  // #25: persona switcher — main owns the list, we just render + request.
+  const personaPick = document.getElementById('personaPick');
+  personaPick.onchange = () => webforge.switchPersona(personaPick.value);
+  webforge.onPersonas(({ personas, active }) => {
+    personaPick.replaceChildren(
+      ...personas.map((p, i) => new Option(`${i + 1}. ${p.name} (${p.tabCount})`, p.id))
+    );
+    personaPick.value = active;
+  });
   back.onclick = () => webforge.goBack();
   forward.onclick = () => webforge.goForward();
   reloadstop.onclick = () => (activeLoading ? webforge.stop() : webforge.reload());

@@ -17,6 +17,11 @@ contextBridge.exposeInMainWorld('wf', {
   getCreds: () => ipcRenderer.invoke('int:get-creds'),
   saveCred: (c) => ipcRenderer.invoke('int:save-cred', c),
   deleteCred: (id) => ipcRenderer.invoke('int:delete-cred', id),
+  // personas (#25)
+  getPersonas: () => ipcRenderer.invoke('int:get-personas'),
+  addPersona: (name) => ipcRenderer.invoke('int:add-persona', name),
+  updatePersona: (p) => ipcRenderer.invoke('int:update-persona', p),
+  deletePersona: (id) => ipcRenderer.invoke('int:delete-persona', id),
   // bookmarks
   getBookmarks: () => ipcRenderer.invoke('int:get-bookmarks'),
   getHotkeys: () => ipcRenderer.invoke('int:get-hotkeys'),
