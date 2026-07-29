@@ -500,9 +500,12 @@ function createTab(url = null, background = false, personaId = null, opts = {}) 
   if (lazy) lazyTabs.set(id, { url, title: opts.title || url }); // #78
   lastActiveAt.set(id, opts.lastActiveAt || Date.now()); // #79
   openedAt.set(id, opts.openedAt || Date.now()); // #57
-  // #25: a tab belongs to whichever persona claims its URL; unclaimed URLs go
-  // to Unassigned so the real personas stay clean.
-  personaByTab.set(id, personaId || personas.forUrl(url));
+  // #96: URL RULES DECIDE FIRST. An explicitly-passed persona (session restore,
+  // a tab adopted from another device) used to win, so a Gerrit tab could be
+  // created as Unassigned and only jump to Work when it first navigated —
+  // which looked like tabs re-homing themselves when you clicked them.
+  const claimed = personas.forUrl(url);
+  personaByTab.set(id, claimed !== personas.UNASSIGNED ? claimed : personaId || personas.UNASSIGNED);
   const view = new WebContentsView({
     // #41: hotkeys fire from the main process now (Ctrl+Space leader), so no
     // page-side key capture — and no need for subframe node integration (#39).
@@ -1360,6 +1363,12 @@ function onUnlocked() {
   }
   pushState();
   broadcastHotkeys(); // #16: chrome badges + per-tab bound-key lists
+  // #96: re-home anything a rule now claims — restored sessions can hold tabs
+  // filed before their Persona's rules existed.
+  for (const tid of tabOrder) {
+    const claimed = personas.forUrl(tabUrlOf(tid));
+    if (claimed !== personas.UNASSIGNED) personaByTab.set(tid, claimed);
+  }
   syncBookmarks(); // #13: catch up whenever a session starts
   syncPersonas(); // #88
   syncTabs(); // #57

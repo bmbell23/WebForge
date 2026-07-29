@@ -98,7 +98,7 @@ class MainActivity : Activity() {
 
         newTab(START_URL)
         BookmarkStore.sync(this) { }
-        Personas.sync(this) { } // #88
+        Personas.sync(this) { runOnUiThread { rehomeTabs() } } // #88/#96
         syncTabsAcrossDevices() // #57 // warm the cache for the bookmarks panel
         UpdateManager(this).checkForUpdate()
     }
@@ -201,7 +201,9 @@ class MainActivity : Activity() {
             mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
         }
         val tab = Tab(nextTabId++, wv)
-        tab.persona = Personas.forUrl(this, url ?: "") // #88 (url is null for window transports)
+        // #96: URL rules decide the Persona at creation, so tabs never sit in
+        // Unassigned waiting to be clicked.
+        tab.persona = Personas.forUrl(this, url ?: "")
 
         wv.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView, req: WebResourceRequest): Boolean {
@@ -423,7 +425,10 @@ class MainActivity : Activity() {
                 if ((tombs[url] ?: 0L) > at) continue    // closed more recently elsewhere
                 if (tabs.any { it.url == url }) continue // already have it
                 val t = newTab(url, background = true, lazy = true)
-                t.persona = target
+                // #96: match locally first — don't trust the other device's
+                // persona id, which may not have converged yet.
+                val local = Personas.forUrl(this, url)
+                t.persona = if (local != Personas.UNASSIGNED) local else target
                 t.openedAt = at
                 t.pendingTitle = title
             }
@@ -454,6 +459,19 @@ class MainActivity : Activity() {
                 return false
             }
         })
+    }
+
+    /** #96: re-file tabs whose Persona rules have since changed or arrived. */
+    private fun rehomeTabs() {
+        var changed = false
+        for (t in tabs) {
+            val claimed = Personas.forUrl(this, t.url)
+            if (claimed != Personas.UNASSIGNED && claimed != t.persona) {
+                t.persona = claimed
+                changed = true
+            }
+        }
+        if (changed) syncChrome()
     }
 
     private fun sweepStaleTabs() {
@@ -788,7 +806,31 @@ class MainActivity : Activity() {
         val mine = tabs.indices
             .filter { tabs[it].persona == activePersona }
             .sortedWith(compareBy({ if (tabs[it].quick) 0 else if (tabs[it].pinned) 1 else 2 }, { it }))
-        for (i in mine) tabRow(col, i, 0)
+
+        val special = mine.filter { tabs[it].quick || tabs[it].pinned }
+        for (i in special) tabRow(col, i, 0)
+
+        // #96: group the rest by host, like the Windows sidebar — a host with
+        // two or more tabs gets a header; singletons stay loose.
+        val rest = mine.filter { !tabs[it].quick && !tabs[it].pinned }
+        fun hostOf(u: String): String = try {
+            android.net.Uri.parse(u).host?.removePrefix("www.") ?: ""
+        } catch (e: Exception) { "" }
+        val buckets = LinkedHashMap<String, MutableList<Int>>()
+        for (i in rest) buckets.getOrPut(hostOf(tabs[i].url)) { mutableListOf() }.add(i)
+        val loose = mutableListOf<Int>()
+        for ((host, idx) in buckets) {
+            if (idx.size >= 2 && host.isNotEmpty()) {
+                header(col, host.uppercase())
+                for (i in idx) tabRow(col, i, 12)
+            } else {
+                loose.addAll(idx)
+            }
+        }
+        if (loose.isNotEmpty()) {
+            if (buckets.size > loose.size) header(col, "OTHER")
+            for (i in loose) tabRow(col, i, 0)
+        }
 
         // New tab sits at the BOTTOM and reads like one more tab.
         val addRow = LinearLayout(this).apply {
@@ -1408,7 +1450,7 @@ class MainActivity : Activity() {
         // #84: the app only pulled at launch, so bookmarks edited on the PC
         // never appeared until a cold start. Refresh every time we come back.
         BookmarkStore.sync(this) { }
-        Personas.sync(this) { } // #88
+        Personas.sync(this) { runOnUiThread { rehomeTabs() } } // #88/#96
         syncTabsAcrossDevices() // #57
         sweepHandler.removeCallbacksAndMessages(null)
         sweepHandler.postDelayed(object : Runnable {
