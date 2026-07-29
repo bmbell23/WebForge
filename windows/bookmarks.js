@@ -6,6 +6,7 @@ const crypto = require('crypto');
 const { app } = require('electron');
 
 let cached = null;
+let urlIndex = null; // #78: Set of bookmarked URLs — has() ran per tab per push
 const file = () => path.join(app.getPath('userData'), 'bookmarks.json');
 
 function load() {
@@ -22,6 +23,7 @@ function load() {
 }
 
 function save() {
+  urlIndex = null; // #78
   cached.updatedAt = Date.now(); // local mutation → we are now the newest copy
   try {
     fs.writeFileSync(file(), JSON.stringify(cached));
@@ -38,6 +40,7 @@ function meta() {
 // make every client look newer than the server and ping-pong forever).
 function replaceAll(list, updatedAt) {
   load();
+  urlIndex = null; // #78
   cached.bookmarks = Array.isArray(list) ? list : [];
   cached.updatedAt = updatedAt || 0;
   try {
@@ -50,7 +53,8 @@ function all() {
 }
 
 function has(url) {
-  return load().some((b) => b.url === url);
+  if (!urlIndex) urlIndex = new Set(load().map((b) => b.url));
+  return urlIndex.has(url);
 }
 
 function add({ title, url, folder = '' }) {

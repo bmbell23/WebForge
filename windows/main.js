@@ -62,6 +62,9 @@ const pinnedIds = new Set(); // #9
 const hotkeyByTab = new Map(); // #16: tabId -> keyId (a tab per bound hotkey)
 const faviconByTab = new Map(); // #45: tabId -> icon URL
 const personaByTab = new Map(); // #25: tabId -> personaId
+// #78: restored tabs stay unloaded until first activated — spawning a renderer
+// and fetching a page for every saved tab is what made startup take seconds.
+const lazyTabs = new Map(); // tabId -> { url, title }
 let locked = true;           // #15: the app is a brick until the vault unlocks
 
 // #25: switch persona — land on one of its tabs, creating one if it has none.
@@ -94,7 +97,8 @@ function sessionSnapshot() {
   return {
     tabs: tabOrder
       .map((id) => ({
-        url: tabs.get(id).webContents.getURL(),
+        url: lazyTabs.get(id)?.url || tabs.get(id).webContents.getURL(),
+        title: lazyTabs.get(id)?.title || tabs.get(id).webContents.getTitle(), // #78
         pinned: pinnedIds.has(id),
         hotkey: hotkeyByTab.get(id) || null,
         persona: personaByTab.get(id) || personas.UNASSIGNED, // #25
@@ -396,7 +400,8 @@ function visibleTabs() {
 function tabState() {
   return visibleTabs().map((id) => {
     const wc = tabs.get(id).webContents;
-    const rawUrl = wc.getURL();
+    const pending = lazyTabs.get(id); // #78: not loaded yet — use saved values
+    const rawUrl = pending ? pending.url : wc.getURL();
     const isNew = isNewTabUrl(rawUrl); // #43: don't surface the file:// path
     const internal = isInternalUrl(rawUrl)
       ? rawUrl.includes('settings.html') ? 'Settings'
@@ -406,7 +411,9 @@ function tabState() {
       : null;
     return {
       id,
-      title: internal || (isNew ? 'New tab' : wc.getTitle() || rawUrl || 'New tab'),
+      title:
+        internal ||
+        (isNew ? 'New tab' : (pending ? pending.title : wc.getTitle()) || rawUrl || 'New tab'),
       url: isNew || internal ? '' : rawUrl,
       loading: wc.isLoading(),
       active: id === activeId,
@@ -440,13 +447,23 @@ function pushPersonas() {
       name: p.name,
       builtin: Boolean(p.builtin),
       rules: p.rules,
-      tabCount: tabOrder.filter((t) => (personaByTab.get(t) || personas.UNASSIGNED) === p.id).length,
     })),
     active,
   });
 }
 
+// #78: a loading page fires start/stop/title/favicon/navigate in quick
+// succession, and each one rebuilt and shipped the whole tab list. Coalesce.
+let pushTimer = null;
 function pushState() {
+  if (pushTimer) return;
+  pushTimer = setTimeout(() => {
+    pushTimer = null;
+    pushStateNow();
+  }, 40);
+}
+
+function pushStateNow() {
   if (!chrome) return;
   pushPersonas(); // #25
   chrome.webContents.send('tabs-updated', tabState());
@@ -456,10 +473,12 @@ function pushState() {
   saveSessionSoon();
 }
 
-function createTab(url = null, background = false, personaId = null) {
+function createTab(url = null, background = false, personaId = null, opts = {}) {
   if (locked) return null; // #15
   const id = nextTabId++;
   if (!url) url = newTabUrl(); // #43: default landing page is our search page
+  const lazy = Boolean(opts.lazy);
+  if (lazy) lazyTabs.set(id, { url, title: opts.title || url }); // #78
   // #25: a tab belongs to whichever persona claims its URL; unclaimed URLs go
   // to Unassigned so the real personas stay clean.
   personaByTab.set(id, personaId || personas.forUrl(url));
@@ -507,13 +526,28 @@ function createTab(url = null, background = false, personaId = null) {
     if (isMainFrame === false || reHoming || locked) return;
     const keyId = hotkeyByTab.get(id);
     if (!keyId) return;
-    const home = hotkeys.get(keyId)?.url;
+    // #78: resolve in THIS tab's Persona. Calling hotkeys.get(keyId) with no
+    // Persona was a leftover from #25 and read the Unassigned bucket.
+    const home = hotkeys.get(keyId, personaByTab.get(id))?.url;
     if (!home) return;
-    const norm = (u) => String(u).replace(/\/+$/, '');
-    if (norm(navUrl) === norm(home)) return;
+    // #78: only enforce across ORIGINS. Comparing full URLs livelocked the
+    // app: a home that redirects (login, /dashboard -> /dashboard/self) or an
+    // SPA firing did-navigate-in-page kept tripping this, and each cycle
+    // re-loaded home and re-triggered the redirect — several times a second,
+    // for ever. Link clicks are already caught in-page by content-preload.
+    const originOf = (u) => {
+      try {
+        return new URL(u).origin;
+      } catch {
+        return null;
+      }
+    };
+    const from = originOf(navUrl);
+    const to = originOf(home);
+    if (!from || !to || from === to) return;
     reHoming = true;
     openOrFocus(navUrl, false);
-    wc.loadURL(home); // deterministic — goBack() looped on SPA histories
+    wc.loadURL(home);
     setTimeout(() => {
       reHoming = false;
     }, 800);
@@ -558,7 +592,7 @@ function createTab(url = null, background = false, personaId = null) {
 
   win.contentView.addChildView(view);
   view.setVisible(false);
-  wc.loadURL(url);
+  if (!lazy) wc.loadURL(url); // #78: lazy tabs load on first activation
   if (background && activeId !== null) pushState();
   else activateTab(id);
   return id;
@@ -574,6 +608,11 @@ function activateTab(id) {
   tabs.get(activeId)?.setVisible(false);
   activeId = id;
   const view = tabs.get(id);
+  const pending = lazyTabs.get(id); // #78
+  if (pending) {
+    lazyTabs.delete(id);
+    view.webContents.loadURL(pending.url);
+  }
   view.setVisible(true);
   // #32: overlay raises leave chrome stacked above content, whose empty
   // region then covers the page ("black tabs"). Keep the active view on top
@@ -597,6 +636,7 @@ function closeTab(id) {
   hotkeyByTab.delete(id); // #16: the binding survives; only the open tab dies
   faviconByTab.delete(id);
   personaByTab.delete(id);
+  lazyTabs.delete(id);
   for (const [page, tid] of internalTabs) if (tid === id) internalTabs.delete(page);
   tabOrder = tabOrder.filter((t) => t !== id);
   win.contentView.removeChildView(view);
@@ -1078,7 +1118,8 @@ function onUnlocked() {
   const session = vault.readFile('session');
   if (session?.tabs?.length) {
     for (const t of session.tabs) {
-      const id = createTab(t.url, true, t.persona || null);
+      // #78: restore unloaded — the page is fetched when you first click it.
+      const id = createTab(t.url, true, t.persona || null, { lazy: true, title: t.title });
       if (id === null) continue;
       if (t.pinned) pinnedIds.add(id);
       if (t.hotkey && hotkeys.get(t.hotkey)) hotkeyByTab.set(id, t.hotkey); // #16
