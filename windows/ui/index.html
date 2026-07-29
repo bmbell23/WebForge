@@ -799,7 +799,7 @@
       for (const b of buckets.values()) {
         if (b.custom || b.tabs.length >= 2) {
           nodes.push(
-            groupHdr(`${b.name} (${b.tabs.length})`, b.tabs.map((t) => t.id)), // #46
+            groupHdr(b.name, b.tabs.map((t) => t.id)), // #46, count dropped in #67
             ...b.tabs.map(makeTab)
           );
         } else {
