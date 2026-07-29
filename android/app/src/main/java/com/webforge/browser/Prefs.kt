@@ -30,6 +30,21 @@ object Prefs {
 
     fun searchUrl(c: Context) = ENGINES[engineKey(c)]!!.second
 
+    // #79: close idle normal tabs. Key matches the Windows settings key so the
+    // two can converge on one synced settings blob later.
+    val EXPIRY = linkedMapOf("off" to 0, "1h" to 1, "8h" to 8, "24h" to 24, "7d" to 168)
+
+    fun expiryKey(c: Context): String {
+        val k = sp(c).getString("tabExpiry", "24h") ?: "24h"
+        return if (EXPIRY.containsKey(k)) k else "24h"
+    }
+
+    fun setExpiry(c: Context, key: String) {
+        if (EXPIRY.containsKey(key)) sp(c).edit().putString("tabExpiry", key).apply()
+    }
+
+    fun expiryHours(c: Context): Int = EXPIRY[expiryKey(c)] ?: 24
+
     // A bare IP (optionally with a port) is a LAN/tailnet box, which is
     // almost always plain HTTP — defaulting those to https:// just fails (#59).
     private val RAW_HOST = Regex("""^\d{1,3}(\.\d{1,3}){3}(:\d+)?(/.*)?$""")

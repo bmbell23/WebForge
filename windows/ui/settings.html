@@ -122,6 +122,20 @@
     <button class="choice" data-engine="brave">Brave</button>
   </div>
 
+  <h2>Close idle tabs</h2>
+  <div class="sub" style="margin-bottom:8px">
+    Normal tabs close automatically after this long without being opened.
+    <b>Pinned and hotkey tabs never expire</b>, nor does the tab you're on.
+    Measured from when you last viewed a tab, and the clock survives restarts.
+  </div>
+  <div class="row" id="expiry">
+    <button class="choice" data-expiry="off">Never</button>
+    <button class="choice" data-expiry="1h">1 hour</button>
+    <button class="choice" data-expiry="8h">8 hours</button>
+    <button class="choice" data-expiry="24h">24 hours</button>
+    <button class="choice" data-expiry="7d">7 days</button>
+  </div>
+
   <h2>Sync (bookmarks)</h2>
   <div class="card status" id="sync">Checking…</div>
 
@@ -228,6 +242,9 @@
     const engine = settings.searchEngine || 'google';
     document.querySelectorAll('#engines .choice').forEach((b) =>
       b.classList.toggle('sel', b.dataset.engine === engine));
+    const expiry = settings.tabExpiry || '24h'; // #79
+    document.querySelectorAll('#expiry .choice').forEach((b) =>
+      b.classList.toggle('sel', b.dataset.expiry === expiry));
     renderGroups();
   }
 
@@ -256,6 +273,9 @@
   });
   document.querySelectorAll('#engines .choice').forEach((b) => {
     b.onclick = async () => { settings.searchEngine = b.dataset.engine; await wf.setEngine(b.dataset.engine); paint(); };
+  });
+  document.querySelectorAll('#expiry .choice').forEach((b) => { // #79
+    b.onclick = async () => { settings.tabExpiry = b.dataset.expiry; await wf.setTabExpiry(b.dataset.expiry); paint(); };
   });
   document.getElementById('gadd').onclick = async () => {
     const name = document.getElementById('gname').value.trim();

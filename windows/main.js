@@ -65,6 +65,7 @@ const personaByTab = new Map(); // #25: tabId -> personaId
 // #78: restored tabs stay unloaded until first activated — spawning a renderer
 // and fetching a page for every saved tab is what made startup take seconds.
 const lazyTabs = new Map(); // tabId -> { url, title }
+const lastActiveAt = new Map(); // #79: tabId -> ms, for inactivity expiry
 let locked = true;           // #15: the app is a brick until the vault unlocks
 
 // #25: switch persona — land on one of its tabs, creating one if it has none.
@@ -102,6 +103,7 @@ function sessionSnapshot() {
         pinned: pinnedIds.has(id),
         hotkey: hotkeyByTab.get(id) || null,
         persona: personaByTab.get(id) || personas.UNASSIGNED, // #25
+        lastActiveAt: lastActiveAt.get(id) || Date.now(), // #79
       }))
       .filter((t) => t.url),
     active: Math.max(0, tabOrder.indexOf(activeId)),
@@ -479,6 +481,7 @@ function createTab(url = null, background = false, personaId = null, opts = {}) 
   if (!url) url = newTabUrl(); // #43: default landing page is our search page
   const lazy = Boolean(opts.lazy);
   if (lazy) lazyTabs.set(id, { url, title: opts.title || url }); // #78
+  lastActiveAt.set(id, opts.lastActiveAt || Date.now()); // #79
   // #25: a tab belongs to whichever persona claims its URL; unclaimed URLs go
   // to Unassigned so the real personas stay clean.
   personaByTab.set(id, personaId || personas.forUrl(url));
@@ -608,6 +611,7 @@ function activateTab(id) {
   tabs.get(activeId)?.setVisible(false);
   activeId = id;
   const view = tabs.get(id);
+  lastActiveAt.set(id, Date.now()); // #79: expiry is measured from last use
   const pending = lazyTabs.get(id); // #78
   if (pending) {
     lazyTabs.delete(id);
@@ -637,6 +641,7 @@ function closeTab(id) {
   faviconByTab.delete(id);
   personaByTab.delete(id);
   lazyTabs.delete(id);
+  lastActiveAt.delete(id);
   for (const [page, tid] of internalTabs) if (tid === id) internalTabs.delete(page);
   tabOrder = tabOrder.filter((t) => t !== id);
   win.contentView.removeChildView(view);
@@ -1119,7 +1124,11 @@ function onUnlocked() {
   if (session?.tabs?.length) {
     for (const t of session.tabs) {
       // #78: restore unloaded — the page is fetched when you first click it.
-      const id = createTab(t.url, true, t.persona || null, { lazy: true, title: t.title });
+      const id = createTab(t.url, true, t.persona || null, {
+        lazy: true,
+        title: t.title,
+        lastActiveAt: t.lastActiveAt, // #79: age survives the restart
+      });
       if (id === null) continue;
       if (t.pinned) pinnedIds.add(id);
       if (t.hotkey && hotkeys.get(t.hotkey)) hotkeyByTab.set(id, t.hotkey); // #16
@@ -1139,6 +1148,7 @@ function onUnlocked() {
   pushState();
   broadcastHotkeys(); // #16: chrome badges + per-tab bound-key lists
   syncBookmarks(); // #13: catch up whenever a session starts
+  sweepStaleTabs(); // #79: a machine left off overnight cleans up on return
 }
 
 // Keyboard shortcuts via a hidden application menu — accelerators fire no
@@ -1231,6 +1241,31 @@ ipcMain.handle('int:delete-persona', (_e, id) => {
   pushState();
   return ok;
 });
+// #79: close normal tabs left untouched for too long. Pinned and hotkey tabs
+// are exempt (same survivors as Ctrl+Shift+X), the active tab never expires,
+// and the last tab standing is always kept.
+const EXPIRY_CHOICES = { off: 0, '1h': 1, '8h': 8, '24h': 24, '7d': 168 };
+function expiryHours() {
+  const v = getSettings().tabExpiry;
+  return v in EXPIRY_CHOICES ? EXPIRY_CHOICES[v] : 24; // default: the user's ask
+}
+
+function sweepStaleTabs() {
+  if (locked) return;
+  const hours = expiryHours();
+  if (!hours) return;
+  const cutoff = Date.now() - hours * 3600 * 1000;
+  const doomed = tabOrder.filter(
+    (id) =>
+      id !== activeId &&
+      !pinnedIds.has(id) &&
+      !hotkeyByTab.has(id) &&
+      (lastActiveAt.get(id) || Date.now()) < cutoff
+  );
+  if (!doomed.length || doomed.length >= tabOrder.length) return;
+  for (const id of doomed) closeTab(id);
+}
+
 // #46: close every tab in a sidebar group (chrome knows the grouping).
 ipcMain.on('close-tabs', (_e, ids) => {
   if (locked || !Array.isArray(ids)) return;
@@ -1352,6 +1387,13 @@ ipcMain.handle('int:set-theme', (_e, t) => {
   getSettings().theme = String(t);
   saveSettings();
   applyTheme(String(t));
+  return true;
+});
+ipcMain.handle('int:set-tab-expiry', (_e, choice) => {
+  if (!(choice in EXPIRY_CHOICES)) return false;
+  getSettings().tabExpiry = choice;
+  saveSettings();
+  sweepStaleTabs();
   return true;
 });
 ipcMain.handle('int:set-engine', (_e, engine) => {
@@ -1635,6 +1677,7 @@ app.whenReady().then(() => {
   setupShortcuts();
   setupAutoUpdate();
   setInterval(syncBookmarks, 10 * 60 * 1000); // #13: periodic catch-up
+  setInterval(sweepStaleTabs, 5 * 60 * 1000); // #79
 });
 
 app.on('before-quit', () => {

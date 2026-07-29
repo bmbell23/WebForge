@@ -34,6 +34,7 @@ import android.widget.TextView
 class Tab(val id: Int, val webView: WebView) {
     var pinned = false
     var quick = false // #54: quick-launch (the phone's answer to hotkey tabs)
+    var lastActiveAt = System.currentTimeMillis() // #79: for inactivity expiry
     val title: String get() = webView.title?.takeIf { it.isNotBlank() } ?: url
     val url: String get() = webView.url ?: "about:blank"
 }
@@ -53,6 +54,7 @@ class MainActivity : Activity() {
     private val tabs = ArrayList<Tab>()
     private var activeIndex = 0
     private var urlEditing = false // #64: real focus state, not a latched flag
+    private val sweepHandler = android.os.Handler(android.os.Looper.getMainLooper()) // #79
     private var nextTabId = 1
 
     private val active: Tab? get() = tabs.getOrNull(activeIndex)
@@ -282,6 +284,7 @@ class MainActivity : Activity() {
     private fun activateTab(index: Int) {
         if (index !in tabs.indices) return
         activeIndex = index
+        tabs[index].lastActiveAt = System.currentTimeMillis() // #79
         webContainer.removeAllViews()
         val wv = tabs[index].webView
         (wv.parent as? ViewGroup)?.removeView(wv)
@@ -298,14 +301,37 @@ class MainActivity : Activity() {
     private fun closeTab(index: Int) {
         val tab = tabs.getOrNull(index) ?: return
         if (tab.pinned) return
+        // #79: only follow the close if it was the tab you were ON. This
+        // unconditionally re-activated, so closing a background tab (or the
+        // idle sweep closing several) yanked you to a different page.
+        val wasActive = index == activeIndex
         tabs.removeAt(index)
         (tab.webView.parent as? ViewGroup)?.removeView(tab.webView)
         tab.webView.destroy()
         if (tabs.isEmpty()) {
             newTab(START_URL)
-        } else {
-            activateTab(index.coerceAtMost(tabs.size - 1))
+            return
         }
+        if (wasActive) {
+            activateTab(index.coerceAtMost(tabs.size - 1))
+        } else {
+            if (index < activeIndex) activeIndex--  // keep pointing at the same tab
+            syncChrome()
+        }
+    }
+
+    // #79: close normal tabs untouched for too long. Pinned and quick-launch
+    // tabs are exempt, as is whichever tab is open, and the last tab standing.
+    private fun sweepStaleTabs() {
+        val hours = Prefs.expiryHours(this)
+        if (hours <= 0) return
+        val cutoff = System.currentTimeMillis() - hours * 3600_000L
+        val doomed = tabs.indices.filter { i ->
+            i != activeIndex && !tabs[i].pinned && !tabs[i].quick && tabs[i].lastActiveAt < cutoff
+        }
+        if (doomed.isEmpty() || doomed.size >= tabs.size) return
+        // Remove from the end so earlier indices stay valid.
+        for (i in doomed.sortedDescending()) closeTab(i)
     }
 
     private fun navigate(url: String) {
@@ -600,6 +626,22 @@ class MainActivity : Activity() {
                 showSettings()
             }
         }
+        header(col, "CLOSE IDLE TABS")
+        col.addView(TextView(this).apply {
+            text = "Normal tabs close after this long unused. Pinned and quick-launch tabs never expire."
+            setTextColor(0xFF7C7C82.toInt())
+            textSize = 12f
+        })
+        val curExpiry = Prefs.expiryKey(this)
+        for ((key, hrs) in Prefs.EXPIRY) {
+            val label = if (hrs == 0) "Never" else key
+            row(col, (if (key == curExpiry) "●  " else "○  ") + label) {
+                Prefs.setExpiry(this, key)
+                sweepStaleTabs()
+                showSettings()
+            }
+        }
+
         header(col, "SYNC")
         row(col, "Bookmarks cached: ${BookmarkStore.all(this).size}", "Tap to sync now") {
             BookmarkStore.sync(this) { ok ->
@@ -723,5 +765,18 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         UpdateManager(this).checkForUpdate()
+        sweepStaleTabs() // #79: catch up after the app has been away
+        sweepHandler.removeCallbacksAndMessages(null)
+        sweepHandler.postDelayed(object : Runnable {
+            override fun run() {
+                sweepStaleTabs()
+                sweepHandler.postDelayed(this, 5 * 60_000L)
+            }
+        }, 5 * 60_000L)
+    }
+
+    override fun onPause() {
+        super.onPause()
+        sweepHandler.removeCallbacksAndMessages(null)
     }
 }

@@ -8,6 +8,7 @@ contextBridge.exposeInMainWorld('wf', {
   getSettings: () => ipcRenderer.invoke('int:get-settings'),
   setTheme: (t) => ipcRenderer.invoke('int:set-theme', t),
   setEngine: (e) => ipcRenderer.invoke('int:set-engine', e),
+  setTabExpiry: (c) => ipcRenderer.invoke('int:set-tab-expiry', c), // #79
   saveTabGroups: (list) => ipcRenderer.invoke('int:save-tab-groups', list),
   syncStatus: () => ipcRenderer.invoke('int:sync-status'),
   about: () => ipcRenderer.invoke('int:about'), // #61
