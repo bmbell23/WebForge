@@ -373,6 +373,29 @@
     display: flex; flex-direction: column; gap: 8px;
   }
   #bmdialog h3 { margin: 0 0 4px; font-size: 15px; }
+  /* #81: folder picker as a real tree, mirroring the sidebar */
+  #bmdlgtree {
+    max-height: 168px; overflow-y: auto;
+    border-radius: 8px; background: var(--field-bg);
+    padding: 4px; scrollbar-width: none;
+  }
+  #bmdlgtree::-webkit-scrollbar { display: none; }
+  .dlgfolder {
+    display: flex; align-items: center; gap: 6px;
+    padding: 4px 6px; border-radius: 5px;
+    color: var(--field-text); font-size: 12.5px;
+    cursor: pointer; white-space: nowrap;
+  }
+  .dlgfolder:hover { background: var(--hover); }
+  .dlgfolder.sel { background: var(--accent); color: #fff; }
+  .dlgfolder .tw { width: 10px; opacity: 0.7; }
+  .dlgnewfolder { display: flex; gap: 6px; }
+  .dlgnewfolder input { flex: 1; }
+  .dlgnewfolder button {
+    height: 32px; padding: 0 12px; border: none; border-radius: 8px;
+    background: var(--surface); color: var(--text); font-size: 12px; cursor: pointer;
+  }
+  .dlgnewfolder button:hover { background: var(--hover); }
   .dlgnote {
     font-size: 11.5px; line-height: 1.45;
     color: var(--text-dim); margin-top: -2px;
@@ -600,12 +623,15 @@
       <label class="dlglabel">URL</label>
       <input id="bmdlgurl" type="text" placeholder="https://…" spellcheck="false">
       <label class="dlglabel">Folder</label>
-      <select id="bmdlgfolder"></select>
+      <div id="bmdlgtree"></div>
+      <div class="dlgnote" id="bmdlgfoldersel">Top level</div>
       <label class="dlglabel">Persona</label>
       <select id="bmdlgpersona"></select>
       <div id="bmdlgpersonamsg" class="dlgnote"></div>
-      <input id="bmdlgnewfolder" type="text" placeholder="New folder name (use / to nest)"
-             spellcheck="false" style="display:none">
+      <div class="dlgnewfolder">
+        <input id="bmdlgnewfolder" type="text" placeholder="New subfolder name" spellcheck="false">
+        <button id="bmdlgaddfolder" type="button">＋ Add</button>
+      </div>
       <div class="btnrow">
         <button id="bmdlgsave">Save</button>
         <button id="bmdlgremove" class="danger">Remove</button>
@@ -978,14 +1004,86 @@
   const bmdialog = document.getElementById('bmdialog');
   const bmdlgname = document.getElementById('bmdlgname');
   const bmdlgurl = document.getElementById('bmdlgurl');
-  const bmdlgfolder = document.getElementById('bmdlgfolder');
+  const bmdlgtree = document.getElementById('bmdlgtree');
   const bmdlgnewfolder = document.getElementById('bmdlgnewfolder');
+  let dlgFolder = '';                 // #81: selected destination ('' = top level)
+  const dlgExpanded = new Set();      // #81: expanded folder paths in the dialog
   let bmdlgId = null;
 
-  bmdlgfolder.onchange = () => {
-    bmdlgnewfolder.style.display = bmdlgfolder.value === '__new__' ? '' : 'none';
-    if (bmdlgfolder.value === '__new__') bmdlgnewfolder.focus();
-  };
+  // #81: build the same shape of tree the sidebar shows, from every known
+  // folder path plus any created during this dialog.
+  function renderDlgTree() {
+    const paths = new Set([
+      ...lastBookmarks.map((b) => b.folder).filter(Boolean),
+      ...bmPending,
+    ]);
+    const root = { subs: new Map() };
+    for (const p of paths) {
+      let node = root;
+      for (const seg of p.split('/').filter(Boolean)) {
+        if (!node.subs.has(seg)) node.subs.set(seg, { subs: new Map() });
+        node = node.subs.get(seg);
+      }
+    }
+    const rows = [];
+    const rowFor = (label, path, depth, hasKids, open) => {
+      const el = document.createElement('div');
+      el.className = 'dlgfolder' + (dlgFolder === path ? ' sel' : '');
+      el.style.paddingLeft = `${6 + depth * 14}px`;
+      const tw = document.createElement('span');
+      tw.className = 'tw';
+      tw.textContent = hasKids ? (open ? '▾' : '▸') : '';
+      tw.onclick = (e) => {
+        if (!hasKids) return;
+        e.stopPropagation();
+        if (open) dlgExpanded.delete(path);
+        else dlgExpanded.add(path);
+        renderDlgTree();
+      };
+      el.appendChild(tw);
+      el.appendChild(Object.assign(document.createElement('span'), { textContent: label }));
+      el.onclick = () => {
+        dlgFolder = path;
+        renderDlgTree();
+      };
+      rows.push(el);
+    };
+
+    rowFor('(top level)', '', 0, false, false);
+    const walk = (node, path, depth) => {
+      for (const [name, sub] of [...node.subs.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+        const full = path ? `${path}/${name}` : name;
+        const open = dlgExpanded.has(full);
+        rowFor(name, full, depth, sub.subs.size > 0, open);
+        if (open) walk(sub, full, depth + 1);
+      }
+    };
+    walk(root, '', 1);
+    bmdlgtree.replaceChildren(...rows);
+    document.getElementById('bmdlgfoldersel').textContent = dlgFolder
+      ? `Saving into "${dlgFolder}"`
+      : 'Saving at the top level';
+  }
+
+  function addDlgSubfolder() {
+    const name = bmdlgnewfolder.value.trim().replace(/^\/+|\/+$/g, '');
+    if (!name) return;
+    const full = dlgFolder ? `${dlgFolder}/${name}` : name;
+    bmPending.add(full);          // shows up in the sidebar tree too
+    dlgFolder = full;             // and becomes this bookmark's destination
+    let p = full;
+    while (p.includes('/')) {
+      p = p.slice(0, p.lastIndexOf('/'));
+      dlgExpanded.add(p);
+    }
+    bmdlgnewfolder.value = '';
+    renderDlgTree();
+  }
+  document.getElementById('bmdlgaddfolder').onclick = addDlgSubfolder;
+  bmdlgnewfolder.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); addDlgSubfolder(); }
+    e.stopPropagation();
+  });
   document.getElementById('bmdlgcancel').onclick = () => webforge.closeBookmarkDialog();
   document.getElementById('bmdlgremove').onclick = () => {
     if (bmdlgId) webforge.removeBookmark(bmdlgId);
@@ -993,8 +1091,7 @@
   };
   let dlgClaim = null; // #70: the Persona rule currently claiming this URL
   document.getElementById('bmdlgsave').onclick = async () => {
-    const folder =
-      bmdlgfolder.value === '__new__' ? bmdlgnewfolder.value.trim() : bmdlgfolder.value;
+    const folder = dlgFolder; // #81
     const url = bmdlgurl.value.trim();
     if (!url) return;
 
@@ -1025,7 +1122,7 @@
     });
   };
   bmdialog.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && e.target !== bmdlgfolder) document.getElementById('bmdlgsave').click();
+    if (e.key === 'Enter' && e.target !== bmdlgnewfolder) document.getElementById('bmdlgsave').click();
     if (e.key === 'Escape') webforge.closeBookmarkDialog();
     e.stopPropagation(); // typing in the dialog must never fire hotkeys
   });
@@ -1038,15 +1135,16 @@
     document.getElementById('bmdlgremove').style.display = data.exists ? '' : 'none';
     bmdlgname.value = data.title || '';
     bmdlgurl.value = data.url || '';
-    const folders = [...new Set(lastBookmarks.map((b) => b.folder).filter(Boolean))].sort();
-    bmdlgfolder.replaceChildren(
-      new Option('(no folder)', ''),
-      ...folders.map((f) => new Option(f, f)),
-      new Option('＋ New folder…', '__new__')
-    );
-    bmdlgfolder.value = folders.includes(data.folder) ? data.folder : '';
-    bmdlgnewfolder.style.display = 'none';
+    // #81: preselect the bookmark's folder and open the chain down to it.
+    dlgFolder = data.folder || '';
+    dlgExpanded.clear();
+    let chain = dlgFolder;
+    while (chain) {
+      dlgExpanded.add(chain);
+      chain = chain.includes('/') ? chain.slice(0, chain.lastIndexOf('/')) : '';
+    }
     bmdlgnewfolder.value = '';
+    renderDlgTree();
     // #70: Persona routing for this bookmark's origin.
     dlgClaim = data.claim || null;
     const pSel = document.getElementById('bmdlgpersona');
