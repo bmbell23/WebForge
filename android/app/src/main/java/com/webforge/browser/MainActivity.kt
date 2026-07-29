@@ -36,11 +36,13 @@ class Tab(val id: Int, val webView: WebView) {
     var quick = false // #54: quick-launch (the phone's answer to hotkey tabs)
     var lastActiveAt = System.currentTimeMillis() // #79: for inactivity expiry
     var openedAt = System.currentTimeMillis()     // #57: when this tab was opened here
+    var pendingUrl: String? = null   // #93: adopted from another device, not loaded yet
+    var pendingTitle: String? = null
     var folder = ""      // #86: manual grouping, set in tab edit mode
     var persona = Personas.UNASSIGNED // #88
     var label: String? = null // #86: user-given name overriding the page title
-    val title: String get() = label ?: webView.title?.takeIf { it.isNotBlank() } ?: url
-    val url: String get() = webView.url ?: "about:blank"
+    val title: String get() = label ?: pendingTitle ?: webView.title?.takeIf { it.isNotBlank() } ?: url
+    val url: String get() = pendingUrl ?: webView.url ?: "about:blank"
 }
 
 class MainActivity : Activity() {
@@ -92,7 +94,6 @@ class MainActivity : Activity() {
         urlBar.setOnFocusChangeListener { _, has -> urlEditing = has } // #64
         tabsBtn.setOnClickListener { showTabSheet() }
         findViewById<TextView>(R.id.bookmarksBtn).setOnClickListener { showBookmarks() } // #87
-        refreshPersonaPicker() // #92
 
         newTab(START_URL)
         BookmarkStore.sync(this) { }
@@ -182,7 +183,7 @@ class MainActivity : Activity() {
 
     // --- tabs ---------------------------------------------------------------
     @SuppressLint("SetJavaScriptEnabled")
-    private fun newTab(url: String?, background: Boolean = false): Tab {
+    private fun newTab(url: String?, background: Boolean = false, lazy: Boolean = false): Tab {
         val wv = WebView(this)
         wv.settings.apply {
             javaScriptEnabled = true
@@ -317,9 +318,13 @@ class MainActivity : Activity() {
     private fun activateTab(index: Int) {
         if (index !in tabs.indices) return
         activeIndex = index
+        tabs[index].pendingUrl?.let { u -> // #93: adopted tab loads when opened
+            tabs[index].pendingUrl = null
+            tabs[index].pendingTitle = null
+            tabs[index].webView.loadUrl(u)
+        }
         tabs[index].lastActiveAt = System.currentTimeMillis() // #79
         Personas.setActive(this, tabs[index].persona) // #88
-        refreshPersonaPicker() // #92: dropdown follows the tab we landed on
         webContainer.removeAllViews()
         val wv = tabs[index].webView
         (wv.parent as? ViewGroup)?.removeView(wv)
@@ -391,8 +396,22 @@ class MainActivity : Activity() {
             }
             doomed.add(i)
         }
-        if (doomed.isEmpty() || doomed.size >= tabs.size) return
-        for (i in doomed.sortedDescending()) closeTab(i, remote = true)
+        if (doomed.isNotEmpty() && doomed.size < tabs.size) {
+            for (i in doomed.sortedDescending()) closeTab(i, remote = true)
+        }
+
+        // #93: a tab open on another device becomes a REAL tab here, inside the
+        // Persona it belongs to — not a separate read-only list.
+        val open = TabSync.mergedOpen[pid].orEmpty()
+        for ((url, info) in open) {
+            val (title, at) = info
+            if ((closed[url] ?: 0L) > at) continue      // closed more recently elsewhere
+            if (tabs.any { it.url == url }) continue     // already have it
+            val t = newTab(url, background = true, lazy = true)
+            t.persona = pid
+            t.openedAt = at
+            t.pendingTitle = title
+        }
         syncChrome()
     }
 
@@ -440,38 +459,10 @@ class MainActivity : Activity() {
         (active ?: newTab(url).also { return }).webView.loadUrl(url)
     }
 
-    /** #92: Persona dropdown in the top bar, mirroring the Windows switcher. */
-    private fun refreshPersonaPicker() {
-        val spinner = findViewById<android.widget.Spinner>(R.id.personaPick)
-        val list = Personas.ordered(this)
-        val labels = list.map { it.name }
-        val adapter = android.widget.ArrayAdapter(this, android.R.layout.simple_spinner_item, labels)
-        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
-        spinner.adapter = adapter
-        spinner.onItemSelectedListener = null
-        val activeIdx = list.indexOfFirst { it.id == Personas.activeId(this) }.coerceAtLeast(0)
-        spinner.setSelection(activeIdx, false)
-        spinner.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
-            override fun onItemSelected(p: android.widget.AdapterView<*>?, v: View?, pos: Int, id: Long) {
-                val target = list.getOrNull(pos) ?: return
-                if (target.id == Personas.activeId(this@MainActivity)) return
-                Personas.setActive(this@MainActivity, target.id)
-                val mine = tabs.indices.filter { tabs[it].persona == target.id }
-                if (mine.isNotEmpty()) {
-                    // most recently used tab in that Persona, as on Windows (#83)
-                    activateTab(mine.maxByOrNull { tabs[it].lastActiveAt } ?: mine.first())
-                } else {
-                    newTab(START_URL)
-                }
-            }
-            override fun onNothingSelected(p: android.widget.AdapterView<*>?) {}
-        }
-    }
-
     private fun syncChrome() {
         val t = active ?: return
         if (!urlEditing) urlBar.setText(if (t.url == "about:blank") "" else t.url)
-        tabsBtn.text = tabs.count { it.persona == Personas.activeId(this) }.toString() // #92
+        tabsBtn.text = tabs.count { it.persona == Personas.activeId(this) }.toString() // #93
     }
 
     private fun hideKeyboard() {
@@ -723,10 +714,38 @@ class MainActivity : Activity() {
 
         val actions = card(col)
         action(actions, "＋ New tab") { closePanel(); newTab(START_URL) }
-        action(actions, "Reload this page") { closePanel(); active?.webView?.reload() } // #87
 
-        // Only this Persona's tabs are listed; quick/pinned still float to the top.
-        val activePersona = Personas.activeId(this) // #92
+        // #93: Persona dropdown at the top of THIS page, like the Windows sidebar.
+        val activePersona = Personas.activeId(this)
+        val plist = Personas.ordered(this)
+        val spinner = android.widget.Spinner(this).apply {
+            setBackgroundResource(R.drawable.pill_bg)
+            val labels = plist.map { p -> "${p.name}  (${tabs.count { it.persona == p.id }})" }
+            adapter = android.widget.ArrayAdapter(
+                this@MainActivity, android.R.layout.simple_spinner_item, labels
+            ).apply { setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
+            setSelection(plist.indexOfFirst { it.id == activePersona }.coerceAtLeast(0), false)
+            onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
+                override fun onItemSelected(a: android.widget.AdapterView<*>?, v: View?, pos: Int, id: Long) {
+                    val target = plist.getOrNull(pos) ?: return
+                    if (target.id == Personas.activeId(this@MainActivity)) return
+                    Personas.setActive(this@MainActivity, target.id)
+                    val mine = tabs.indices.filter { tabs[it].persona == target.id }
+                    if (mine.isNotEmpty()) {
+                        activateTab(mine.maxByOrNull { tabs[it].lastActiveAt } ?: mine.first())
+                    } else {
+                        newTab(START_URL)
+                    }
+                    showTabSheet()
+                }
+                override fun onNothingSelected(a: android.widget.AdapterView<*>?) {}
+            }
+        }
+        col.addView(
+            spinner,
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(40))
+                .apply { bottomMargin = dp(12) }
+        )
         val order = tabs.indices
             .filter { tabs[it].persona == activePersona }
             .sortedWith(compareBy({ if (tabs[it].quick) 0 else if (tabs[it].pinned) 1 else 2 }, { it }))
@@ -769,16 +788,6 @@ class MainActivity : Activity() {
         if (loose.isNotEmpty()) {
             header(col, "OPEN TABS")
             for (i in loose) tabRow(col, i, 0)
-        }
-
-        // #57: what's open on the other device, in this Persona. Tapping opens
-        // it here; nothing here can close anything there.
-        for (dev in TabSync.remoteFor(activePersona)) {
-            header(col, "ON ${dev.name.uppercase()}")
-            val c = card(col)
-            for (rt in dev.tabs.take(40)) {
-                action(c, rt.title, rt.url) { closePanel(); newTab(rt.url) }
-            }
         }
     }
 
