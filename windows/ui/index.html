@@ -522,7 +522,7 @@
 <body>
   <div id="sidebar">
     <header>
-      <span>WebForge</span>
+      <select id="personaPick" title="Persona (Ctrl+Space then 1-9)"></select>
       <button id="newtab" title="New tab (Ctrl+T)">+</button>
     </header>
     <div id="tablist"></div>
@@ -642,13 +642,15 @@
   document.getElementById('newtab').onclick = () => webforge.newTab();
   // #25: persona switcher — main owns the list, we just render + request.
   const personaPick = document.getElementById('personaPick');
-  personaPick.onchange = () => webforge.switchPersona(personaPick.value);
-  webforge.onPersonas(({ personas, active }) => {
-    personaPick.replaceChildren(
-      ...personas.map((p, i) => new Option(`${i + 1}. ${p.name} (${p.tabCount})`, p.id))
-    );
-    personaPick.value = active;
-  });
+  if (personaPick) {
+    personaPick.onchange = () => webforge.switchPersona(personaPick.value);
+    webforge.onPersonas(({ personas, active }) => {
+      personaPick.replaceChildren(
+        ...personas.map((p, i) => new Option(`${i + 1}. ${p.name} (${p.tabCount})`, p.id))
+      );
+      personaPick.value = active;
+    });
+  }
   back.onclick = () => webforge.goBack();
   forward.onclick = () => webforge.goForward();
   reloadstop.onclick = () => (activeLoading ? webforge.stop() : webforge.reload());
