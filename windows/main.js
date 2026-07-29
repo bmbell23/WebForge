@@ -75,6 +75,7 @@ function switchPersona(personaId) {
   } else {
     createTab(null, false, personaId);
   }
+  broadcastHotkeys(); // #71: badges must follow the Persona's bindings
   pushState();
 }
 
@@ -381,7 +382,7 @@ function starCurrent() {
     folder: existing?.folder || '',
     exists: Boolean(existing),
     claim: personas.claimFor(url), // #70
-    personas: personas.all().map((p) => ({ id: p.id, name: p.name })),
+    personas: orderedPersonas().map((p) => ({ id: p.id, name: p.name })),
   });
 }
 
@@ -418,11 +419,22 @@ function tabState() {
   });
 }
 
+// #71: Unassigned is the fallback, not a destination — put it last so the
+// Personas you actually use get Ctrl+Space 1, 2, 3. Display and the digit
+// shortcuts share this ordering so the numbers you see are the numbers you press.
+function orderedPersonas() {
+  const list = personas.all();
+  return [
+    ...list.filter((p) => p.id !== personas.UNASSIGNED),
+    ...list.filter((p) => p.id === personas.UNASSIGNED),
+  ];
+}
+
 function pushPersonas() {
   if (!chrome) return;
   const active = personas.activeId();
   chrome.webContents.send('personas-updated', {
-    personas: personas.all().map((p) => ({
+    personas: orderedPersonas().map((p) => ({
       id: p.id,
       name: p.name,
       builtin: Boolean(p.builtin),
@@ -690,7 +702,7 @@ function wireChords(wc) {
       if (rawKey.toLowerCase() === 'escape' || locked) return;
       // #25: bare digits switch Persona (reserved — see hotkeys.set).
       if (/^[1-9]$/.test(rawKey) && !input.control && !input.alt) {
-        const list = personas.all();
+        const list = orderedPersonas();
         const target = list[Number(rawKey) - 1];
         if (target) switchPersona(target.id);
         return;
@@ -786,7 +798,13 @@ function broadcastHotkeys() {
 }
 
 function tabForHotkey(keyId) {
-  for (const [tid, kid] of hotkeyByTab) if (kid === keyId) return tid;
+  // #71: scoped to the ACTIVE persona. A flat lookup found another Persona's
+  // tab bound to the same key and dragged the user over to it, which is what
+  // made per-Persona hotkeys look broken.
+  const active = personas.activeId();
+  for (const [tid, kid] of hotkeyByTab) {
+    if (kid === keyId && (personaByTab.get(tid) || personas.UNASSIGNED) === active) return tid;
+  }
   return null;
 }
 
@@ -804,7 +822,12 @@ function handleHotkeyPress(keyId) {
       activateTab(tabId);
     }
   } else {
-    const newId = createTab(entry.url);
+    // #71: honour a routing rule when one claims this URL, otherwise keep the
+    // tab in the Persona the user is actually working in — landing it in
+    // Unassigned would switch them out from under their own hotkey.
+    const claimed = personas.forUrl(entry.url);
+    const owner = claimed === personas.UNASSIGNED ? personas.activeId() : claimed;
+    const newId = createTab(entry.url, false, owner);
     if (newId !== null) {
       hotkeyByTab.set(newId, keyId);
       sortTabOrder();
@@ -1199,7 +1222,7 @@ ipcMain.on('bm-edit-request', (_e, id) => {
     openBookmarkDialog({
       id: b.id, title: b.title, url: b.url, folder: b.folder || '', exists: true,
       claim: personas.claimFor(b.url), // #70
-      personas: personas.all().map((p) => ({ id: p.id, name: p.name })),
+      personas: orderedPersonas().map((p) => ({ id: p.id, name: p.name })),
     });
   }
 });
