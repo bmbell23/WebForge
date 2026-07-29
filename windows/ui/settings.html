@@ -161,6 +161,14 @@
     <button id="padd">Add persona</button>
   </div>
 
+  <h2>Hotkeys in the active Persona</h2>
+  <div class="sub" style="margin-bottom:10px">
+    Bindings belong to one Persona — <code>g</code> in Personal and <code>g</code> in Work
+    are different bookmarks. This lists the <b>currently active</b> Persona's bindings;
+    switch Personas to see another's. Bind from the bookmarks panel with ⌨.
+  </div>
+  <div id="hotkeylist"></div>
+
   <h2>Tab groups</h2>
   <div id="grouplist"></div>
   <div class="addrow">
@@ -268,6 +276,32 @@
   }
 
   document.getElementById('pwbtn').onclick = () => wf.openPasswords(); // #63
+
+  // --- hotkeys in the active persona (#73) ---
+  async function loadHotkeys() {
+    const map = await wf.getHotkeys();
+    const box = document.getElementById('hotkeylist');
+    const keys = Object.keys(map).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+    if (!keys.length) {
+      box.innerHTML = '<div class="sub">No hotkeys bound in this Persona yet.</div>';
+      return;
+    }
+    box.replaceChildren(...keys.map((k) => {
+      const row = document.createElement('div');
+      row.className = 'grouprow';
+      row.append(
+        Object.assign(document.createElement('span'), { className: 'gn', textContent: k }),
+        Object.assign(document.createElement('span'), {
+          className: 'gp', textContent: `${map[k].title} — ${map[k].url}`, title: map[k].url,
+        })
+      );
+      const rm = Object.assign(document.createElement('button'), { textContent: '✕', title: 'Remove binding' });
+      rm.onclick = async () => { await wf.removeHotkey(k); loadHotkeys(); };
+      row.appendChild(rm);
+      return row;
+    }));
+  }
+  loadHotkeys();
 
   // --- personas (#25) ---
   let personas = [];

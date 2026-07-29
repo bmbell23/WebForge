@@ -1543,6 +1543,9 @@ function setupAutoUpdate() {
 
 app.whenReady().then(() => {
   applyTheme(getSettings().theme); // #24: before any view paints
+  // #73: park any pre-Persona hotkeys in the first real Persona, deterministically.
+  const firstReal = personas.all().find((p) => p.id !== personas.UNASSIGNED);
+  hotkeys.migrateInto(firstReal ? firstReal.id : personas.UNASSIGNED);
   setupAdblock(); // async — engine attaches to the session when ready
   createWindow();
   setupShortcuts();
