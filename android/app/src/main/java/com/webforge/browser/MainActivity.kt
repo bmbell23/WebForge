@@ -58,7 +58,8 @@ class MainActivity : Activity() {
     private var activeIndex = 0
     private var urlEditing = false // #64: real focus state, not a latched flag
     private val sweepHandler = android.os.Handler(android.os.Looper.getMainLooper()) // #79
-    private var tabEditMode = false // #86: long-press a tab to organise
+    private var bmEditMode = false // #89: long-press a BOOKMARK to organise
+    private var pendingBmFolder: String? = null // #89: created, awaiting its first bookmark
     private var nextTabId = 1
 
     private val active: Tab? get() = tabs.getOrNull(activeIndex)
@@ -406,7 +407,7 @@ class MainActivity : Activity() {
         val scroll = ScrollView(this)
         val col = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), dp(36), dp(20), dp(28))
+            setPadding(dp(16), dp(6), dp(16), dp(28)) // #89: header lines up with the top bar
         }
         build(col)
         scroll.addView(col)
@@ -570,47 +571,17 @@ class MainActivity : Activity() {
             setPadding(dp(8 + indent), dp(11), dp(8), dp(11))
         }
 
-        if (tabEditMode) {
-            row.addView(TextView(this).apply {
-                text = "☰"
-                setTextColor(0xFF7C7C82.toInt())
-                textSize = 17f
-                setPadding(0, 0, dp(12), 0)
-                setOnLongClickListener {
-                    // Carry the tab's index; rows and folder headers accept it.
-                    val data = android.content.ClipData.newPlainText("tabIndex", index.toString())
-                    startDragAndDrop(data, View.DragShadowBuilder(row), null, 0)
-                    true
-                }
-                setOnClickListener {
-                    android.widget.Toast
-                        .makeText(this@MainActivity, "Press and hold ☰ to drag", android.widget.Toast.LENGTH_SHORT)
-                        .show()
-                }
-            })
-        }
-
         row.addView(TextView(this).apply {
             text = (if (index == activeIndex) "▸ " else "") + t.title
             setTextColor(if (index == activeIndex) 0xFF3D9BFF.toInt() else 0xFFE8E8EA.toInt())
             textSize = 15f
             maxLines = 1
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-            setOnClickListener {
-                if (!tabEditMode) { closePanel(); activateTab(index) }
-            }
-            setOnLongClickListener { tabEditMode = true; showTabSheet(); true } // #86
+            setOnClickListener { closePanel(); activateTab(index) }
+            setOnLongClickListener { showTabEditor(index); true } // #89: rename/pin/file
         })
 
-        if (tabEditMode) {
-            row.addView(TextView(this).apply {
-                text = "✎"
-                setTextColor(0xFF7C7C82.toInt())
-                textSize = 15f
-                setPadding(dp(12), 0, dp(6), 0)
-                setOnClickListener { showTabEditor(index) }
-            })
-        } else if (!t.pinned) {
+        if (!t.pinned) {
             row.addView(TextView(this).apply {
                 text = "✕"
                 setTextColor(0xFF7C7C82.toInt())
@@ -620,18 +591,6 @@ class MainActivity : Activity() {
             })
         }
 
-        // Any row is a drop target: dropping on it re-orders to that position.
-        row.setOnDragListener { _, ev ->
-            when (ev.action) {
-                android.view.DragEvent.ACTION_DROP -> {
-                    val from = ev.clipData?.getItemAt(0)?.text?.toString()?.toIntOrNull()
-                    if (from != null && from != index) moveTab(from, index, t.folder)
-                    true
-                }
-                android.view.DragEvent.ACTION_DRAG_STARTED -> true
-                else -> true
-            }
-        }
         parent.addView(row)
     }
 
@@ -653,25 +612,12 @@ class MainActivity : Activity() {
         title(col, "Tabs")
         caption(
             col,
-            if (tabEditMode) {
-                "Editing: hold ☰ to drag a tab, drop it on a folder to file it, ✎ to rename."
-            } else {
-                "Tap to switch · long-press to organise · swipe right to go back."
-            }
+            "Tap to switch · long-press to rename or pin · swipe right to go back." 
         )
 
         val actions = card(col)
-        if (tabEditMode) {
-            action(actions, "＋ New folder", "Group tabs together") { showFolderCreator() }
-            action(actions, "Done editing") { tabEditMode = false; showTabSheet() }
-        } else {
-            action(actions, "＋ New tab") { closePanel(); newTab(START_URL) }
-            action(actions, "Reload this page") { closePanel(); active?.webView?.reload() } // #87
-            action(actions, "Organise tabs", "Reorder, group and rename") {
-                tabEditMode = true
-                showTabSheet()
-            }
-        }
+        action(actions, "＋ New tab") { closePanel(); newTab(START_URL) }
+        action(actions, "Reload this page") { closePanel(); active?.webView?.reload() } // #87
 
         // #88: Persona switcher — the phone's equivalent of Ctrl+Space + digit.
         val activePersona = Personas.activeId(this)
@@ -715,9 +661,6 @@ class MainActivity : Activity() {
                 setTypeface(null, android.graphics.Typeface.BOLD)
                 setPadding(dp(4), dp(14), dp(4), dp(6))
             }
-            if (tabEditMode) {
-                head.setOnClickListener { showFolderEditor(f) }
-            }
             // Dropping a tab on a folder header files it there.
             head.setOnDragListener { _, ev ->
                 if (ev.action == android.view.DragEvent.ACTION_DROP) {
@@ -738,8 +681,6 @@ class MainActivity : Activity() {
             header(col, "OPEN TABS")
             for (i in loose) tabRow(col, i, 0)
         }
-
-        action(card(col), "Close") { tabEditMode = false; closePanel() }
     }
 
     /** #86: name a new tab folder (never window.prompt — inline, as everywhere). */
@@ -823,6 +764,12 @@ class MainActivity : Activity() {
 
     private fun buildTree(list: List<Bookmark>): FolderNode {
         val root = FolderNode()
+        pendingBmFolder?.let { p -> // #89: show a just-created empty folder
+            var node = root
+            for (seg in p.split('/').filter { it.isNotBlank() }) {
+                node = node.subs.getOrPut(seg) { FolderNode() }
+            }
+        }
         for (b in list) {
             var node = root
             for (seg in b.folder.split('/').filter { it.isNotBlank() }) {
@@ -837,12 +784,32 @@ class MainActivity : Activity() {
         node.items.size + node.subs.values.sumOf { countAll(it) }
 
     private fun bookmarkRow(parent: LinearLayout, b: Bookmark, depth: Int) {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(8 + depth * 16), dp(4), dp(4), dp(4))
+        }
+        if (bmEditMode) {
+            // #89: ☰ grabs the bookmark; folder headers accept the drop.
+            row.addView(TextView(this).apply {
+                text = "☰"
+                setTextColor(0xFF7C7C82.toInt())
+                textSize = 17f
+                setPadding(0, dp(6), dp(12), dp(6))
+                setOnLongClickListener {
+                    val data = android.content.ClipData.newPlainText("bookmarkId", b.id)
+                    startDragAndDrop(data, View.DragShadowBuilder(row), null, 0)
+                    true
+                }
+            })
+        }
         val line = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(8 + depth * 16), dp(9), dp(8), dp(9))
+            setPadding(0, dp(5), 0, dp(5))
             isClickable = true
-            setOnClickListener { closePanel(); navigate(b.url) }
-            setOnLongClickListener { showBookmarkEditor(b); true } // #85
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            setOnClickListener { if (!bmEditMode) { closePanel(); navigate(b.url) } }
+            setOnLongClickListener { bmEditMode = true; showBookmarks(); true } // #89
         }
         line.addView(TextView(this).apply {
             text = b.title
@@ -856,16 +823,31 @@ class MainActivity : Activity() {
             textSize = 11f
             maxLines = 1
         })
-        parent.addView(line)
+        row.addView(line)
+        if (bmEditMode) {
+            row.addView(TextView(this).apply {
+                text = "✎"
+                setTextColor(0xFF7C7C82.toInt())
+                textSize = 15f
+                setPadding(dp(12), dp(6), dp(6), dp(6))
+                setOnClickListener { showBookmarkEditor(b) }
+            })
+        }
+        parent.addView(row)
     }
 
     /** Renders one folder level; children live in a container we show/hide,
      *  so expanding never rebuilds the panel or loses scroll position. */
-    private fun emitFolders(parent: LinearLayout, node: FolderNode, depth: Int) {
+    private fun emitFolders(parent: LinearLayout, node: FolderNode, depth: Int, path: String = "") {
         for ((name, sub) in node.subs.entries.sortedBy { it.key.lowercase() }) {
+            val full = if (path.isEmpty()) name else "$path/$name" // #89
             val childBox = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
                 visibility = View.GONE // collapsed by default, like Windows
+            }
+            val headerRow = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
             }
             val header = TextView(this).apply {
                 text = "▸  📁  $name   ${countAll(sub)}"
@@ -879,9 +861,33 @@ class MainActivity : Activity() {
                     text = "${if (open) "▸" else "▾"}  📁  $name   ${countAll(sub)}"
                 }
             }
-            parent.addView(header)
+            header.layoutParams =
+                LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            // #89: dropping a dragged bookmark here re-files it.
+            headerRow.setOnDragListener { _, ev ->
+                if (ev.action == android.view.DragEvent.ACTION_DROP) {
+                    val id = ev.clipData?.getItemAt(0)?.text?.toString()
+                    val bm = id?.let { i -> BookmarkStore.all(this).find { it.id == i } }
+                    if (bm != null) {
+                        BookmarkStore.update(this, bm.id, bm.title, bm.url, full)
+                        showBookmarks()
+                    }
+                }
+                true
+            }
+            headerRow.addView(header)
+            if (bmEditMode) {
+                headerRow.addView(TextView(this).apply {
+                    text = "✎"
+                    setTextColor(0xFF7C7C82.toInt())
+                    textSize = 15f
+                    setPadding(dp(12), dp(8), dp(6), dp(8))
+                    setOnClickListener { showBmFolderEditor(full) }
+                })
+            }
+            parent.addView(headerRow)
             parent.addView(childBox)
-            emitFolders(childBox, sub, depth + 1)
+            emitFolders(childBox, sub, depth + 1, full)
             for (b in sub.items.sortedBy { it.title.lowercase() }) bookmarkRow(childBox, b, depth + 1)
         }
     }
@@ -914,7 +920,21 @@ class MainActivity : Activity() {
 
     private fun showBookmarks(): Unit = openPanel { col ->
         titleWithAction(col, "Bookmarks", "⚙") { showSettings() } // #87
-        caption(col, "Tap to open · long-press to edit · swipe right to go back.")
+        caption(
+            col,
+            if (bmEditMode) "Editing: hold ☰ to drag into a folder, ✎ to edit. Swipe right to leave."
+            else "Tap to open · long-press to organise · swipe right to go back."
+        )
+        val bmActions = card(col)
+        if (bmEditMode) {
+            action(bmActions, "＋ New folder") { showBmFolderCreator() }
+            action(bmActions, "Done editing") { bmEditMode = false; showBookmarks() }
+        } else {
+            action(bmActions, "Organise bookmarks", "Drag into folders, rename, re-file") {
+                bmEditMode = true
+                showBookmarks()
+            }
+        }
 
         val all = BookmarkStore.all(this)
         if (all.isEmpty()) {
@@ -922,7 +942,6 @@ class MainActivity : Activity() {
             row(col, "Sync now") {
                 BookmarkStore.sync(this) { ok -> runOnUiThread { if (ok) showBookmarks() } }
             }
-            row(col, "Close") { closePanel() }
             return@openPanel
         }
 
@@ -946,13 +965,67 @@ class MainActivity : Activity() {
         col.addView(list)
         renderBookmarks(list, "")
 
-        row(col, "Sync now", "${all.size} cached") {
-            BookmarkStore.sync(this) { ok -> runOnUiThread { if (ok) showBookmarks() } }
-        }
-        row(col, "Close") { closePanel() }
+        col.addView(TextView(this).apply {
+            text = BookmarkStore.statusLine(this@MainActivity) // #89: passive status, no button
+            setTextColor(0xFF7C7C82.toInt())
+            textSize = 11.5f
+            setPadding(dp(4), dp(18), dp(4), 0)
+        })
     }
 
     // #85: long-press editor — the phone could only open bookmarks before.
+    /** #89: rename or dissolve a bookmark folder. */
+    private fun showBmFolderEditor(folder: String): Unit = openPanel { col ->
+        title(col, "Edit folder")
+        caption(col, folder)
+        val name = EditText(this).apply {
+            setText(folder)
+            setTextColor(0xFFE8E8EA.toInt())
+            setBackgroundResource(R.drawable.pill_bg)
+            setPadding(dp(14), dp(10), dp(14), dp(10))
+            maxLines = 1
+        }
+        col.addView(name)
+        val c = card(col)
+        action(c, "Rename", "Everything inside moves with it") {
+            val to = name.text.toString().trim()
+            if (to.isNotEmpty() && to != folder) {
+                for (b in BookmarkStore.all(this).filter { it.folder == folder || it.folder.startsWith("$folder/") }) {
+                    BookmarkStore.update(this, b.id, b.title, b.url, to + b.folder.substring(folder.length))
+                }
+            }
+            showBookmarks()
+        }
+        action(c, "Dissolve folder", "Bookmarks move up a level — none are deleted") {
+            val parent = if (folder.contains('/')) folder.substringBeforeLast('/') else ""
+            for (b in BookmarkStore.all(this).filter { it.folder == folder || it.folder.startsWith("$folder/") }) {
+                BookmarkStore.update(this, b.id, b.title, b.url, parent)
+            }
+            showBookmarks()
+        }
+        action(c, "Cancel") { showBookmarks() }
+    }
+
+    private fun showBmFolderCreator(): Unit = openPanel { col ->
+        title(col, "New bookmark folder")
+        caption(col, "Use Work/CI to nest. Drag bookmarks onto it afterwards.")
+        val name = EditText(this).apply {
+            hint = "Folder name"
+            setHintTextColor(0xFF7C7C82.toInt())
+            setTextColor(0xFFE8E8EA.toInt())
+            setBackgroundResource(R.drawable.pill_bg)
+            setPadding(dp(14), dp(10), dp(14), dp(10))
+            maxLines = 1
+        }
+        col.addView(name)
+        val c = card(col)
+        action(c, "Create", "Takes effect once a bookmark is filed into it") {
+            pendingBmFolder = name.text.toString().trim().trim('/')
+            showBookmarks()
+        }
+        action(c, "Cancel") { showBookmarks() }
+    }
+
     private fun showBookmarkEditor(b: Bookmark): Unit = openPanel { col ->
         title(col, "Edit bookmark")
         caption(col, "Changes sync back to your other devices when you're on the home network.")
@@ -1090,16 +1163,7 @@ class MainActivity : Activity() {
 
         header(col, "BOOKMARKS")
         val sync = card(col)
-        action(sync, "${BookmarkStore.all(this).size} bookmarks cached", "Synced from your home server — tap to refresh now") {
-            BookmarkStore.sync(this) { ok ->
-                runOnUiThread {
-                    if (ok) showSettings()
-                    else android.widget.Toast
-                        .makeText(this, "Server unreachable — using the local copy", android.widget.Toast.LENGTH_SHORT)
-                        .show()
-                }
-            }
-        }
+        action(sync, "${BookmarkStore.all(this).size} bookmarks", BookmarkStore.statusLine(this)) { }
 
         header(col, "ABOUT")
         val about = card(col)
@@ -1194,7 +1258,6 @@ class MainActivity : Activity() {
                 }
             }
         }
-        row(col, "Close") { closePanel() }
     }
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()

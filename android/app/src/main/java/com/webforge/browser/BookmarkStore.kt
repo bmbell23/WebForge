@@ -153,6 +153,19 @@ object BookmarkStore {
     }
 
     /** Folder paths that exist, sorted; "" (root) excluded. */
+    /** #89: human-readable sync state — replaces the manual Sync button. */
+    fun statusLine(c: Context): String {
+        all(c)
+        if (updatedAt <= 0L) return "Not synced yet"
+        val mins = (System.currentTimeMillis() - updatedAt) / 60000
+        return when {
+            mins < 1 -> "Synced just now"
+            mins < 60 -> "Synced ${mins}m ago"
+            mins < 1440 -> "Synced ${mins / 60}h ago"
+            else -> "Synced ${mins / 1440}d ago"
+        }
+    }
+
     fun folders(c: Context): List<String> =
         all(c).map { it.folder }.filter { it.isNotEmpty() }.distinct().sorted()
 }

@@ -72,9 +72,9 @@
                     android:layout_height="36dp"
                     android:layout_marginStart="4dp"
                     android:gravity="center"
-                    android:text="📚"
+                    android:text="☰"
                     android:textColor="#E8E8EA"
-                    android:textSize="17sp" />
+                    android:textSize="19sp" />
             </LinearLayout>
 
             <ProgressBar
