@@ -8,7 +8,8 @@ Stdlib only — no pip, runs straight on the python:alpine image.
                               comparing updatedAt before pushing/pulling)
 
 Exposed only over Tailscale like everything else on dockerhost. v1 syncs
-bookmarks; credentials would need end-to-end encryption first (see ticket).
+bookmarks, personas and tabs; credentials would need end-to-end encryption
+first (see ticket).
 """
 import json
 import os
@@ -17,7 +18,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
 PORT = int(os.environ.get("PORT", "8013"))
-ALLOWED_KEYS = {"bookmarks"}
+# #88/#57: personas + per-persona tab sets ride the same store.
+ALLOWED_KEYS = {"bookmarks", "personas", "tabs"}
 MAX_BODY = 10_000_000
 
 

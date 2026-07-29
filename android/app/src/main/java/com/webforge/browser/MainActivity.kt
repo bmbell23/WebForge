@@ -36,6 +36,7 @@ class Tab(val id: Int, val webView: WebView) {
     var quick = false // #54: quick-launch (the phone's answer to hotkey tabs)
     var lastActiveAt = System.currentTimeMillis() // #79: for inactivity expiry
     var folder = ""      // #86: manual grouping, set in tab edit mode
+    var persona = Personas.UNASSIGNED // #88
     var label: String? = null // #86: user-given name overriding the page title
     val title: String get() = label ?: webView.title?.takeIf { it.isNotBlank() } ?: url
     val url: String get() = webView.url ?: "about:blank"
@@ -88,7 +89,8 @@ class MainActivity : Activity() {
         findViewById<TextView>(R.id.bookmarksBtn).setOnClickListener { showBookmarks() } // #87
 
         newTab(START_URL)
-        BookmarkStore.sync(this) { } // warm the cache for the bookmarks panel
+        BookmarkStore.sync(this) { }
+        Personas.sync(this) { } // #88 // warm the cache for the bookmarks panel
         UpdateManager(this).checkForUpdate()
     }
 
@@ -189,6 +191,7 @@ class MainActivity : Activity() {
             mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
         }
         val tab = Tab(nextTabId++, wv)
+        tab.persona = Personas.forUrl(this, url ?: "") // #88 (url is null for window transports)
 
         wv.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView, req: WebResourceRequest): Boolean {
@@ -232,6 +235,12 @@ class MainActivity : Activity() {
             // nor onPageFinished, so on any SPA the address bar never updated
             // after the first load. This hook does fire for in-page history.
             override fun doUpdateVisitedHistory(view: WebView, url: String, isReload: Boolean) {
+                // #88: follow the URL into whichever Persona claims it.
+                val claimed = Personas.forUrl(this@MainActivity, url)
+                if (claimed != Personas.UNASSIGNED && claimed != tab.persona) {
+                    tab.persona = claimed
+                    if (tab === active) Personas.setActive(this@MainActivity, claimed)
+                }
                 if (tab === active) syncChrome()
                 super.doUpdateVisitedHistory(view, url, isReload)
             }
@@ -301,6 +310,7 @@ class MainActivity : Activity() {
         if (index !in tabs.indices) return
         activeIndex = index
         tabs[index].lastActiveAt = System.currentTimeMillis() // #79
+        Personas.setActive(this, tabs[index].persona) // #88
         webContainer.removeAllViews()
         val wv = tabs[index].webView
         (wv.parent as? ViewGroup)?.removeView(wv)
@@ -663,10 +673,28 @@ class MainActivity : Activity() {
             }
         }
 
-        // Quick launch and pinned stay pinned to the top; then folders; then the rest.
-        val order = tabs.indices.sortedWith(
-            compareBy({ if (tabs[it].quick) 0 else if (tabs[it].pinned) 1 else 2 }, { it })
-        )
+        // #88: Persona switcher — the phone's equivalent of Ctrl+Space + digit.
+        val activePersona = Personas.activeId(this)
+        val pcard = card(col)
+        for (p in Personas.ordered(this)) {
+            val count = tabs.count { it.persona == p.id }
+            option(pcard, "${p.name}  ·  $count", p.id == activePersona) {
+                Personas.setActive(this, p.id)
+                val mine = tabs.indices.filter { tabs[it].persona == p.id }
+                if (mine.isNotEmpty()) {
+                    // land on the most recently used tab, as Windows does (#83)
+                    activateTab(mine.maxByOrNull { tabs[it].lastActiveAt } ?: mine.first())
+                } else {
+                    newTab(START_URL)
+                }
+                showTabSheet()
+            }
+        }
+
+        // Only this Persona's tabs are listed; quick/pinned still float to the top.
+        val order = tabs.indices
+            .filter { tabs[it].persona == activePersona }
+            .sortedWith(compareBy({ if (tabs[it].quick) 0 else if (tabs[it].pinned) 1 else 2 }, { it }))
         var lastGroup = -1
         for (i in order.filter { tabs[it].quick || tabs[it].pinned }) {
             val group = if (tabs[i].quick) 0 else 1
@@ -968,6 +996,62 @@ class MainActivity : Activity() {
         action(actions, "Cancel") { closePanel(); showBookmarks() }
     }
 
+    private fun showPersonaCreator(): Unit = openPanel { col ->
+        title(col, "New persona")
+        val name = EditText(this).apply {
+            hint = "Name (e.g. Finance)"
+            setHintTextColor(0xFF7C7C82.toInt())
+            setTextColor(0xFFE8E8EA.toInt())
+            setBackgroundResource(R.drawable.pill_bg)
+            setPadding(dp(14), dp(10), dp(14), dp(10))
+            maxLines = 1
+        }
+        col.addView(name)
+        val c = card(col)
+        action(c, "Create") { Personas.add(this, name.text.toString()); showSettings() }
+        action(c, "Cancel") { showSettings() }
+    }
+
+    private fun showPersonaEditor(id: String): Unit = openPanel { col ->
+        val p = Personas.get(this, id) ?: return@openPanel
+        title(col, "Edit persona")
+        val name = EditText(this).apply {
+            setText(p.name)
+            setTextColor(0xFFE8E8EA.toInt())
+            setBackgroundResource(R.drawable.pill_bg)
+            setPadding(dp(14), dp(10), dp(14), dp(10))
+            maxLines = 1
+        }
+        col.addView(name)
+        col.addView(TextView(this).apply {
+            text = "RULES (ONE PER LINE)"
+            setTextColor(0xFF7C7C82.toInt())
+            textSize = 11f
+            setPadding(dp(4), dp(14), 0, dp(4))
+        })
+        val rules = EditText(this).apply {
+            setText(p.rules.joinToString("\n"))
+            setTextColor(0xFFE8E8EA.toInt())
+            textSize = 13f
+            setBackgroundResource(R.drawable.pill_bg)
+            setPadding(dp(14), dp(10), dp(14), dp(10))
+            minLines = 3
+            setSingleLine(false)
+        }
+        col.addView(rules)
+        val c = card(col)
+        action(c, "Save") {
+            Personas.update(this, id, name.text.toString(), rules.text.toString().split("\n"))
+            showSettings()
+        }
+        action(c, "Delete persona", "Its tabs move to Unassigned — none are closed") {
+            tabs.filter { it.persona == id }.forEach { it.persona = Personas.UNASSIGNED }
+            Personas.remove(this, id)
+            showSettings()
+        }
+        action(c, "Cancel") { showSettings() }
+    }
+
     private fun showSettings(): Unit = openPanel { col ->
         title(col, "Settings")
         caption(col, "Swipe right to go back.")
@@ -993,6 +1077,16 @@ class MainActivity : Activity() {
                 showSettings()
             }
         }
+
+        header(col, "PERSONAS")
+        caption(col, "Workspaces with their own tabs. Opening a URL that matches a Persona's rules switches to it; anything unmatched lands in Unassigned. One rule per line — prefix, wildcard (https://*.example.com) or /regex/.")
+        val pc = card(col)
+        for (p in Personas.ordered(this)) {
+            action(pc, p.name, if (p.builtin) "Built-in · catches everything unmatched" else "${p.rules.size} rule(s) · tap to edit") {
+                if (!p.builtin) showPersonaEditor(p.id)
+            }
+        }
+        action(pc, "＋ New persona") { showPersonaCreator() }
 
         header(col, "BOOKMARKS")
         val sync = card(col)
@@ -1122,6 +1216,7 @@ class MainActivity : Activity() {
         // #84: the app only pulled at launch, so bookmarks edited on the PC
         // never appeared until a cold start. Refresh every time we come back.
         BookmarkStore.sync(this) { }
+        Personas.sync(this) { } // #88
         sweepHandler.removeCallbacksAndMessages(null)
         sweepHandler.postDelayed(object : Runnable {
             override fun run() {

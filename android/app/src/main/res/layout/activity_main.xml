@@ -59,6 +59,7 @@
                     android:textColor="#E8E8EA"
                     android:textSize="14sp"
                     android:paddingHorizontal="14dp"
+                    android:gravity="center"
                     android:inputType="textUri"
                     android:imeOptions="actionGo"
                     android:maxLines="1"

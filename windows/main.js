@@ -1003,6 +1003,7 @@ async function setupAdblock() {
 // last-write-wins by updatedAt. Fails silently off the tailnet (work-VPN
 // case): purely offline-first, catches up whenever home is reachable.
 const SYNC_URL = 'http://100.69.184.113:8013/store/bookmarks';
+const PERSONA_SYNC_URL = 'http://100.69.184.113:8013/store/personas'; // #88
 let syncTimer = null;
 let syncing = false;
 
@@ -1030,6 +1031,38 @@ async function syncBookmarks() {
     // off the tailnet / server down — try again next cycle
   } finally {
     syncing = false;
+  }
+}
+
+// #88: Persona definitions are shared with the phone; which one is *active*
+// stays per-device. Last-write-wins on the definition set, like bookmarks.
+let personaSyncing = false;
+async function syncPersonas() {
+  if (personaSyncing) return;
+  personaSyncing = true;
+  try {
+    const localAt = personas.updatedAt();
+    const res = await fetch(PERSONA_SYNC_URL, { signal: AbortSignal.timeout(5000) });
+    const remote = await res.json();
+    const remoteAt = remote.updatedAt || 0;
+    if (remoteAt > localAt && Array.isArray(remote.data) && remote.data.length) {
+      personas.replaceAll(remote.data, remoteAt);
+      for (const tid of tabOrder) {
+        personaByTab.set(tid, personas.forUrl(tabs.get(tid).webContents.getURL()));
+      }
+      pushState();
+    } else if (localAt > remoteAt) {
+      await fetch(PERSONA_SYNC_URL, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ data: personas.all(), updatedAt: localAt }),
+        signal: AbortSignal.timeout(5000),
+      });
+    }
+  } catch {
+    // off the tailnet — local definitions stand
+  } finally {
+    personaSyncing = false;
   }
 }
 
@@ -1163,6 +1196,7 @@ function onUnlocked() {
   pushState();
   broadcastHotkeys(); // #16: chrome badges + per-tab bound-key lists
   syncBookmarks(); // #13: catch up whenever a session starts
+  syncPersonas(); // #88
   sweepStaleTabs(); // #79: a machine left off overnight cleans up on return
 }
 
@@ -1726,6 +1760,7 @@ app.whenReady().then(() => {
   setupShortcuts();
   setupAutoUpdate();
   setInterval(syncBookmarks, 10 * 60 * 1000); // #13: periodic catch-up
+  setInterval(syncPersonas, 10 * 60 * 1000); // #88
   setInterval(sweepStaleTabs, 5 * 60 * 1000); // #79
 });
 

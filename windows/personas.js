@@ -59,7 +59,12 @@ function activeId() {
 function setActive(id) {
   if (!get(id)) return false;
   load().active = id;
-  save();
+  // #88: do NOT bump updatedAt — which Persona is showing is a per-device
+  // choice, and stamping it would make every switch look like a definition
+  // change and ping-pong against the phone.
+  try {
+    fs.writeFileSync(file(), JSON.stringify(cached));
+  } catch {}
   return true;
 }
 
@@ -206,7 +211,30 @@ function assign(url, personaId, opts = {}) {
   return { ok: true, moved: Boolean(claim), from: claim?.name || null, rule: origin };
 }
 
+// #88: shared with Android through the sync service.
+function updatedAt() {
+  return load().updatedAt || 0;
+}
+
+function replaceAll(personaList, stamp) {
+  const kept = Array.isArray(personaList) ? personaList : [];
+  if (!kept.some((p) => p.id === UNASSIGNED)) {
+    kept.unshift({ id: UNASSIGNED, name: 'Unassigned', builtin: true, rules: [] });
+  }
+  cached.personas = kept.map((p) => ({
+    id: String(p.id),
+    name: String(p.name || 'Persona'),
+    builtin: Boolean(p.builtin) || p.id === UNASSIGNED,
+    rules: Array.isArray(p.rules) ? p.rules.map(String) : [],
+  }));
+  cached.updatedAt = stamp || Date.now();
+  reCache.clear();
+  try {
+    fs.writeFileSync(file(), JSON.stringify(cached));
+  } catch {}
+}
+
 module.exports = {
   UNASSIGNED, all, get, activeId, setActive, add, remove, update, forUrl, matches,
-  originOf, claimFor, assign,
+  originOf, claimFor, assign, updatedAt, replaceAll,
 };
