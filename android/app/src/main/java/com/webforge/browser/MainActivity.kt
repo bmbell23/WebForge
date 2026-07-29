@@ -52,6 +52,7 @@ class MainActivity : Activity() {
 
     private val tabs = ArrayList<Tab>()
     private var activeIndex = 0
+    private var urlEditing = false // #64: real focus state, not a latched flag
     private var nextTabId = 1
 
     private val active: Tab? get() = tabs.getOrNull(activeIndex)
@@ -77,6 +78,7 @@ class MainActivity : Activity() {
                 true
             } else false
         }
+        urlBar.setOnFocusChangeListener { _, has -> urlEditing = has } // #64
         tabsBtn.setOnClickListener { showTabSheet() }
         findViewById<TextView>(R.id.menuBtn).setOnClickListener { showMenu() }
 
@@ -208,6 +210,14 @@ class MainActivity : Activity() {
                 if (tab === active) syncChrome()
             }
 
+            // #64: pushState/replaceState navigation fires NEITHER onPageStarted
+            // nor onPageFinished, so on any SPA the address bar never updated
+            // after the first load. This hook does fire for in-page history.
+            override fun doUpdateVisitedHistory(view: WebView, url: String, isReload: Boolean) {
+                if (tab === active) syncChrome()
+                super.doUpdateVisitedHistory(view, url, isReload)
+            }
+
             // #60: if a renderer dies (OOM with several tabs alive, or a page
             // taking it down) the OS default is to kill the WHOLE APP. Handle
             // it: drop the dead view, put a live one in its place, stay up.
@@ -299,6 +309,7 @@ class MainActivity : Activity() {
     }
 
     private fun navigate(url: String) {
+        urlEditing = false
         urlBar.clearFocus()
         hideKeyboard()
         (active ?: newTab(url).also { return }).webView.loadUrl(url)
@@ -306,7 +317,7 @@ class MainActivity : Activity() {
 
     private fun syncChrome() {
         val t = active ?: return
-        if (!urlBar.hasFocus()) urlBar.setText(if (t.url == "about:blank") "" else t.url)
+        if (!urlEditing) urlBar.setText(if (t.url == "about:blank") "" else t.url)
         tabsBtn.text = tabs.size.toString()
     }
 

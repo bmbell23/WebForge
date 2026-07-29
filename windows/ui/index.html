@@ -629,15 +629,22 @@
   const reloadstop = document.getElementById('reloadstop');
   const progress = document.getElementById('progress');
   let activeLoading = false;
+  let lastActiveTabId = null; // #64
 
   document.getElementById('newtab').onclick = () => webforge.newTab();
   back.onclick = () => webforge.goBack();
   forward.onclick = () => webforge.goForward();
   reloadstop.onclick = () => (activeLoading ? webforge.stop() : webforge.reload());
   url.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') { webforge.navigate(url.value); url.blur(); }
+    if (e.key === 'Enter') { urlEditing = false; webforge.navigate(url.value); url.blur(); }
   });
-  url.addEventListener('focus', () => url.select());
+  // #64: track editing explicitly. document.activeElement is per-DOCUMENT and
+  // keeps reporting #url long after the chrome view lost focus to a page, so
+  // using it as the "don't clobber my typing" guard latched on permanently and
+  // froze the address bar.
+  let urlEditing = false;
+  url.addEventListener('focus', () => { urlEditing = true; url.select(); });
+  url.addEventListener('blur', () => { urlEditing = false; });
   webforge.onFocusUrl(() => { url.focus(); url.select(); });
 
   function makeTab(t) {
@@ -788,7 +795,11 @@
     tablist.replaceChildren(...nodes);
     const active = state.find((t) => t.active);
     if (!active) return;
-    if (document.activeElement !== url) url.value = active.url;
+    // Only a genuinely focused, actively-edited field suppresses the update —
+    // and switching tabs always wins (#64).
+    const switched = active.id !== lastActiveTabId;
+    lastActiveTabId = active.id;
+    if (switched || !urlEditing || !document.hasFocus()) url.value = active.url;
     back.disabled = !active.canGoBack;
     forward.disabled = !active.canGoForward;
     activeLoading = active.loading;
