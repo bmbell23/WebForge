@@ -51,6 +51,13 @@
   }
   #reset:hover { color: var(--danger); }
   .hidden { display: none; }
+  #resetbox { display: none; margin-top: 14px; text-align: left; }
+  #resetbox.open { display: block; }
+  #resetbox .warn { font-size: 12px; color: var(--danger); line-height: 1.5; margin-bottom: 8px; }
+  #resetword { margin-bottom: 8px; }
+  .resetbtns { display: flex; gap: 8px; }
+  .resetbtns button { height: 32px; font-size: 13px; }
+  .resetbtns button.cancel { background: var(--field-bg); color: var(--text); }
 </style>
 </head>
 <body>
@@ -63,6 +70,17 @@
     <button id="go">Unlock</button>
     <div id="error"></div>
     <button id="reset" class="hidden">Forgot? Reset the vault (wipes saved data)</button>
+    <div id="resetbox">
+      <div class="warn">
+        This permanently deletes your saved session and imported passwords.
+        Bookmarks are kept. Type <b>RESET</b> to confirm.
+      </div>
+      <input id="resetword" type="text" placeholder="RESET" spellcheck="false">
+      <div class="resetbtns">
+        <button id="resetgo">Wipe the vault</button>
+        <button id="resetcancel" class="cancel">Cancel</button>
+      </div>
+    </div>
   </div>
 <script>
   const pw = document.getElementById('pw');
@@ -108,13 +126,32 @@
   pw.addEventListener('keydown', (e) => { if (e.key === 'Enter') (mode === 'setup' ? pw2.focus() : submit()); });
   pw2.addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
 
-  resetBtn.onclick = async () => {
-    const phrase = prompt(
-      'This PERMANENTLY deletes your saved session and imported passwords.\n' +
-      'Bookmarks are kept. Type RESET to confirm:'
-    );
-    if (phrase === 'RESET') { await webforge.vaultReset(); init(); }
+  // #80: window.prompt() is unimplemented in Electron — it silently returns
+  // null, so this confirmation could never succeed and the reset path was dead.
+  // Inline confirmation instead.
+  resetBtn.onclick = () => {
+    error.textContent = '';
+    document.getElementById('resetbox').classList.add('open');
+    document.getElementById('resetword').focus();
   };
+  document.getElementById('resetcancel').onclick = () => {
+    document.getElementById('resetbox').classList.remove('open');
+    document.getElementById('resetword').value = '';
+  };
+  document.getElementById('resetgo').onclick = async () => {
+    if (document.getElementById('resetword').value.trim().toUpperCase() !== 'RESET') {
+      error.textContent = 'Type RESET to confirm.';
+      return;
+    }
+    await webforge.vaultReset();
+    document.getElementById('resetbox').classList.remove('open');
+    document.getElementById('resetword').value = '';
+    init();
+  };
+  document.getElementById('resetword').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') document.getElementById('resetgo').click();
+    if (e.key === 'Escape') document.getElementById('resetcancel').click();
+  });
 
   init();
 </script>

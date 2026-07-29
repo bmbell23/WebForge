@@ -317,6 +317,30 @@
   .bm:hover .rm { visibility: visible; }
   .bm .rm:hover { background: var(--hover); }
   #bmempty { padding: 14px 12px; color: var(--text-dim); }
+  /* #80: folder creation lives at the bottom of the panel */
+  #bmfoot { border-top: 1px solid var(--hover); padding: 8px; }
+  #bmnewfolder {
+    width: 100%; height: 28px;
+    border: none; border-radius: 6px;
+    background: var(--surface); color: var(--text);
+    font-size: 12px; cursor: pointer;
+  }
+  #bmnewfolder:hover { background: var(--hover); }
+  #bmnewfolderrow { display: none; flex-direction: column; gap: 6px; }
+  #bmnewfolderrow.open { display: flex; }
+  .bmnfhint { font-size: 11px; color: var(--text-dim); }
+  #bmnfname {
+    height: 28px; border: none; border-radius: 6px; padding: 0 10px;
+    background: var(--field-bg); color: var(--field-text);
+    font-size: 12px; outline: none;
+  }
+  .bmnfbtns { display: flex; gap: 6px; }
+  .bmnfbtns button {
+    flex: 1; height: 26px; border: none; border-radius: 6px;
+    background: var(--accent); color: #fff; font-size: 12px; cursor: pointer;
+  }
+  .bmnfbtns button.cancel { background: var(--surface); color: var(--text); }
+  .bmfolder.tree.selected { outline: 1px solid var(--accent); }
 
   /* --- #14 fullscreen hover-reveal: the chrome view is resized by main to
      exactly one panel's region, and body[data-fs] shows only that panel --- */
@@ -549,6 +573,17 @@
     </header>
     <input id="bmsearch" type="text" placeholder="Search bookmarks" spellcheck="false">
     <div id="bmlist"></div>
+    <div id="bmfoot">
+      <div id="bmnewfolderrow">
+        <div class="bmnfhint" id="bmnfhint">New folder</div>
+        <input id="bmnfname" type="text" placeholder="Folder name (or Work/CI to nest)" spellcheck="false">
+        <div class="bmnfbtns">
+          <button id="bmnfsave">Create</button>
+          <button id="bmnfcancel" class="cancel">Cancel</button>
+        </div>
+      </div>
+      <button id="bmnewfolder">＋ New folder</button>
+    </div>
   </div>
   <div id="pwpanel">
     <header>
@@ -1172,6 +1207,48 @@
     document.getElementById('gpattern').value = '';
   };
 
+  // --- new folder, from the sidebar (#80) ---
+  const bmnfRow = document.getElementById('bmnewfolderrow');
+  const bmnfName = document.getElementById('bmnfname');
+  const bmnfHint = document.getElementById('bmnfhint');
+
+  function openFolderCreator() {
+    bmnfHint.textContent = bmParent
+      ? `New folder inside "${bmParent}"`
+      : 'New folder at the top level — or type Work/CI to nest';
+    bmnfName.value = '';
+    bmnfRow.classList.add('open');
+    bmnfName.focus();
+  }
+  function closeFolderCreator() {
+    bmnfRow.classList.remove('open');
+    bmnfName.value = '';
+  }
+  function createFolder() {
+    const raw = bmnfName.value.trim().replace(/^\/+|\/+$/g, '');
+    if (!raw) return closeFolderCreator();
+    // Selected folder becomes the parent; a typed path nests on its own.
+    const full = bmParent ? `${bmParent}/${raw}` : raw;
+    bmPending.add(full);
+    bmExpanded.add(full); // open it so you can drop straight in
+    let p = full;
+    while (p.includes('/')) { // reveal the whole chain down to it
+      p = p.slice(0, p.lastIndexOf('/'));
+      bmExpanded.add(p);
+    }
+    closeFolderCreator();
+    renderBookmarks(lastBookmarks);
+  }
+
+  document.getElementById('bmnewfolder').onclick = openFolderCreator;
+  document.getElementById('bmnfsave').onclick = createFolder;
+  document.getElementById('bmnfcancel').onclick = closeFolderCreator;
+  bmnfName.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') createFolder();
+    if (e.key === 'Escape') closeFolderCreator();
+    e.stopPropagation(); // typing here must never fire hotkeys
+  });
+
   // --- bookmark search (#27) ---
   const bmsearch = document.getElementById('bmsearch');
   bmsearch.addEventListener('input', () => renderBookmarks(lastBookmarks));
@@ -1190,6 +1267,8 @@
   let hotkeysMap = {}; // keyId -> {url, title}
   let lastBookmarks = [];
   let bmExpanded = new Set(); // #35: expanded folder paths (reset on panel open)
+  const bmPending = new Set();  // #80: folders created but not yet holding anything
+  let bmParent = null;          // #80: folder selected as the parent for a new one
   let capture = null;  // {url, title} while waiting for a key press
   const keyIdOf = (e) => (e.ctrlKey ? 'Ctrl+' : '') + (e.altKey ? 'Alt+' : '') + e.key;
   const keyForUrl = (url) => Object.keys(hotkeysMap).find((k) => hotkeysMap[k].url === url);
@@ -1275,14 +1354,16 @@
 
     // Build the nested tree: folder paths split on '/'.
     const root = { subs: new Map(), items: [] };
-    for (const b of list) {
+    const ensure = (path) => {
       let node = root;
-      for (const seg of (b.folder || '').split('/').filter(Boolean)) {
+      for (const seg of String(path || '').split('/').filter(Boolean)) {
         if (!node.subs.has(seg)) node.subs.set(seg, { subs: new Map(), items: [] });
         node = node.subs.get(seg);
       }
-      node.items.push(b);
-    }
+      return node;
+    };
+    for (const f of bmPending) ensure(f); // #80: show empty folders you just made
+    for (const b of list) ensure(b.folder).items.push(b);
     const nodes = [];
     const emit = (node, path, depth) => {
       for (const [name, sub] of [...node.subs.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
@@ -1293,7 +1374,9 @@
         h.style.paddingLeft = `${6 + depth * 14}px`;
         h.textContent = `${open ? '▾' : '▸'} ${name}`;
         h.title = subPath;
+        if (bmParent === subPath) h.classList.add('selected'); // #80
         h.onclick = () => {
+          bmParent = bmParent === subPath ? null : subPath; // #80: parent target
           if (open) bmExpanded.delete(subPath);
           else bmExpanded.add(subPath);
           renderBookmarks(lastBookmarks);
@@ -1304,7 +1387,10 @@
           e.preventDefault();
           h.classList.remove('dropping');
           const id = e.dataTransfer.getData('text/plain');
-          if (id) webforge.moveBookmark(id, subPath);
+          if (id) {
+            webforge.moveBookmark(id, subPath);
+            bmPending.delete(subPath); // #80: it holds something now, it's real
+          }
         };
         nodes.push(h);
         if (open) emit(sub, subPath, depth + 1);
