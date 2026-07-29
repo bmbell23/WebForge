@@ -61,7 +61,7 @@ class MainActivity : Activity() {
     private var activeIndex = 0
     private var urlEditing = false // #64: real focus state, not a latched flag
     private val sweepHandler = android.os.Handler(android.os.Looper.getMainLooper()) // #79
-    private var bmEditMode = false // #89: long-press a BOOKMARK to organise
+    private var bmEditMode = false // #89: long-press a BOOKMARK to organize
     private var pendingBmFolder: String? = null // #89: created, awaiting its first bookmark
     private val bmExpanded = mutableSetOf<String>() // #91: folders survive a re-render
     private var currentScroll: ScrollView? = null   // #91: so does scroll position
@@ -384,7 +384,7 @@ class MainActivity : Activity() {
      */
     private fun applyRemoteTabState() {
         val pid = Personas.activeId(this)
-        val closed = TabSync.mergedClosed[pid] ?: return
+        val closed = TabSync.mergedClosed[pid].orEmpty() // #94: no tombstones is NORMAL — never bail here
         val doomed = mutableListOf<Int>()
         for (i in tabs.indices) {
             val t = tabs[i]
@@ -400,17 +400,23 @@ class MainActivity : Activity() {
             for (i in doomed.sortedDescending()) closeTab(i, remote = true)
         }
 
-        // #93: a tab open on another device becomes a REAL tab here, inside the
-        // Persona it belongs to — not a separate read-only list.
-        val open = TabSync.mergedOpen[pid].orEmpty()
-        for ((url, info) in open) {
-            val (title, at) = info
-            if ((closed[url] ?: 0L) > at) continue      // closed more recently elsewhere
-            if (tabs.any { it.url == url }) continue     // already have it
-            val t = newTab(url, background = true, lazy = true)
-            t.persona = pid
-            t.openedAt = at
-            t.pendingTitle = title
+        // #94: adopt across EVERY Persona, not just the active one — otherwise
+        // the desktop's other workspaces never appear. A Persona id this device
+        // doesn't know yet (definitions still converging) falls back to
+        // Unassigned so the tabs are at least visible rather than silently lost.
+        val known = Personas.all(this).map { it.id }.toSet()
+        for ((remotePid, open) in TabSync.mergedOpen) {
+            val target = if (remotePid in known) remotePid else Personas.UNASSIGNED
+            val tombs = TabSync.mergedClosed[remotePid].orEmpty()
+            for ((url, info) in open) {
+                val (title, at) = info
+                if ((tombs[url] ?: 0L) > at) continue    // closed more recently elsewhere
+                if (tabs.any { it.url == url }) continue // already have it
+                val t = newTab(url, background = true, lazy = true)
+                t.persona = target
+                t.openedAt = at
+                t.pendingTitle = title
+            }
         }
         syncChrome()
     }
@@ -707,23 +713,38 @@ class MainActivity : Activity() {
 
     private fun showTabSheet(): Unit = openPanel { col ->
         title(col, "Tabs")
-        caption(
-            col,
-            "Tap to switch · long-press to rename or pin · swipe right to go back." 
-        )
+        caption(col, "Tap to switch · long-press to rename or pin · swipe right to go back.")
 
-        val actions = card(col)
-        action(actions, "＋ New tab") { closePanel(); newTab(START_URL) }
-
-        // #93: Persona dropdown at the top of THIS page, like the Windows sidebar.
+        // #94: Persona dropdown immediately under the header. Styled explicitly —
+        // the stock spinner item renders black-on-grey against our dark chrome.
         val activePersona = Personas.activeId(this)
         val plist = Personas.ordered(this)
+        val labels = plist.map { p -> "${p.name}   (${tabs.count { it.persona == p.id }})" }
+        val adapter = object : android.widget.ArrayAdapter<String>(
+            this, android.R.layout.simple_spinner_item, labels
+        ) {
+            private fun style(v: View, dropdown: Boolean): View {
+                (v as? TextView)?.apply {
+                    setTextColor(0xFFE8E8EA.toInt())
+                    textSize = 15f
+                    if (dropdown) {
+                        setBackgroundColor(0xFF131315.toInt())
+                        setPadding(dp(16), dp(14), dp(16), dp(14))
+                    } else {
+                        setPadding(dp(14), dp(6), dp(14), dp(6))
+                    }
+                }
+                return v
+            }
+            override fun getView(pos: Int, cv: View?, parent: android.view.ViewGroup): View =
+                style(super.getView(pos, cv, parent), false)
+            override fun getDropDownView(pos: Int, cv: View?, parent: android.view.ViewGroup): View =
+                style(super.getDropDownView(pos, cv, parent), true)
+        }
         val spinner = android.widget.Spinner(this).apply {
             setBackgroundResource(R.drawable.pill_bg)
-            val labels = plist.map { p -> "${p.name}  (${tabs.count { it.persona == p.id }})" }
-            adapter = android.widget.ArrayAdapter(
-                this@MainActivity, android.R.layout.simple_spinner_item, labels
-            ).apply { setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
+            setPopupBackgroundDrawable(android.graphics.drawable.ColorDrawable(0xFF131315.toInt()))
+            this.adapter = adapter
             setSelection(plist.indexOfFirst { it.id == activePersona }.coerceAtLeast(0), false)
             onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
                 override fun onItemSelected(a: android.widget.AdapterView<*>?, v: View?, pos: Int, id: Long) {
@@ -743,52 +764,31 @@ class MainActivity : Activity() {
         }
         col.addView(
             spinner,
-            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(40))
-                .apply { bottomMargin = dp(12) }
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44))
+                .apply { bottomMargin = dp(14) }
         )
-        val order = tabs.indices
+
+        // #94: a flat list of this Persona's tabs. Quick-launch and pinned float
+        // to the top; no folders, no carets, no grouping menus.
+        val mine = tabs.indices
             .filter { tabs[it].persona == activePersona }
             .sortedWith(compareBy({ if (tabs[it].quick) 0 else if (tabs[it].pinned) 1 else 2 }, { it }))
-        var lastGroup = -1
-        for (i in order.filter { tabs[it].quick || tabs[it].pinned }) {
-            val group = if (tabs[i].quick) 0 else 1
-            if (group != lastGroup) {
-                header(col, if (group == 0) "PINNED TO TOP" else "PINNED")
-                lastGroup = group
-            }
-            tabRow(col, i, 0)
-        }
+        for (i in mine) tabRow(col, i, 0)
 
-        val rest = order.filter { !tabs[it].quick && !tabs[it].pinned }
-        val folders = rest.map { tabs[it].folder }.filter { it.isNotEmpty() }.distinct().sorted()
-        for (f in folders) {
-            val head = TextView(this).apply {
-                text = "📁  $f"
-                setTextColor(0xFFE8E8EA.toInt())
-                textSize = 13f
-                setTypeface(null, android.graphics.Typeface.BOLD)
-                setPadding(dp(4), dp(14), dp(4), dp(6))
-            }
-            // Dropping a tab on a folder header files it there.
-            head.setOnDragListener { _, ev ->
-                if (ev.action == android.view.DragEvent.ACTION_DROP) {
-                    val from = ev.clipData?.getItemAt(0)?.text?.toString()?.toIntOrNull()
-                    if (from != null) {
-                        tabs[from].folder = f
-                        showTabSheet()
-                    }
-                }
-                true
-            }
-            col.addView(head)
-            for (i in rest.filter { tabs[it].folder == f }) tabRow(col, i, 16)
+        // New tab sits at the BOTTOM and reads like one more tab.
+        val addRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(8), dp(13), dp(8), dp(13))
+            isClickable = true
+            setOnClickListener { closePanel(); newTab(START_URL) }
         }
-
-        val loose = rest.filter { tabs[it].folder.isEmpty() }
-        if (loose.isNotEmpty()) {
-            header(col, "OPEN TABS")
-            for (i in loose) tabRow(col, i, 0)
-        }
+        addRow.addView(TextView(this).apply {
+            text = "＋   New tab"
+            setTextColor(0xFF7C7C82.toInt())
+            textSize = 15f
+        })
+        col.addView(addRow)
     }
 
     /** #86: name a new tab folder (never window.prompt — inline, as everywhere). */
@@ -1038,14 +1038,14 @@ class MainActivity : Activity() {
         caption(
             col,
             if (bmEditMode) "Editing: hold ☰ to drag into a folder, ✎ to edit. Swipe right to leave."
-            else "Tap to open · long-press to organise · swipe right to go back."
+            else "Tap to open · long-press to organize · swipe right to go back."
         )
         val bmActions = card(col)
         if (bmEditMode) {
             action(bmActions, "＋ New folder") { showBmFolderCreator() }
             action(bmActions, "Done editing") { bmEditMode = false; showBookmarks() }
         } else {
-            action(bmActions, "Organise bookmarks", "Drag into folders, rename, re-file") {
+            action(bmActions, "Organize bookmarks", "Drag into folders, rename, re-file") {
                 bmEditMode = true
                 showBookmarks()
             }
