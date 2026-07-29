@@ -94,18 +94,16 @@ class MainActivity : Activity() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             window.setDecorFitsSystemWindows(false) // we position around insets
             window.insetsController?.apply {
-                hide(WindowInsets.Type.navigationBars())
-                systemBarsBehavior = WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-                // Clear the light-status-bar flag so icons stay white on black.
+                // #85: navigation bar STAYS — the user needs the gesture pill to
+                // swipe out of the app. We draw edge-to-edge and pad around both
+                // bars instead of hiding them.
                 setSystemBarsAppearance(0, WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS)
             }
         } else {
             @Suppress("DEPRECATION")
             window.decorView.systemUiVisibility =
                 View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
-                    View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or
-                    View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
-                    View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                    View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION // #85: bars stay visible
         }
         // #60: with decorFitsSystemWindows(false) Android paints a translucent
         // CONTRAST SCRIM behind the status bar — that's the "gray" over our
@@ -142,11 +140,26 @@ class MainActivity : Activity() {
             val padded = (top * 0.75f).toInt()
             findViewById<View>(R.id.statusSpacer).layoutParams =
                 LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, padded)
+            // #85: keep the page clear of the navigation pill.
+            val bottom = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                insets.getInsets(WindowInsets.Type.navigationBars()).bottom
+            } else {
+                @Suppress("DEPRECATION")
+                insets.systemWindowInsetBottom
+            }
+            findViewById<View>(R.id.webContainer).setPadding(0, 0, 0, bottom)
             // Panels must clear the status bar too.
-            overlay.setPadding(0, padded, 0, 0)
+            overlay.setPadding(0, padded, 0, bottom)
             insets
         }
         root.requestApplyInsets()
+    }
+
+    // #85: see every touch before children consume it, so a panel swipe works
+    // even over a scrolling list.
+    override fun dispatchTouchEvent(ev: android.view.MotionEvent): Boolean {
+        if (overlay.visibility == View.VISIBLE) panelSwipe.onTouchEvent(ev)
+        return super.dispatchTouchEvent(ev)
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
@@ -387,8 +400,8 @@ class MainActivity : Activity() {
         overlay.removeAllViews()
         overlay.addView(scroll)
         overlay.visibility = View.VISIBLE
-        @Suppress("ClickableViewAccessibility")
-        overlay.setOnTouchListener { _, ev -> panelSwipe.onTouchEvent(ev); false } // #84
+        // #85: the swipe listener used to live here, but the panel's ScrollView
+        // is a child and swallowed the gesture. Handled in dispatchTouchEvent.
     }
 
     private fun closePanel() {
@@ -609,6 +622,7 @@ class MainActivity : Activity() {
             setPadding(dp(8 + depth * 16), dp(9), dp(8), dp(9))
             isClickable = true
             setOnClickListener { closePanel(); navigate(b.url) }
+            setOnLongClickListener { showBookmarkEditor(b); true } // #85
         }
         line.addView(TextView(this).apply {
             text = b.title
@@ -680,6 +694,7 @@ class MainActivity : Activity() {
 
     private fun showBookmarks(): Unit = openPanel { col ->
         title(col, "Bookmarks")
+        caption(col, "Tap to open · long-press to edit · swipe right to go back.")
 
         val all = BookmarkStore.all(this)
         if (all.isEmpty()) {
@@ -715,6 +730,50 @@ class MainActivity : Activity() {
             BookmarkStore.sync(this) { ok -> runOnUiThread { if (ok) showBookmarks() } }
         }
         row(col, "Close") { closePanel() }
+    }
+
+    // #85: long-press editor — the phone could only open bookmarks before.
+    private fun showBookmarkEditor(b: Bookmark): Unit = openPanel { col ->
+        title(col, "Edit bookmark")
+        caption(col, "Changes sync back to your other devices when you're on the home network.")
+
+        fun field(label: String, value: String): EditText {
+            col.addView(TextView(this).apply {
+                text = label.uppercase()
+                setTextColor(0xFF7C7C82.toInt())
+                textSize = 11f
+                setPadding(dp(4), dp(10), 0, dp(4))
+            })
+            val e = EditText(this).apply {
+                setText(value)
+                setTextColor(0xFFE8E8EA.toInt())
+                textSize = 14f
+                setBackgroundResource(R.drawable.pill_bg)
+                setPadding(dp(14), dp(10), dp(14), dp(10))
+                maxLines = 1
+            }
+            col.addView(e)
+            return e
+        }
+
+        val title = field("Title", b.title)
+        val url = field("URL", b.url)
+        val folder = field("Folder (use / to nest)", b.folder)
+
+        val actions = card(col)
+        action(actions, "Save changes") {
+            BookmarkStore.update(this, b.id, title.text.toString().trim(),
+                url.text.toString().trim(), folder.text.toString().trim())
+            closePanel()
+            showBookmarks()
+        }
+        action(actions, "Open this bookmark") { closePanel(); navigate(b.url) }
+        action(actions, "Delete bookmark", "Removes it here and on your other devices") {
+            BookmarkStore.remove(this, b.id)
+            closePanel()
+            showBookmarks()
+        }
+        action(actions, "Cancel") { closePanel(); showBookmarks() }
     }
 
     private fun showSettings(): Unit = openPanel { col ->
