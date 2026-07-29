@@ -35,7 +35,9 @@ class Tab(val id: Int, val webView: WebView) {
     var pinned = false
     var quick = false // #54: quick-launch (the phone's answer to hotkey tabs)
     var lastActiveAt = System.currentTimeMillis() // #79: for inactivity expiry
-    val title: String get() = webView.title?.takeIf { it.isNotBlank() } ?: url
+    var folder = ""      // #86: manual grouping, set in tab edit mode
+    var label: String? = null // #86: user-given name overriding the page title
+    val title: String get() = label ?: webView.title?.takeIf { it.isNotBlank() } ?: url
     val url: String get() = webView.url ?: "about:blank"
 }
 
@@ -55,6 +57,7 @@ class MainActivity : Activity() {
     private var activeIndex = 0
     private var urlEditing = false // #64: real focus state, not a latched flag
     private val sweepHandler = android.os.Handler(android.os.Looper.getMainLooper()) // #79
+    private var tabEditMode = false // #86: long-press a tab to organise
     private var nextTabId = 1
 
     private val active: Tab? get() = tabs.getOrNull(activeIndex)
@@ -523,48 +526,236 @@ class MainActivity : Activity() {
         col.addView(line)
     }
 
+    // #86: one row per tab. In edit mode it grows a ☰ drag handle and a ✎
+    // pencil; otherwise it's a plain tap-to-switch row.
+    private fun tabRow(parent: LinearLayout, index: Int, indent: Int) {
+        val t = tabs[index]
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(8 + indent), dp(11), dp(8), dp(11))
+        }
+
+        if (tabEditMode) {
+            row.addView(TextView(this).apply {
+                text = "☰"
+                setTextColor(0xFF7C7C82.toInt())
+                textSize = 17f
+                setPadding(0, 0, dp(12), 0)
+                setOnLongClickListener {
+                    // Carry the tab's index; rows and folder headers accept it.
+                    val data = android.content.ClipData.newPlainText("tabIndex", index.toString())
+                    startDragAndDrop(data, View.DragShadowBuilder(row), null, 0)
+                    true
+                }
+                setOnClickListener {
+                    android.widget.Toast
+                        .makeText(this@MainActivity, "Press and hold ☰ to drag", android.widget.Toast.LENGTH_SHORT)
+                        .show()
+                }
+            })
+        }
+
+        row.addView(TextView(this).apply {
+            text = (if (index == activeIndex) "▸ " else "") + t.title
+            setTextColor(if (index == activeIndex) 0xFF3D9BFF.toInt() else 0xFFE8E8EA.toInt())
+            textSize = 15f
+            maxLines = 1
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            setOnClickListener {
+                if (!tabEditMode) { closePanel(); activateTab(index) }
+            }
+            setOnLongClickListener { tabEditMode = true; showTabSheet(); true } // #86
+        })
+
+        if (tabEditMode) {
+            row.addView(TextView(this).apply {
+                text = "✎"
+                setTextColor(0xFF7C7C82.toInt())
+                textSize = 15f
+                setPadding(dp(12), 0, dp(6), 0)
+                setOnClickListener { showTabEditor(index) }
+            })
+        } else if (!t.pinned) {
+            row.addView(TextView(this).apply {
+                text = "✕"
+                setTextColor(0xFF7C7C82.toInt())
+                textSize = 16f
+                setPadding(dp(14), 0, dp(4), 0)
+                setOnClickListener { closePanel(); closeTab(index) }
+            })
+        }
+
+        // Any row is a drop target: dropping on it re-orders to that position.
+        row.setOnDragListener { _, ev ->
+            when (ev.action) {
+                android.view.DragEvent.ACTION_DROP -> {
+                    val from = ev.clipData?.getItemAt(0)?.text?.toString()?.toIntOrNull()
+                    if (from != null && from != index) moveTab(from, index, t.folder)
+                    true
+                }
+                android.view.DragEvent.ACTION_DRAG_STARTED -> true
+                else -> true
+            }
+        }
+        parent.addView(row)
+    }
+
+    /** #86: move a tab to a new position, optionally re-filing it. */
+    private fun moveTab(from: Int, to: Int, folder: String) {
+        if (from !in tabs.indices || to !in tabs.indices) return
+        val moving = tabs[from]
+        val wasActive = from == activeIndex
+        moving.folder = folder
+        tabs.removeAt(from)
+        tabs.add(to.coerceIn(0, tabs.size), moving)
+        activeIndex = tabs.indexOf(if (wasActive) moving else tabs.getOrNull(activeIndex) ?: moving)
+        showTabSheet()
+    }
+
     private fun showTabSheet(): Unit = openPanel { col ->
         title(col, "Tabs")
-        caption(col, "Swipe right to go back.")
-        row(col, "＋  New tab") { closePanel(); newTab(START_URL) }
+        caption(
+            col,
+            if (tabEditMode) {
+                "Editing: hold ☰ to drag a tab, drop it on a folder to file it, ✎ to rename."
+            } else {
+                "Tap to switch · long-press to organise · swipe right to go back."
+            }
+        )
 
-        // Quick-launch tabs stick to the top, then pinned, then the rest (#51).
+        val actions = card(col)
+        if (tabEditMode) {
+            action(actions, "＋ New folder", "Group tabs together") { showFolderCreator() }
+            action(actions, "Done editing") { tabEditMode = false; showTabSheet() }
+        } else {
+            action(actions, "＋ New tab") { closePanel(); newTab(START_URL) }
+            action(actions, "Organise tabs", "Reorder, group and rename") {
+                tabEditMode = true
+                showTabSheet()
+            }
+        }
+
+        // Quick launch and pinned stay pinned to the top; then folders; then the rest.
         val order = tabs.indices.sortedWith(
             compareBy({ if (tabs[it].quick) 0 else if (tabs[it].pinned) 1 else 2 }, { it })
         )
         var lastGroup = -1
-        for (i in order) {
-            val t = tabs[i]
-            val group = if (t.quick) 0 else if (t.pinned) 1 else 2
+        for (i in order.filter { tabs[it].quick || tabs[it].pinned }) {
+            val group = if (tabs[i].quick) 0 else 1
             if (group != lastGroup) {
-                header(col, when (group) { 0 -> "QUICK LAUNCH"; 1 -> "PINNED"; else -> "OPEN TABS" })
+                header(col, if (group == 0) "PINNED TO TOP" else "PINNED")
                 lastGroup = group
             }
-            val line = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                setPadding(0, dp(10), 0, dp(10))
-            }
-            line.addView(TextView(this).apply {
-                text = (if (i == activeIndex) "▸ " else "") + t.title
-                setTextColor(if (i == activeIndex) 0xFF3D9BFF.toInt() else 0xFFE8E8EA.toInt())
-                textSize = 15f
-                maxLines = 1
-                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-                setOnClickListener { closePanel(); activateTab(i) }
-            })
-            if (!t.pinned) {
-                line.addView(TextView(this).apply {
-                    text = "✕"
-                    setTextColor(0xFF7C7C82.toInt())
-                    textSize = 16f
-                    setPadding(dp(14), 0, dp(4), 0)
-                    setOnClickListener { closePanel(); closeTab(i) }
-                })
-            }
-            col.addView(line)
+            tabRow(col, i, 0)
         }
-        row(col, "Close") { closePanel() }
+
+        val rest = order.filter { !tabs[it].quick && !tabs[it].pinned }
+        val folders = rest.map { tabs[it].folder }.filter { it.isNotEmpty() }.distinct().sorted()
+        for (f in folders) {
+            val head = TextView(this).apply {
+                text = "📁  $f"
+                setTextColor(0xFFE8E8EA.toInt())
+                textSize = 13f
+                setTypeface(null, android.graphics.Typeface.BOLD)
+                setPadding(dp(4), dp(14), dp(4), dp(6))
+            }
+            if (tabEditMode) {
+                head.setOnClickListener { showFolderEditor(f) }
+            }
+            // Dropping a tab on a folder header files it there.
+            head.setOnDragListener { _, ev ->
+                if (ev.action == android.view.DragEvent.ACTION_DROP) {
+                    val from = ev.clipData?.getItemAt(0)?.text?.toString()?.toIntOrNull()
+                    if (from != null) {
+                        tabs[from].folder = f
+                        showTabSheet()
+                    }
+                }
+                true
+            }
+            col.addView(head)
+            for (i in rest.filter { tabs[it].folder == f }) tabRow(col, i, 16)
+        }
+
+        val loose = rest.filter { tabs[it].folder.isEmpty() }
+        if (loose.isNotEmpty()) {
+            header(col, "OPEN TABS")
+            for (i in loose) tabRow(col, i, 0)
+        }
+
+        action(card(col), "Close") { tabEditMode = false; closePanel() }
+    }
+
+    /** #86: name a new tab folder (never window.prompt — inline, as everywhere). */
+    private fun showFolderCreator(): Unit = openPanel { col ->
+        title(col, "New tab folder")
+        val name = EditText(this).apply {
+            hint = "Folder name"
+            setHintTextColor(0xFF7C7C82.toInt())
+            setTextColor(0xFFE8E8EA.toInt())
+            setBackgroundResource(R.drawable.pill_bg)
+            setPadding(dp(14), dp(10), dp(14), dp(10))
+            maxLines = 1
+        }
+        col.addView(name)
+        val c = card(col)
+        action(c, "Create") {
+            val n = name.text.toString().trim()
+            // A folder exists once a tab is in it, so put the current tab there.
+            if (n.isNotEmpty()) active?.folder = n
+            showTabSheet()
+        }
+        action(c, "Cancel") { showTabSheet() }
+    }
+
+    private fun showFolderEditor(folder: String): Unit = openPanel { col ->
+        title(col, "Edit folder")
+        val name = EditText(this).apply {
+            setText(folder)
+            setTextColor(0xFFE8E8EA.toInt())
+            setBackgroundResource(R.drawable.pill_bg)
+            setPadding(dp(14), dp(10), dp(14), dp(10))
+            maxLines = 1
+        }
+        col.addView(name)
+        val c = card(col)
+        action(c, "Rename") {
+            val n = name.text.toString().trim()
+            if (n.isNotEmpty()) tabs.filter { it.folder == folder }.forEach { it.folder = n }
+            showTabSheet()
+        }
+        action(c, "Ungroup", "Tabs move out of the folder — none are closed") {
+            tabs.filter { it.folder == folder }.forEach { it.folder = "" }
+            showTabSheet()
+        }
+        action(c, "Cancel") { showTabSheet() }
+    }
+
+    private fun showTabEditor(index: Int): Unit = openPanel { col ->
+        val t = tabs.getOrNull(index) ?: return@openPanel
+        title(col, "Edit tab")
+        caption(col, t.url)
+        val name = EditText(this).apply {
+            setText(t.title)
+            setTextColor(0xFFE8E8EA.toInt())
+            setBackgroundResource(R.drawable.pill_bg)
+            setPadding(dp(14), dp(10), dp(14), dp(10))
+            maxLines = 1
+        }
+        col.addView(name)
+        val folders = tabs.map { it.folder }.filter { it.isNotEmpty() }.distinct().sorted()
+        val c = card(col)
+        action(c, "Save name") {
+            t.label = name.text.toString().trim().ifEmpty { null }
+            showTabSheet()
+        }
+        for (f in folders) {
+            if (f != t.folder) action(c, "Move to \"$f\"") { t.folder = f; showTabSheet() }
+        }
+        if (t.folder.isNotEmpty()) action(c, "Remove from \"${t.folder}\"") { t.folder = ""; showTabSheet() }
+        action(c, if (t.quick) "Unpin from top" else "Pin to top") { t.quick = !t.quick; showTabSheet() }
+        action(c, "Cancel") { showTabSheet() }
     }
 
     private fun showMenu(): Unit = openPanel { col ->
