@@ -380,6 +380,8 @@ function starCurrent() {
     url,
     folder: existing?.folder || '',
     exists: Boolean(existing),
+    claim: personas.claimFor(url), // #70
+    personas: personas.all().map((p) => ({ id: p.id, name: p.name })),
   });
 }
 
@@ -1193,7 +1195,13 @@ ipcMain.on('toggle-star', () => locked || starCurrent());
 ipcMain.on('bm-edit-request', (_e, id) => {
   if (locked) return;
   const b = bookmarks.all().find((x) => x.id === id);
-  if (b) openBookmarkDialog({ id: b.id, title: b.title, url: b.url, folder: b.folder || '', exists: true });
+  if (b) {
+    openBookmarkDialog({
+      id: b.id, title: b.title, url: b.url, folder: b.folder || '', exists: true,
+      claim: personas.claimFor(b.url), // #70
+      personas: personas.all().map((p) => ({ id: p.id, name: p.name })),
+    });
+  }
 });
 ipcMain.on('bm-save', (_e, { id, title, url, folder }) => {
   if (locked) return;
@@ -1328,6 +1336,19 @@ ipcMain.handle('int:about', () => {
     },
     sections: shared.sections || [],
   };
+});
+ipcMain.handle('int:claim-for', (_e, url) => personas.claimFor(String(url || '')));
+ipcMain.handle('int:assign-persona', (_e, { url, personaId, force }) => {
+  if (locked) return { ok: false, error: 'Locked.' };
+  const res = personas.assign(String(url || ''), String(personaId || ''), { force: Boolean(force) });
+  if (res.ok) {
+    // Rules changed — re-home every open tab so routing takes effect at once.
+    for (const tid of tabOrder) {
+      personaByTab.set(tid, personas.forUrl(tabs.get(tid).webContents.getURL()));
+    }
+    pushState();
+  }
+  return res;
 });
 ipcMain.handle('int:get-bookmarks', () => bookmarks.all());
 ipcMain.handle('int:get-hotkeys', () => hotkeys.all(personas.activeId()));

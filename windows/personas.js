@@ -113,4 +113,69 @@ function forUrl(url) {
   return UNASSIGNED;
 }
 
-module.exports = { UNASSIGNED, all, get, activeId, setActive, add, remove, update, forUrl, matches };
+// --- #70: assigning a bookmark to a Persona -----------------------------
+// A bookmark 'belongs' to a Persona by way of a rule that matches its URL.
+// The origin is the useful granularity: assigning one Jira ticket should route
+// all of Jira.
+function originOf(url) {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return null;
+  }
+}
+
+/** Which Persona claims this URL, and by which rule? */
+function claimFor(url) {
+  for (const p of all()) {
+    if (p.id === UNASSIGNED) continue;
+    const rule = (p.rules || []).find((r) => matches(url, r));
+    if (rule) return { personaId: p.id, name: p.name, rule };
+  }
+  return null;
+}
+
+/**
+ * Route `url`'s origin to `personaId`.
+ * Never creates a second claim: forUrl() returns the FIRST match, so a
+ * duplicate rule would be dead weight and the bookmark would appear not to
+ * move. An existing claim is relocated instead, and a claim broader than the
+ * origin needs `force` because dropping it re-routes other sites too.
+ */
+function assign(url, personaId, opts = {}) {
+  const origin = originOf(url);
+  if (!origin) return { ok: false, error: 'That URL has no usable origin.' };
+  const target = personaId === UNASSIGNED ? null : get(personaId);
+  if (personaId !== UNASSIGNED && !target) return { ok: false, error: 'No such Persona.' };
+
+  const claim = claimFor(url);
+  if (claim && claim.personaId === personaId) {
+    return { ok: true, unchanged: true, rule: claim.rule, name: claim.name };
+  }
+  if (claim) {
+    const broader = claim.rule.replace(/\*+$/, '').length < origin.length;
+    if (broader && !opts.force) {
+      return {
+        ok: false,
+        needsConfirm: true,
+        from: claim.name,
+        rule: claim.rule,
+        error:
+          `"${claim.rule}" is broader than ${origin}, so removing it also un-routes ` +
+          `everything else it matches.`,
+      };
+    }
+    const owner = get(claim.personaId);
+    owner.rules = owner.rules.filter((r) => r !== claim.rule);
+  }
+  if (target) {
+    if (!target.rules.includes(origin)) target.rules.push(origin);
+  }
+  save();
+  return { ok: true, moved: Boolean(claim), from: claim?.name || null, rule: origin };
+}
+
+module.exports = {
+  UNASSIGNED, all, get, activeId, setActive, add, remove, update, forUrl, matches,
+  originOf, claimFor, assign,
+};

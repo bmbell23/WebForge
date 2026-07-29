@@ -84,6 +84,12 @@
     height: 30px; border: none; border-radius: 6px; padding: 0 10px;
     background: var(--field); color: var(--field-text); font-size: 13px; outline: none;
   }
+  .editform select {
+    height: 30px; border: none; border-radius: 6px; padding: 0 8px;
+    background: var(--field); color: var(--field-text); font-size: 13px; outline: none;
+  }
+  .pmsg { font-size: 11.5px; line-height: 1.45; color: var(--dim); }
+  .pmsg.warn { color: #e0a33a; }
   .editform .btns { display: flex; gap: 6px; }
   .editform .btns button {
     flex: 1; height: 28px; border: none; border-radius: 6px;
@@ -195,10 +201,42 @@
     const title = Object.assign(document.createElement('input'), { value: b.title || '', placeholder: 'Title' });
     const url = Object.assign(document.createElement('input'), { value: b.url || '', placeholder: 'URL' });
     const folder = Object.assign(document.createElement('input'), { value: b.folder || '', placeholder: 'Folder (use / to nest)' });
+
+    // #70: Persona routing for this bookmark's origin.
+    const persona = document.createElement('select');
+    const pmsg = document.createElement('div');
+    pmsg.className = 'pmsg';
+    let claim = null;
+    (async () => {
+      const [{ personas }, c] = await Promise.all([wf.getPersonas(), wf.claimFor(b.url)]);
+      claim = c;
+      persona.replaceChildren(...personas.map((p) => new Option(p.name, p.id)));
+      persona.value = claim ? claim.personaId : 'unassigned';
+      pmsg.textContent = claim
+        ? `Currently routed to ${claim.name} by rule "${claim.rule}".`
+        : 'Not routed to any Persona — opens in Unassigned.';
+    })();
+
     const btns = document.createElement('div');
     btns.className = 'btns';
     const save = Object.assign(document.createElement('button'), { textContent: 'Save' });
     save.onclick = async () => {
+      const want = persona.value;
+      const current = claim ? claim.personaId : 'unassigned';
+      if (want !== current) {
+        let res = await wf.assignPersona(url.value.trim(), want, false);
+        if (res && res.needsConfirm) {
+          pmsg.textContent = res.error;
+          pmsg.className = 'pmsg warn';
+          if (!confirm(`${res.error}\n\nRemove it and route this origin instead?`)) return;
+          res = await wf.assignPersona(url.value.trim(), want, true);
+        }
+        if (res && !res.ok) {
+          pmsg.textContent = res.error || 'Could not change Persona.';
+          pmsg.className = 'pmsg warn';
+          return;
+        }
+      }
       await wf.saveBookmark({ id: b.id, title: title.value.trim(), url: url.value.trim(), folder: folder.value.trim() });
       editing = null;
       load();
@@ -206,7 +244,7 @@
     const cancel = Object.assign(document.createElement('button'), { textContent: 'Cancel', className: 'cancel' });
     cancel.onclick = () => { editing = null; render(); };
     btns.append(save, cancel);
-    f.append(title, url, folder, btns);
+    f.append(title, url, folder, persona, pmsg, btns);
     // Ctrl+Enter saves from any field (Enter alone does too, since these are
     // single-line inputs); Esc cancels.
     for (const input of [title, url, folder]) {

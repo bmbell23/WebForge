@@ -349,6 +349,11 @@
     display: flex; flex-direction: column; gap: 8px;
   }
   #bmdialog h3 { margin: 0 0 4px; font-size: 15px; }
+  .dlgnote {
+    font-size: 11.5px; line-height: 1.45;
+    color: var(--text-dim); margin-top: -2px;
+  }
+  .dlgnote.warn { color: #e0a33a; }
   .dlglabel {
     font-size: 11px; font-weight: 600;
     color: var(--text-dim);
@@ -561,6 +566,9 @@
       <input id="bmdlgurl" type="text" placeholder="https://…" spellcheck="false">
       <label class="dlglabel">Folder</label>
       <select id="bmdlgfolder"></select>
+      <label class="dlglabel">Persona</label>
+      <select id="bmdlgpersona"></select>
+      <div id="bmdlgpersonamsg" class="dlgnote"></div>
       <input id="bmdlgnewfolder" type="text" placeholder="New folder name (use / to nest)"
              spellcheck="false" style="display:none">
       <div class="btnrow">
@@ -921,14 +929,36 @@
     if (bmdlgId) webforge.removeBookmark(bmdlgId);
     else webforge.closeBookmarkDialog();
   };
-  document.getElementById('bmdlgsave').onclick = () => {
+  let dlgClaim = null; // #70: the Persona rule currently claiming this URL
+  document.getElementById('bmdlgsave').onclick = async () => {
     const folder =
       bmdlgfolder.value === '__new__' ? bmdlgnewfolder.value.trim() : bmdlgfolder.value;
-    if (!bmdlgurl.value.trim()) return;
+    const url = bmdlgurl.value.trim();
+    if (!url) return;
+
+    // #70: apply the Persona choice first, so a refused move doesn't silently
+    // save the bookmark while leaving routing untouched.
+    const want = document.getElementById('bmdlgpersona').value;
+    const current = dlgClaim ? dlgClaim.personaId : 'unassigned';
+    if (want !== current) {
+      const msg = document.getElementById('bmdlgpersonamsg');
+      let res = await webforge.assignPersona(url, want, false);
+      if (res && res.needsConfirm) {
+        msg.textContent = res.error;
+        msg.className = 'dlgnote warn';
+        if (!confirm(`${res.error}\n\nRemove it and route this origin instead?`)) return;
+        res = await webforge.assignPersona(url, want, true);
+      }
+      if (res && !res.ok) {
+        msg.textContent = res.error || 'Could not change Persona.';
+        msg.className = 'dlgnote warn';
+        return;
+      }
+    }
     webforge.saveBookmark({
       id: bmdlgId,
-      title: bmdlgname.value.trim() || bmdlgurl.value.trim(),
-      url: bmdlgurl.value.trim(),
+      title: bmdlgname.value.trim() || url,
+      url,
       folder,
     });
   };
@@ -955,6 +985,17 @@
     bmdlgfolder.value = folders.includes(data.folder) ? data.folder : '';
     bmdlgnewfolder.style.display = 'none';
     bmdlgnewfolder.value = '';
+    // #70: Persona routing for this bookmark's origin.
+    dlgClaim = data.claim || null;
+    const pSel = document.getElementById('bmdlgpersona');
+    pSel.replaceChildren(
+      ...(data.personas || []).map((p) => new Option(p.name, p.id))
+    );
+    pSel.value = dlgClaim ? dlgClaim.personaId : 'unassigned';
+    document.getElementById('bmdlgpersonamsg').textContent = dlgClaim
+      ? `Currently routed to ${dlgClaim.name} by rule "${dlgClaim.rule}".`
+      : 'Not routed to any Persona — it opens in Unassigned.';
+    document.getElementById('bmdlgpersonamsg').className = 'dlgnote';
     bmdlgname.focus();
     bmdlgname.select();
   });

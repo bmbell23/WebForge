@@ -35,6 +35,7 @@ contextBridge.exposeInMainWorld('webforge', {
   // bookmark edit dialog (#29)
   editBookmark: (id) => ipcRenderer.send('bm-edit-request', id),
   saveBookmark: (b) => ipcRenderer.send('bm-save', b),
+  assignPersona: (url, personaId, force) => ipcRenderer.invoke('int:assign-persona', { url, personaId, force }), // #70
   closeBookmarkDialog: () => ipcRenderer.send('bm-close'),
   onBookmarkEdit: (cb) => ipcRenderer.on('bm-edit', (_e, data) => cb(data)),
   // settings (#24)

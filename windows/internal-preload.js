@@ -22,6 +22,8 @@ contextBridge.exposeInMainWorld('wf', {
   addPersona: (name) => ipcRenderer.invoke('int:add-persona', name),
   updatePersona: (p) => ipcRenderer.invoke('int:update-persona', p),
   deletePersona: (id) => ipcRenderer.invoke('int:delete-persona', id),
+  claimFor: (url) => ipcRenderer.invoke('int:claim-for', url), // #70
+  assignPersona: (url, personaId, force) => ipcRenderer.invoke('int:assign-persona', { url, personaId, force }),
   // bookmarks
   getBookmarks: () => ipcRenderer.invoke('int:get-bookmarks'),
   getHotkeys: () => ipcRenderer.invoke('int:get-hotkeys'),
