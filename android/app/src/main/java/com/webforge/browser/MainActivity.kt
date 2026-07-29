@@ -204,6 +204,9 @@ class MainActivity : Activity() {
         // #96: URL rules decide the Persona at creation, so tabs never sit in
         // Unassigned waiting to be clicked.
         tab.persona = Personas.forUrl(this, url ?: "")
+        // #95: this URL is open again — drop any tombstone, or we would keep
+        // publishing "closed" for a tab that is plainly sitting right here.
+        url?.let { TabSync.forgetClose(it) }
 
         wv.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView, req: WebResourceRequest): Boolean {
@@ -395,12 +398,14 @@ class MainActivity : Activity() {
      * quick-launch tabs.
      */
     private fun applyRemoteTabState() {
-        val pid = Personas.activeId(this)
-        val closed = TabSync.mergedClosed[pid].orEmpty() // #94: no tombstones is NORMAL — never bail here
         val doomed = mutableListOf<Int>()
         for (i in tabs.indices) {
             val t = tabs[i]
-            val closedAt = closed[t.url] ?: 0L
+            // #95: tombstones from every Persona and every device, ours included.
+            // Scoping this to the active Persona meant a tab in any other one
+            // could never be closed remotely. (#94: no tombstones at all is the
+            // NORMAL case — never bail out here.)
+            val closedAt = TabSync.closedAt(t.url)
             if (closedAt <= t.openedAt) continue
             if (i == activeIndex || t.pinned || t.quick) {
                 t.openedAt = System.currentTimeMillis() // resurrect and republish
@@ -417,12 +422,13 @@ class MainActivity : Activity() {
         // doesn't know yet (definitions still converging) falls back to
         // Unassigned so the tabs are at least visible rather than silently lost.
         val known = Personas.all(this).map { it.id }.toSet()
+        val me = TabSync.deviceId(this)
         for ((remotePid, open) in TabSync.mergedOpen) {
             val target = if (remotePid in known) remotePid else Personas.UNASSIGNED
-            val tombs = TabSync.mergedClosed[remotePid].orEmpty()
             for ((url, info) in open) {
-                val (title, at) = info
-                if ((tombs[url] ?: 0L) > at) continue    // closed more recently elsewhere
+                val (title, at, dev) = info
+                if (dev == me) continue                  // #95: our own echo
+                if (TabSync.closedAt(url) > at) continue // closed more recently anywhere
                 if (tabs.any { it.url == url }) continue // already have it
                 val t = newTab(url, background = true, lazy = true)
                 // #96: match locally first — don't trust the other device's

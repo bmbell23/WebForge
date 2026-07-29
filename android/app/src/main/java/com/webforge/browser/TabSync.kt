@@ -12,23 +12,38 @@ data class RemoteDevice(val name: String, val tabs: List<RemoteTab>)
 /**
  * Cross-device tabs (#57), phase 1.
  *
- * Each device publishes its own per-Persona tab list under a stable device id;
- * every device reads the others'. Deliberately **non-destructive**: a tab
- * disappearing from a remote list never closes anything locally. Full mirroring
- * (closes propagating) waits for the undo / recently-closed net, because a
- * mis-tap on one device would otherwise destroy a tab everywhere.
+ * Each device publishes per-URL *facts* under a stable device id — when it
+ * opened a URL, and when it closed one — rather than a snapshot, because a
+ * snapshot cannot tell "closed on the other device" apart from "opened here
+ * while that device was offline". A URL is open iff its open stamp beats every
+ * tombstone for it, which reconciles correctly after either device has been off
+ * the tailnet for a while.
  */
 object TabSync {
     private const val URL_STR = "http://100.69.184.113:8013/store/tabs"
     private var devices: Map<String, Map<String, List<RemoteTab>>> = emptyMap()
     private var names: Map<String, String> = emptyMap()
-    // #57 phase 2: merged facts per persona — open[url]=at, closed[url]=at.
-    var mergedOpen: MutableMap<String, MutableMap<String, Pair<String, Long>>> = HashMap()
+    // #57 phase 2: merged facts per persona — open[url]=(title, at, device),
+    // closed[url]=at. #95: REBUILT from scratch on every sync. These used to
+    // accumulate forever, so a URL that had once been open was re-adopted on
+    // every cycle long after every device had stopped publishing it.
+    var mergedOpen: MutableMap<String, MutableMap<String, Triple<String, Long, String>>> = HashMap()
     var mergedClosed: MutableMap<String, MutableMap<String, Long>> = HashMap()
     private val tombstones = HashMap<String, Long>() // url -> when WE closed it
 
     fun recordClose(url: String) {
         if (url.isNotBlank()) tombstones[url] = System.currentTimeMillis()
+    }
+
+    /**
+     * #95: every tombstone we know of, ours included, flattened across Personas.
+     * Persona ids diverge between devices, so a per-Persona lookup can miss a
+     * close entirely — a URL is a URL.
+     */
+    fun closedAt(url: String): Long {
+        var at = tombstones[url] ?: 0L
+        for (m in mergedClosed.values) m[url]?.let { if (it > at) at = it }
+        return at
     }
 
     fun forgetClose(url: String) {
@@ -69,13 +84,15 @@ object TabSync {
                 val root = JSONObject(body).optJSONObject("data") ?: JSONObject()
                 val devs = root.optJSONObject("devices") ?: JSONObject()
 
-                // Read everyone else's lists.
+                // #95: merge facts from EVERY device, this one included — our own
+                // tombstones have to be in the merged view or we re-adopt the tab
+                // we just closed. Only the *display* list ("On Windows") skips us.
                 val parsedDevices = HashMap<String, Map<String, List<RemoteTab>>>()
                 val parsedNames = HashMap<String, String>()
+                val open = HashMap<String, MutableMap<String, Triple<String, Long, String>>>()
+                val closed = HashMap<String, MutableMap<String, Long>>()
                 for (id in devs.keys()) {
-                    if (id == me) continue
                     val d = devs.optJSONObject(id) ?: continue
-                    parsedNames[id] = d.optString("name", id)
                     val byPersona = HashMap<String, List<RemoteTab>>()
                     val ps = d.optJSONObject("personas") ?: JSONObject()
                     for (pid in ps.keys()) {
@@ -84,21 +101,29 @@ object TabSync {
                         val list = ArrayList<RemoteTab>()
                         for (u in openObj.keys()) {
                             val o = openObj.optJSONObject(u) ?: continue
-                            list.add(RemoteTab(o.optString("title", u), u))
-                            val m = mergedOpen.getOrPut(pid) { HashMap() }
+                            val title = o.optString("title", u)
+                            list.add(RemoteTab(title, u))
+                            val m = open.getOrPut(pid) { HashMap() }
                             val at = o.optLong("at", 0)
-                            if (at > (m[u]?.second ?: 0)) m[u] = Pair(o.optString("title", u), at)
+                            if (at > (m[u]?.second ?: 0)) {
+                                m[u] = Triple(title, at, o.optString("dev", id))
+                            }
                         }
                         val closedObj = block.optJSONObject("closed") ?: JSONObject()
                         for (u in closedObj.keys()) {
-                            val m = mergedClosed.getOrPut(pid) { HashMap() }
+                            val m = closed.getOrPut(pid) { HashMap() }
                             val at = closedObj.optLong(u, 0)
                             if (at > (m[u] ?: 0)) m[u] = at
                         }
                         byPersona[pid] = list
                     }
-                    parsedDevices[id] = byPersona
+                    if (id != me) {
+                        parsedNames[id] = d.optString("name", id)
+                        parsedDevices[id] = byPersona
+                    }
                 }
+                mergedOpen = open
+                mergedClosed = closed
                 devices = parsedDevices
                 names = parsedNames
 

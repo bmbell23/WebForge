@@ -506,6 +506,9 @@ function createTab(url = null, background = false, personaId = null, opts = {}) 
   // which looked like tabs re-homing themselves when you clicked them.
   const claimed = personas.forUrl(url);
   personaByTab.set(id, claimed !== personas.UNASSIGNED ? claimed : personaId || personas.UNASSIGNED);
+  // #95: this URL is open again, so stop publishing "closed" for it — otherwise
+  // the other device keeps being told to kill a tab that is sitting right here.
+  closedFacts.delete(url);
   const view = new WebContentsView({
     // #41: hotkeys fire from the main process now (Ctrl+Space leader), so no
     // page-side key capture — and no need for subframe node integration (#39).
@@ -700,7 +703,11 @@ function closeTab(id, opts = {}) {
 // session restore bypass this — only "open this URL somewhere" paths dedup.
 function findTabByUrl(url) {
   for (const id of tabOrder) {
-    if (tabs.get(id).webContents.getURL() === url) return id;
+    // #95: tabUrlOf, not getURL() — a lazily-restored tab (#78) has an empty
+    // webContents URL until it is first shown, so it was invisible here. Tab
+    // adoption then re-created it every sync, and clicking a bookmark for a
+    // restored-but-unopened tab opened a second copy.
+    if (tabUrlOf(id) === url) return id;
   }
   return null;
 }
@@ -1160,16 +1167,22 @@ function localTabPayload() {
  * tombstone. Never touches the tab you're on, pinned tabs or hotkey tabs.
  */
 function applyRemoteTabState(merged) {
-  const active = personas.activeId();
-  const forPersona = merged[active];
-  if (!forPersona) return;
-  const closed = forPersona.closed || {};
-  const open = forPersona.open || {};
+  // #95: every Persona, not just the active one. Scoping this to `merged[active]`
+  // meant background workspaces sat frozen — they neither adopted nor closed
+  // anything until you happened to switch to them. Tombstones are flattened
+  // across Personas too, because a URL is a URL and Persona ids are the one
+  // thing that genuinely does diverge between devices.
+  const closedAnywhere = new Map();
+  for (const block of Object.values(merged)) {
+    for (const [url, at] of Object.entries(block.closed || {})) {
+      if (at > (closedAnywhere.get(url) || 0)) closedAnywhere.set(url, at);
+    }
+  }
 
   for (const id of [...tabOrder]) {
     const url = tabUrlOf(id);
     if (!shareable(url)) continue;
-    const closedAt = closed[url] || 0;
+    const closedAt = closedAnywhere.get(url) || 0;
     const mineAt = openedAt.get(id) || 0;
     if (closedAt <= mineAt) continue; // our copy is newer — keep it
 
@@ -1179,18 +1192,29 @@ function applyRemoteTabState(merged) {
       openedAt.set(id, Date.now());
       continue;
     }
-    recentlyClosed.unshift({ url, title: tabs.get(id).webContents.getTitle() || url, at: Date.now() });
+    const pending = lazyTabs.get(id);
+    const title = (pending ? pending.title : tabs.get(id).webContents.getTitle()) || url;
+    recentlyClosed.unshift({ url, title, at: Date.now() });
     recentlyClosed.length = Math.min(recentlyClosed.length, 25);
     closeTab(id, { remote: true }); // don't re-broadcast someone else's close
   }
 
   // Tabs opened elsewhere and still alive appear here too.
-  for (const [url, info] of Object.entries(open)) {
-    if ((closed[url] || 0) > info.at) continue;
-    if (info.dev === deviceId()) continue; // our own echo
-    if (findTabByUrl(url) !== null) continue;
-    const id = createTab(url, true, active, { lazy: true, title: info.title });
-    if (id !== null) openedAt.set(id, info.at);
+  const known = new Set(personas.all().map((p) => p.id));
+  for (const [pid, block] of Object.entries(merged)) {
+    for (const [url, info] of Object.entries(block.open || {})) {
+      if ((closedAnywhere.get(url) || 0) > info.at) continue;
+      if (info.dev === deviceId()) continue; // our own echo
+      if (findTabByUrl(url) !== null) continue;
+      // #96: our own URL rules decide where it lands; the publisher's Persona
+      // id is only the fallback, and only if we recognize it at all.
+      const claimed = personas.forUrl(url);
+      const target = claimed !== personas.UNASSIGNED
+        ? claimed
+        : (known.has(pid) ? pid : personas.UNASSIGNED);
+      const id = createTab(url, true, target, { lazy: true, title: info.title, openedAt: info.at });
+      if (id !== null) openedAt.set(id, info.at);
+    }
   }
 }
 
