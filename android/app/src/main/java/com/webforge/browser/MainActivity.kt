@@ -85,7 +85,7 @@ class MainActivity : Activity() {
         }
         urlBar.setOnFocusChangeListener { _, has -> urlEditing = has } // #64
         tabsBtn.setOnClickListener { showTabSheet() }
-        findViewById<TextView>(R.id.menuBtn).setOnClickListener { showMenu() }
+        findViewById<TextView>(R.id.bookmarksBtn).setOnClickListener { showBookmarks() } // #87
 
         newTab(START_URL)
         BookmarkStore.sync(this) { } // warm the cache for the bookmarks panel
@@ -429,6 +429,30 @@ class MainActivity : Activity() {
         return c
     }
 
+    /** #87: title with a right-aligned action, so Settings lands in the same
+     *  screen position as the bookmarks button — double-tap that spot. */
+    private fun titleWithAction(col: LinearLayout, text: String, glyph: String, onAction: () -> Unit) {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        row.addView(TextView(this).apply {
+            this.text = text
+            setTextColor(0xFFE8E8EA.toInt())
+            textSize = 26f
+            setPadding(dp(4), 0, 0, dp(4))
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        })
+        row.addView(TextView(this).apply {
+            this.text = glyph
+            setTextColor(0xFFE8E8EA.toInt())
+            textSize = 19f
+            setPadding(dp(12), dp(4), dp(6), dp(4))
+            setOnClickListener { onAction() }
+        })
+        col.addView(row)
+    }
+
     private fun title(col: LinearLayout, text: String) {
         col.addView(TextView(this).apply {
             this.text = text
@@ -632,6 +656,7 @@ class MainActivity : Activity() {
             action(actions, "Done editing") { tabEditMode = false; showTabSheet() }
         } else {
             action(actions, "＋ New tab") { closePanel(); newTab(START_URL) }
+            action(actions, "Reload this page") { closePanel(); active?.webView?.reload() } // #87
             action(actions, "Organise tabs", "Reorder, group and rename") {
                 tabEditMode = true
                 showTabSheet()
@@ -760,32 +785,6 @@ class MainActivity : Activity() {
         action(c, "Cancel") { showTabSheet() }
     }
 
-    private fun showMenu(): Unit = openPanel { col ->
-        title(col, "WebForge")
-        caption(col, "Swipe right to go back.")
-        row(col, "Bookmarks", "Browse your synced bookmarks") { showBookmarks() }
-        row(col, "Settings", "Search engine, sync, updates") { showSettings() }
-        row(col, "About", "Architecture, engines, dependencies, build") { showAbout() }
-        row(col, "New tab") { closePanel(); newTab(START_URL) }
-        active?.let { t ->
-            row(
-                col,
-                if (t.quick) "Stop pinning this site to the top" else "Pin this site to the top of my tabs",
-                if (t.quick) {
-                    "Currently pinned: this tab stays at the top and links open in new tabs."
-                } else {
-                    "Keeps this tab at the top of the tab list and never lets it wander — " +
-                        "links you tap open in a new tab instead. Good for a site you always want one click away."
-                }
-            ) {
-                t.quick = !t.quick
-                closePanel()
-            }
-        }
-        row(col, "Reload") { closePanel(); active?.webView?.reload() }
-        row(col, "Close") { closePanel() }
-    }
-
     // #52 v2: a real nested folder tree, matching the Windows sidebar —
     // tap the folder ROW to expand, subfolders nest and indent, everything
     // starts collapsed, and search flattens across the whole set.
@@ -886,7 +885,7 @@ class MainActivity : Activity() {
     }
 
     private fun showBookmarks(): Unit = openPanel { col ->
-        title(col, "Bookmarks")
+        titleWithAction(col, "Bookmarks", "⚙") { showSettings() } // #87
         caption(col, "Tap to open · long-press to edit · swipe right to go back.")
 
         val all = BookmarkStore.all(this)
