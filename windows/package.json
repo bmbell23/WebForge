@@ -1,7 +1,7 @@
 {
   "name": "webforge",
   "productName": "WebForge",
-  "description": "WebForge browser — Windows shell",
+  "description": "WebForge browser \u2014 Windows shell",
   "version": "0.1.40",
   "main": "main.js",
   "author": "Brandon Bell",
@@ -25,16 +25,12 @@
       "output": "dist"
     },
     "files": [
-      "main.js",
-      "preload.js",
-      "bookmarks.js",
-      "vault.js",
-      "credentials.js",
-      "hotkeys.js",
-      "content-preload.js",
-      "internal-preload.js",
+      "*.js",
       "ui/**",
-      { "from": "../shared", "to": "shared" }
+      {
+        "from": "../shared",
+        "to": "shared"
+      }
     ],
     "win": {
       "target": "nsis"
