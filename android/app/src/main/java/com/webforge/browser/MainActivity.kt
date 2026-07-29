@@ -938,10 +938,9 @@ class MainActivity : Activity() {
 
         val all = BookmarkStore.all(this)
         if (all.isEmpty()) {
-            row(col, "Nothing cached yet", "Connect to your home network to sync") { }
-            row(col, "Sync now") {
-                BookmarkStore.sync(this) { ok -> runOnUiThread { if (ok) showBookmarks() } }
-            }
+            // #89: no manual button — syncing is automatic; just say where we are.
+            row(col, "Nothing cached yet", BookmarkStore.statusLine(this)) { }
+            BookmarkStore.sync(this) { ok -> runOnUiThread { if (ok) showBookmarks() } }
             return@openPanel
         }
 
