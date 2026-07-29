@@ -761,25 +761,6 @@ function togglePin(id) {
   pushState();
 }
 
-// #46: "misc" = not pinned, not a hotkey tab, and not matched by any
-// user-defined tab group. Ctrl+Shift+X sweeps exactly those.
-function closeMiscTabs() {
-  const groups = getSettings().tabGroups || [];
-  const inGroup = (url) =>
-    groups.some((g) => {
-      const p = String(g.pattern || '').trim().replace(/\*+$/, '').toLowerCase();
-      return p && String(url).toLowerCase().startsWith(p);
-    });
-  const doomed = tabOrder.filter(
-    (id) =>
-      !pinnedIds.has(id) &&
-      !hotkeyByTab.has(id) &&
-      !inGroup(tabs.get(id).webContents.getURL())
-  );
-  for (const id of doomed) closeTab(id);
-}
-
-// #16 redefinition of #9's purge: "normal" = neither pinned nor hotkey.
 function closeNormalTabs() {
   const doomed = tabOrder.filter((id) => !pinnedIds.has(id) && !hotkeyByTab.has(id));
   for (const id of doomed) closeTab(id); // closeTab handles activation/last-tab
@@ -1105,8 +1086,8 @@ function menuTemplate() {
           { label: 'Close Tab', accelerator: 'CmdOrCtrl+W', click: () => closeTab(activeId) },
           { label: 'Duplicate Tab', accelerator: 'CmdOrCtrl+Shift+U', click: () => locked || duplicateActiveTab() },
           { label: 'Pin/Unpin Tab', accelerator: 'CmdOrCtrl+Shift+P', click: () => togglePin(activeId) },
-          { label: 'Close Normal Tabs', accelerator: 'CmdOrCtrl+Shift+W', click: () => closeNormalTabs() },
-          { label: 'Close Misc Tabs', accelerator: 'CmdOrCtrl+Shift+X', click: () => locked || closeMiscTabs() },
+          { label: 'Close All But Pinned & Hotkey Tabs', accelerator: 'CmdOrCtrl+Shift+X', click: () => locked || closeNormalTabs() },
+          { label: 'Close All But Pinned & Hotkey Tabs', accelerator: 'CmdOrCtrl+Shift+W', visible: false, click: () => locked || closeNormalTabs() },
           { label: 'Detach Hotkey Tab', accelerator: 'CmdOrCtrl+Shift+D', click: () => detachActiveHotkeyTab() },
           { label: 'Bookmarks Panel', accelerator: 'CmdOrCtrl+B', click: () => locked || toggleBookmarksPanel() },
           { label: 'Bookmark Manager', accelerator: 'CmdOrCtrl+Shift+B', click: () => locked || toggleBmManager() },
