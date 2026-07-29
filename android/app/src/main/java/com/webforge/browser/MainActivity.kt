@@ -353,6 +353,29 @@ class MainActivity : Activity() {
     }
 
     // --- overlay panels ------------------------------------------------------
+    // #84: panels dismiss with a horizontal swipe, the way Android users expect,
+    // rather than requiring the Close row at the bottom.
+    private val panelSwipe by lazy {
+        android.view.GestureDetector(this, object : android.view.GestureDetector.SimpleOnGestureListener() {
+            override fun onFling(
+                e1: android.view.MotionEvent?,
+                e2: android.view.MotionEvent,
+                vx: Float,
+                vy: Float
+            ): Boolean {
+                val start = e1 ?: return false
+                val dx = e2.x - start.x
+                val dy = e2.y - start.y
+                // Mostly-horizontal, decisive, and to the right = dismiss.
+                if (dx > dp(70) && kotlin.math.abs(dx) > kotlin.math.abs(dy) * 2 && vx > 0) {
+                    closePanel()
+                    return true
+                }
+                return false
+            }
+        })
+    }
+
     private fun openPanel(build: (LinearLayout) -> Unit) {
         val scroll = ScrollView(this)
         val col = LinearLayout(this).apply {
@@ -364,12 +387,96 @@ class MainActivity : Activity() {
         overlay.removeAllViews()
         overlay.addView(scroll)
         overlay.visibility = View.VISIBLE
+        @Suppress("ClickableViewAccessibility")
+        overlay.setOnTouchListener { _, ev -> panelSwipe.onTouchEvent(ev); false } // #84
     }
 
     private fun closePanel() {
         overlay.visibility = View.GONE
         overlay.removeAllViews()
         goFullscreen()
+    }
+
+    // #84: card + pill helpers so panels read like a real settings screen
+    // rather than a flat list of tappable strings.
+    private fun card(col: LinearLayout): LinearLayout {
+        val c = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundResource(R.drawable.card_bg)
+            setPadding(dp(4), dp(4), dp(4), dp(4))
+        }
+        val lp = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        )
+        lp.bottomMargin = dp(14)
+        col.addView(c, lp)
+        return c
+    }
+
+    private fun title(col: LinearLayout, text: String) {
+        col.addView(TextView(this).apply {
+            this.text = text
+            setTextColor(0xFFE8E8EA.toInt())
+            textSize = 26f
+            setPadding(dp(4), 0, 0, dp(4))
+        })
+    }
+
+    private fun caption(col: LinearLayout, text: String) {
+        col.addView(TextView(this).apply {
+            this.text = text
+            setTextColor(0xFF7C7C82.toInt())
+            textSize = 12.5f
+            setPadding(dp(4), 0, dp(4), dp(16))
+            setLineSpacing(dp(3).toFloat(), 1f)
+        })
+    }
+
+    /** A selectable option inside a card: label on the left, tick on the right. */
+    private fun option(parent: LinearLayout, label: String, selected: Boolean, onClick: () -> Unit) {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(14), dp(13), dp(14), dp(13))
+            isClickable = true
+            setOnClickListener { onClick() }
+        }
+        row.addView(TextView(this).apply {
+            text = label
+            setTextColor(0xFFE8E8EA.toInt())
+            textSize = 15f
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        })
+        row.addView(TextView(this).apply {
+            text = if (selected) "✓" else ""
+            setTextColor(0xFF3D9BFF.toInt())
+            textSize = 16f
+        })
+        parent.addView(row)
+    }
+
+    /** A tappable action inside a card, with optional supporting text. */
+    private fun action(parent: LinearLayout, label: String, sub: String? = null, onClick: () -> Unit) {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(14), dp(13), dp(14), dp(13))
+            isClickable = true
+            setOnClickListener { onClick() }
+        }
+        row.addView(TextView(this).apply {
+            text = label
+            setTextColor(0xFFE8E8EA.toInt())
+            textSize = 15f
+        })
+        if (sub != null) {
+            row.addView(TextView(this).apply {
+                text = sub
+                setTextColor(0xFF7C7C82.toInt())
+                textSize = 12f
+                setPadding(0, dp(2), 0, 0)
+            })
+        }
+        parent.addView(row)
     }
 
     private fun header(col: LinearLayout, text: String) {
@@ -404,11 +511,8 @@ class MainActivity : Activity() {
     }
 
     private fun showTabSheet(): Unit = openPanel { col ->
-        col.addView(TextView(this).apply {
-            text = "Tabs"
-            setTextColor(0xFFE8E8EA.toInt())
-            textSize = 22f
-        })
+        title(col, "Tabs")
+        caption(col, "Swipe right to go back.")
         row(col, "＋  New tab") { closePanel(); newTab(START_URL) }
 
         // Quick-launch tabs stick to the top, then pinned, then the rest (#51).
@@ -451,18 +555,23 @@ class MainActivity : Activity() {
     }
 
     private fun showMenu(): Unit = openPanel { col ->
-        col.addView(TextView(this).apply {
-            text = "WebForge"
-            setTextColor(0xFFE8E8EA.toInt())
-            textSize = 22f
-        })
+        title(col, "WebForge")
+        caption(col, "Swipe right to go back.")
         row(col, "Bookmarks", "Browse your synced bookmarks") { showBookmarks() }
         row(col, "Settings", "Search engine, sync, updates") { showSettings() }
         row(col, "About", "Architecture, engines, dependencies, build") { showAbout() }
         row(col, "New tab") { closePanel(); newTab(START_URL) }
         active?.let { t ->
-            row(col, if (t.quick) "Unset quick launch" else "Set as quick launch",
-                "Sticky tab that only ever shows this site") {
+            row(
+                col,
+                if (t.quick) "Stop pinning this site to the top" else "Pin this site to the top of my tabs",
+                if (t.quick) {
+                    "Currently pinned: this tab stays at the top and links open in new tabs."
+                } else {
+                    "Keeps this tab at the top of the tab list and never lets it wander — " +
+                        "links you tap open in a new tab instead. Good for a site you always want one click away."
+                }
+            ) {
                 t.quick = !t.quick
                 closePanel()
             }
@@ -570,11 +679,7 @@ class MainActivity : Activity() {
     }
 
     private fun showBookmarks(): Unit = openPanel { col ->
-        col.addView(TextView(this).apply {
-            text = "Bookmarks"
-            setTextColor(0xFFE8E8EA.toInt())
-            textSize = 22f
-        })
+        title(col, "Bookmarks")
 
         val all = BookmarkStore.all(this)
         if (all.isEmpty()) {
@@ -613,70 +718,67 @@ class MainActivity : Activity() {
     }
 
     private fun showSettings(): Unit = openPanel { col ->
-        col.addView(TextView(this).apply {
-            text = "Settings"
-            setTextColor(0xFFE8E8EA.toInt())
-            textSize = 22f
-        })
-        header(col, "DEFAULT SEARCH ENGINE")
+        title(col, "Settings")
+        caption(col, "Swipe right to go back.")
+
+        header(col, "SEARCH")
+        val engines = card(col)
         val current = Prefs.engineKey(this)
         for ((key, pair) in Prefs.ENGINES) {
-            row(col, (if (key == current) "●  " else "○  ") + pair.first) {
+            option(engines, pair.first, key == current) {
                 Prefs.setEngine(this, key)
                 showSettings()
             }
         }
+
         header(col, "CLOSE IDLE TABS")
-        col.addView(TextView(this).apply {
-            text = "Normal tabs close after this long unused. Pinned and quick-launch tabs never expire."
-            setTextColor(0xFF7C7C82.toInt())
-            textSize = 12f
-        })
+        caption(col, "Normal tabs close after this long unused. Pinned and quick-launch tabs never expire, and the tab you're on never closes.")
+        val expiry = card(col)
         val curExpiry = Prefs.expiryKey(this)
         for ((key, hrs) in Prefs.EXPIRY) {
-            val label = if (hrs == 0) "Never" else key
-            row(col, (if (key == curExpiry) "●  " else "○  ") + label) {
+            option(expiry, if (hrs == 0) "Never" else key, key == curExpiry) {
                 Prefs.setExpiry(this, key)
                 sweepStaleTabs()
                 showSettings()
             }
         }
 
-        header(col, "SYNC")
-        row(col, "Bookmarks cached: ${BookmarkStore.all(this).size}", "Tap to sync now") {
+        header(col, "BOOKMARKS")
+        val sync = card(col)
+        action(sync, "${BookmarkStore.all(this).size} bookmarks cached", "Synced from your home server — tap to refresh now") {
             BookmarkStore.sync(this) { ok ->
                 runOnUiThread {
                     if (ok) showSettings()
                     else android.widget.Toast
-                        .makeText(this, "Server unreachable — using local cache", android.widget.Toast.LENGTH_SHORT)
+                        .makeText(this, "Server unreachable — using the local copy", android.widget.Toast.LENGTH_SHORT)
                         .show()
                 }
             }
         }
+
+        header(col, "ABOUT")
+        val about = card(col)
+        action(about, "Version ${BuildConfig.VERSION_NAME}", "Tap to check for updates") {
+            UpdateManager(this).checkForUpdate()
+        }
+        action(about, "How WebForge is built", "Engines, dependencies, build process") { showAbout() }
         CrashLog.last(this)?.let { trace ->
             header(col, "LAST CRASH")
-            col.addView(TextView(this).apply {
+            val crash = card(col)
+            crash.addView(TextView(this).apply {
                 text = trace.take(1800)
                 setTextColor(0xFFC04040.toInt())
                 textSize = 10f
+                setPadding(dp(14), dp(12), dp(14), dp(12))
                 setTextIsSelectable(true)
             })
-            row(col, "Clear crash report") { CrashLog.clear(this); showSettings() }
+            action(crash, "Clear crash report") { CrashLog.clear(this); showSettings() }
         }
-
-        header(col, "ABOUT")
-        row(col, "Version ${BuildConfig.VERSION_NAME}", "Tap to check for updates") {
-            UpdateManager(this).checkForUpdate()
-        }
-        row(col, "Close") { closePanel() }
     }
 
     private fun showAbout(): Unit = openPanel { col ->
-        col.addView(TextView(this).apply {
-            text = "About WebForge"
-            setTextColor(0xFFE8E8EA.toInt())
-            textSize = 22f
-        })
+        title(col, "About WebForge")
+        caption(col, "Swipe right to go back.")
 
         // Live facts read from the device, never hardcoded.
         header(col, "THIS BUILD, RIGHT NOW")
@@ -766,6 +868,9 @@ class MainActivity : Activity() {
         super.onResume()
         UpdateManager(this).checkForUpdate()
         sweepStaleTabs() // #79: catch up after the app has been away
+        // #84: the app only pulled at launch, so bookmarks edited on the PC
+        // never appeared until a cold start. Refresh every time we come back.
+        BookmarkStore.sync(this) { }
         sweepHandler.removeCallbacksAndMessages(null)
         sweepHandler.postDelayed(object : Runnable {
             override fun run() {
