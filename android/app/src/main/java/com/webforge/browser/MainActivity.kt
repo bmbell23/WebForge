@@ -1392,6 +1392,44 @@ class MainActivity : Activity() {
         title(col, "Settings")
         caption(col, "Swipe right to go back.")
 
+        header(col, "SECURITY")
+        caption(
+            col,
+            // #55: deliberately different from Windows, where the vault gates the
+            // whole app. Here it gates saved passwords only — browsing never waits.
+            "A master password protects saved logins. Browsing works whether it's locked or not."
+        )
+        val sec = card(col)
+        when {
+            !Vault.isInitialized(this) ->
+                action(sec, "Set a master password", "Needed before logins can be saved") {
+                    showVaultSetup()
+                }
+            !Vault.isUnlocked() ->
+                action(sec, "🔒 Unlock saved logins", Vault.statusLine(this)) { showVaultUnlock() }
+            else -> {
+                action(sec, "🔓 Unlocked", "Lock again to require the password") {
+                    Vault.lock()
+                    showSettings()
+                }
+                if (Vault.biometricAvailable() && !Vault.isBiometricEnrolled(this)) {
+                    action(sec, "Enable biometric unlock", "Use your fingerprint instead of typing it") {
+                        enrolBiometric()
+                    }
+                } else if (Vault.isBiometricEnrolled(this)) {
+                    action(sec, "Biometric unlock is on", "Tap to turn it off") {
+                        Vault.clearBiometric(this)
+                        showSettings()
+                    }
+                }
+            }
+        }
+        if (Vault.isInitialized(this)) {
+            action(sec, "Reset the vault", "Forgotten password? This deletes saved logins — no recovery") {
+                showVaultReset()
+            }
+        }
+
         header(col, "THIS PAGE")
         val page = card(col)
         // #101: the phone's stand-in for Ctrl+F. Closing the panel first means
@@ -1454,6 +1492,148 @@ class MainActivity : Activity() {
                 setTextIsSelectable(true)
             })
             action(crash, "Clear crash report") { CrashLog.clear(this); showSettings() }
+        }
+    }
+
+    // --- #55: master-password vault ----------------------------------------
+
+    /** A password field styled like the rest of the panel inputs. */
+    private fun passwordField(col: LinearLayout, hint: String): EditText {
+        val e = EditText(this).apply {
+            this.hint = hint
+            setHintTextColor(0xFF7C7C82.toInt())
+            setTextColor(0xFFE8E8EA.toInt())
+            textSize = 14f
+            setBackgroundResource(R.drawable.pill_bg)
+            setPadding(dp(14), dp(10), dp(14), dp(10))
+            maxLines = 1
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or
+                android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
+            importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO
+        }
+        col.addView(e)
+        return e
+    }
+
+    private fun note(col: LinearLayout, text: String, warn: Boolean = false) {
+        col.addView(TextView(this).apply {
+            this.text = text
+            setTextColor(if (warn) 0xFFC04040.toInt() else 0xFF7C7C82.toInt())
+            textSize = 12f
+            setPadding(dp(4), dp(10), dp(4), 0)
+        })
+    }
+
+    private fun showVaultSetup(): Unit = openPanel { col ->
+        title(col, "Set master password")
+        caption(
+            col,
+            // #105 will derive the credential sync key from this password, so the
+            // two devices must agree. Saying so here is cheaper than debugging it.
+            "Protects saved logins on this phone. Use the SAME password as the " +
+                "Windows app — syncing logins between devices depends on them matching. " +
+                "There is no recovery if you forget it."
+        )
+        val first = passwordField(col, "Master password")
+        val again = passwordField(col, "Repeat it")
+        val msg = TextView(this).apply {
+            setTextColor(0xFFC04040.toInt())
+            textSize = 12f
+            setPadding(dp(4), dp(10), dp(4), 0)
+        }
+        col.addView(msg)
+        val c = card(col)
+        action(c, "Set password") {
+            val a = first.text.toString()
+            val b = again.text.toString()
+            when {
+                a.isEmpty() -> msg.text = "Enter a password."
+                a != b -> msg.text = "The two entries don't match."
+                !Vault.setup(this, a) -> msg.text = "Couldn't create the vault."
+                else -> showSettings()
+            }
+        }
+        action(c, "Cancel") { showSettings() }
+    }
+
+    private fun showVaultUnlock(): Unit = openPanel { col ->
+        title(col, "Unlock saved logins")
+        caption(col, Vault.statusLine(this))
+        val pw = passwordField(col, "Master password")
+        val msg = TextView(this).apply {
+            setTextColor(0xFFC04040.toInt())
+            textSize = 12f
+            setPadding(dp(4), dp(10), dp(4), 0)
+        }
+        col.addView(msg)
+        val c = card(col)
+        action(c, "Unlock") {
+            if (Vault.unlock(this, pw.text.toString())) showSettings()
+            else msg.text = "Wrong password."
+        }
+        if (Vault.isBiometricEnrolled(this)) {
+            action(c, "Use fingerprint instead") { biometricUnlock() }
+        }
+        action(c, "Cancel") { showSettings() }
+    }
+
+    private fun showVaultReset(): Unit = openPanel { col ->
+        title(col, "Reset the vault")
+        caption(
+            col,
+            "Deletes the master password and every saved login on this phone. " +
+                "Nothing is recoverable. Logins saved on other devices are untouched."
+        )
+        val c = card(col)
+        action(c, "Delete everything and start over") {
+            Vault.reset(this)
+            showSettings()
+        }
+        action(c, "Cancel") { showSettings() }
+    }
+
+    // Framework BiometricPrompt (API 28+) rather than androidx.biometric — this
+    // app has no AndroidX dependencies and one prompt is not worth starting.
+    // Below API 28 the password is simply the only way in.
+    @android.annotation.TargetApi(Build.VERSION_CODES.P)
+    private fun biometricPrompt(titleText: String, cipher: javax.crypto.Cipher, onOk: (javax.crypto.Cipher) -> Unit) {
+        val prompt = android.hardware.biometrics.BiometricPrompt.Builder(this)
+            .setTitle(titleText)
+            .setDescription("Unlocks your saved logins")
+            .setNegativeButton("Use password", mainExecutor) { _, _ -> }
+            .build()
+        prompt.authenticate(
+            android.hardware.biometrics.BiometricPrompt.CryptoObject(cipher),
+            android.os.CancellationSignal(),
+            mainExecutor,
+            object : android.hardware.biometrics.BiometricPrompt.AuthenticationCallback() {
+                override fun onAuthenticationSucceeded(
+                    result: android.hardware.biometrics.BiometricPrompt.AuthenticationResult
+                ) {
+                    val c = result.cryptoObject?.cipher ?: return
+                    onOk(c)
+                }
+            }
+        )
+    }
+
+    private fun enrolBiometric() {
+        if (!Vault.biometricAvailable()) return
+        val cipher = Vault.beginBiometricEnrol() ?: return
+        biometricPrompt("Enable biometric unlock", cipher) { c ->
+            Vault.finishBiometricEnrol(this, c)
+            runOnUiThread { showSettings() }
+        }
+    }
+
+    private fun biometricUnlock() {
+        if (!Vault.biometricAvailable()) return
+        // Null here means the Keystore key is gone (a fingerprint re-enrolment
+        // invalidates it). Vault has already dropped the wrap; password remains.
+        val cipher = Vault.beginBiometricUnlock(this) ?: run { showVaultUnlock(); return }
+        biometricPrompt("Unlock saved logins", cipher) { c ->
+            Vault.finishBiometricUnlock(this, c)
+            runOnUiThread { showSettings() }
         }
     }
 

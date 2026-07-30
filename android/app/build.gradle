@@ -44,4 +44,34 @@ android {
     kotlinOptions {
         jvmTarget = '17'
     }
+
+    testOptions {
+        unitTests.returnDefaultValues = true
+    }
+
+    packaging {
+        // #55: com.lambdaworks:scrypt ships JNI builds for macOS/Linux/Windows
+        // inside its jar, and AGP was dutifully packaging a .dylib into the APK.
+        // Dropping them forces the pure-Java path, which is the only one Android
+        // can use anyway — and makes the derivation deterministic across hosts.
+        // Note these go under resources, not jniLibs: AGP's jniLibs matcher only
+        // claims `**.so`, so a nested `.dylib` falls through to the resource
+        // merger and keeps its lib/ path all the way into the APK.
+        jniLibs.excludes += ['**/darwin/**', '**/linux/**', '**/windows/**']
+        resources.excludes += ['**/*.dylib', '**/*.dll', 'lib/**']
+    }
+}
+
+dependencies {
+    // #55: scrypt. The Android platform ships PBKDF2 but NOT scrypt, and the
+    // Windows vault derives its key with scrypt(N=32768, r=8, p=1) — swapping in
+    // PBKDF2 would look like "wrong password" forever against an existing vault.
+    // Deliberately NOT BouncyCastle: bcprov is ~3MB and took the APK from 0.9MB
+    // to 4.1MB for one function, on an app that self-updates over Tailscale.
+    // com.lambdaworks:scrypt is the reference Java implementation at ~50KB.
+    implementation 'com.lambdaworks:scrypt:1.4.0'
+
+    // #55: VaultCrypto is deliberately free of Android APIs so the
+    // Windows-interop proof runs as a plain JVM test (see VaultCryptoTest).
+    testImplementation 'junit:junit:4.13.2'
 }
