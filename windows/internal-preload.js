@@ -11,6 +11,9 @@ contextBridge.exposeInMainWorld('wf', {
   setTabExpiry: (c) => ipcRenderer.invoke('int:set-tab-expiry', c), // #79
   saveTabGroups: (list) => ipcRenderer.invoke('int:save-tab-groups', list),
   syncStatus: () => ipcRenderer.invoke('int:sync-status'),
+  // default browser (#106)
+  defaultBrowserStatus: () => ipcRenderer.invoke('int:default-browser-status'),
+  openDefaultApps: () => ipcRenderer.invoke('int:open-default-apps'),
   about: () => ipcRenderer.invoke('int:about'), // #61
   openAbout: () => ipcRenderer.send('int:open-about'),
   openPasswords: () => ipcRenderer.send('int:open-passwords'), // #63

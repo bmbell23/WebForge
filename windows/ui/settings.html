@@ -136,6 +136,15 @@
     <button class="choice" data-expiry="7d">7 days</button>
   </div>
 
+  <!-- #106: Windows will not let an app take the default browser slot on its
+       own — the user has to confirm in Settings. So report the state and open
+       the right page, rather than pretending we can set it. -->
+  <h2>Default browser</h2>
+  <div class="card status" id="defbrowser">Checking…</div>
+  <div class="row">
+    <button class="choice" id="defbtn">Open Windows default apps settings…</button>
+  </div>
+
   <h2>Sync (bookmarks)</h2>
   <div class="card status" id="sync">Checking…</div>
 
@@ -307,6 +316,22 @@
 
   document.getElementById('pwbtn').onclick = () => wf.openPasswords(); // #63
 
+  // --- default browser (#106) ---
+  async function refreshDefaultBrowser() {
+    const el = document.getElementById('defbrowser');
+    const { isDefault } = await wf.defaultBrowserStatus();
+    el.innerHTML = isDefault
+      ? `<span class="ok">WebForge is your default browser</span> — links from other apps open here.`
+      : `<span class="bad">WebForge is not the default browser</span> — it is registered and ` +
+        `selectable, but Windows only lets <i>you</i> make the switch. Open the settings below, ` +
+        `pick <b>WebForge</b>, then set it for <b>HTTP</b> and <b>HTTPS</b>.`;
+  }
+  document.getElementById('defbtn').onclick = async () => {
+    await wf.openDefaultApps();
+    // Coming back from Windows Settings, the answer has usually changed.
+    setTimeout(refreshDefaultBrowser, 1500);
+  };
+
   // --- diagnostics (#75) ---
   async function loadErrors() {
     const txt = await wf.getErrors();
@@ -460,6 +485,7 @@
     groups = settings.tabGroups || [];
     paint();
     refreshSync();
+    refreshDefaultBrowser(); // #106
   }
   load();
   setInterval(refreshSync, 30000);

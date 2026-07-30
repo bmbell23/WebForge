@@ -1524,6 +1524,60 @@ function onUnlocked() {
   syncPersonas(); // #88
   syncTabs(); // #57
   sweepStaleTabs(); // #79: a machine left off overnight cleans up on return
+  flushPendingExternalUrl(); // #106: a link that arrived while we were locked
+}
+
+// --- #106: default browser — being handed URLs by the OS -------------------
+
+// Windows launches `WebForge.exe <url>` (see installer.nsh's ProgID command).
+// Electron's own switches and the app path share argv, so match on shape rather
+// than position — `electron .` in dev puts a directory in argv[1] too.
+function urlFromArgv(argv) {
+  return (argv || []).find((a) => typeof a === 'string' && /^https?:\/\//i.test(a)) || null;
+}
+
+// A URL can arrive before the vault is unlocked, and createTab() refuses while
+// locked — so it would vanish silently. Hold it until onUnlocked() runs.
+let pendingExternalUrl = null;
+
+function openExternalUrl(url) {
+  if (!url) return;
+  if (locked) {
+    pendingExternalUrl = url;
+    return;
+  }
+  // openOrFocus so a link to something already open focuses that tab (#31), and
+  // createTab applies the Persona URL rules on the way in (#96).
+  openOrFocus(url, false);
+}
+
+function flushPendingExternalUrl() {
+  const url = pendingExternalUrl;
+  pendingExternalUrl = null;
+  if (url) openExternalUrl(url);
+}
+
+// Claim the protocols from the app side too, so our registration doesn't depend
+// solely on the installer having run. Windows 11 protects the actual UserChoice
+// behind a hash, so this cannot and does not steal the default — it only makes
+// the claim consistent. Guarded because a failure here must never block startup.
+function claimProtocols() {
+  if (process.platform !== 'win32') return;
+  for (const scheme of ['http', 'https']) {
+    try {
+      app.setAsDefaultProtocolClient(scheme);
+    } catch (err) {
+      errorlog.record('claimProtocols', err);
+    }
+  }
+}
+
+function isDefaultBrowser() {
+  try {
+    return app.isDefaultProtocolClient('http') && app.isDefaultProtocolClient('https');
+  } catch {
+    return false;
+  }
 }
 
 // Keyboard shortcuts via a hidden application menu — accelerators fire no
@@ -1832,6 +1886,25 @@ ipcMain.handle('int:save-tab-groups', (_e, list) => {
   pushTabGroups();
   return true;
 });
+// #106: report, don't pretend to set — the switch is the user's to make.
+ipcMain.handle('int:default-browser-status', () => ({ isDefault: isDefaultBrowser() }));
+ipcMain.handle('int:open-default-apps', async () => {
+  const { shell } = require('electron');
+  try {
+    // Deep-links straight to our entry in Windows 11's Default apps page.
+    await shell.openExternal(`ms-settings:defaultapps?registeredAppMachine=WebForge`);
+    return true;
+  } catch {
+    try {
+      await shell.openExternal('ms-settings:defaultapps');
+      return true;
+    } catch (err) {
+      errorlog.record('open-default-apps', err);
+      return false;
+    }
+  }
+});
+
 ipcMain.handle('int:sync-status', async () => {
   // #13: let the user SEE that sync works instead of asking someone to curl it.
   const local = bookmarks.all().length;
@@ -2096,7 +2169,28 @@ function setupAutoUpdate() {
   });
 }
 
+// #106: exactly one WebForge, or being the default browser is actively harmful —
+// every clicked link would spawn a second copy with its own session file, its own
+// vault lock state, and two instances racing on the last-write-wins sync store.
+// Must be requested before anything else initialises.
+const isPrimaryInstance = app.requestSingleInstanceLock();
+if (!isPrimaryInstance) {
+  // A URL passed to this process reaches the primary via 'second-instance'.
+  app.quit();
+} else {
+  app.on('second-instance', (_e, argv) => {
+    const url = urlFromArgv(argv);
+    if (win && !win.isDestroyed()) {
+      if (win.isMinimized()) win.restore();
+      win.show();
+      win.focus();
+    }
+    openExternalUrl(url);
+  });
+}
+
 app.whenReady().then(() => {
+  if (!isPrimaryInstance) return; // losing the lock means this process is a no-op
   applyTheme(getSettings().theme); // #24: before any view paints
   // #73: park any pre-Persona hotkeys in the first real Persona, deterministically.
   const firstReal = personas.all().find((p) => p.id !== personas.UNASSIGNED);
@@ -2105,6 +2199,10 @@ app.whenReady().then(() => {
   createWindow();
   setupShortcuts();
   setupAutoUpdate();
+  claimProtocols(); // #106
+  // #106: a cold start from a clicked link. showLock() runs inside
+  // createWindow(), so this is queued and flushed by onUnlocked().
+  openExternalUrl(urlFromArgv(process.argv));
   setInterval(syncBookmarks, 10 * 60 * 1000); // #13: periodic catch-up
   setInterval(syncPersonas, 10 * 60 * 1000); // #88
   setInterval(syncTabs, 30 * 1000); // #95: 30s, matching Android — a minute felt dead
