@@ -26,6 +26,7 @@
     },
     "files": [
       "*.js",
+      "!*.test.js",
       "ui/**",
       {
         "from": "../shared",

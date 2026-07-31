@@ -24,6 +24,7 @@ const credentials = require('./credentials');
 const hotkeys = require('./hotkeys');
 const personas = require('./personas'); // #25
 const errorlog = require('./errorlog'); // #75
+const tabnav = require('./tabnav'); // #113/#114 — unit-tested, Electron-free
 
 // #43: new tabs land on our own search page; Google is the default engine.
 const ENGINES = {
@@ -71,6 +72,9 @@ const personaByTab = new Map(); // #25: tabId -> personaId
 // #78: restored tabs stay unloaded until first activated — spawning a renderer
 // and fetching a page for every saved tab is what made startup take seconds.
 const lazyTabs = new Map(); // tabId -> { url, title }
+// #114: tabs whose very first (deferred) load is in flight. Their did-navigate
+// re-homes the tab but must not drag the active Persona along with it.
+const firstLoad = new Set();
 const lastActiveAt = new Map(); // #79: tabId -> ms, for inactivity expiry
 // #101: Ctrl+Shift+T — closed tabs, most recent last. Capped so a long session
 // can't grow it without bound; pinned tabs never reach here (closeTab refuses).
@@ -755,9 +759,12 @@ function createTab(url = null, background = false, personaId = null, opts = {}) 
     // Re-home the tab if it navigated into another persona's territory (#25).
     const claimed = personas.forUrl(navUrl);
     const current = personaByTab.get(id);
+    // #114: the first load of a lazily-restored tab is not the user navigating
+    // anywhere — following it switched Persona under a cycling user.
+    const wasFirstLoad = firstLoad.delete(id);
     if (claimed !== personas.UNASSIGNED && claimed !== current) {
       personaByTab.set(id, claimed);
-      if (id === activeId) personas.setActive(claimed);
+      if (id === activeId && !wasFirstLoad) personas.setActive(claimed);
       pushState();
     }
   });
@@ -791,7 +798,7 @@ function createTab(url = null, background = false, personaId = null, opts = {}) 
   return id;
 }
 
-function activateTab(id) {
+function activateTab(id, opts = {}) {
   if (!tabs.has(id)) {
     errorlog.record('activateTab', new Error(`no such tab id=${id} (known: ${[...tabs.keys()].join(',')})`));
     return;
@@ -814,6 +821,12 @@ function activateTab(id) {
   const pending = lazyTabs.get(id); // #78
   if (pending) {
     lazyTabs.delete(id);
+    // #114: a restored tab loading for the FIRST time fires did-navigate, which
+    // re-homes it by Persona rule — and that used to call personas.setActive,
+    // swapping the whole visible tab set out mid-cycle. Re-homing the tab is
+    // right; dragging the workspace along because a background tab finally
+    // loaded is not. The tab still moves; only the follow is suppressed.
+    firstLoad.add(id);
     view.webContents.loadURL(pending.url);
   }
   view.setVisible(true);
@@ -828,7 +841,11 @@ function activateTab(id) {
   // (or nothing), key events vanish and hotkey swapping "stops working".
   view.webContents.focus();
   // #82: dispose of the new tab we just walked away from.
-  if (leaving !== null && leaving !== id && tabs.has(leaving) && isUnusedNewTab(leaving)) {
+  // #114: but NOT while cycling. Deleting a tab mid-cycle shifts every index
+  // after it, so the next Ctrl+Tab press stepped from a stale position and
+  // landed somewhere unrelated. Disposal is right for a deliberate switch and
+  // wrong while touring tabs.
+  if (!opts.cycling && leaving !== null && leaving !== id && tabs.has(leaving) && isUnusedNewTab(leaving)) {
     closeTab(leaving);
   }
   pushState();
@@ -953,11 +970,26 @@ function cycleTab(dir) {
   // #75: cycle within the ACTIVE Persona only — walking the global tabOrder
   // jumped into other Personas' tabs and yanked the workspace out from under
   // the user, which reads as "Ctrl+Tab does nothing sensible".
-  const mine = visibleTabs();
-  if (mine.length < 2) return;
-  const idx = mine.indexOf(activeId);
-  const next = mine[(Math.max(idx, 0) + dir + mine.length) % mine.length];
-  activateTab(next);
+  const next = tabnav.nextInOrder(visibleTabs(), activeId, dir);
+  if (next === null) return;
+  // #114: `cycling` stops activateTab from destroying the tab we are stepping
+  // off. Without it, every step off a new-tab page removed an entry from
+  // tabOrder and the NEXT press computed its position against a shorter list —
+  // which is what made Ctrl+Tab jump around instead of stepping in order.
+  activateTab(next, { cycling: true });
+}
+
+// #113: Ctrl+Tab as Alt+Tab — flip to the most recently used OTHER tab, so two
+// tabs you are working between stay one keystroke apart no matter where they sit
+// in the sidebar. Resolves by identity rather than position, so it is immune to
+// the list shifting (#114).
+function flipTab() {
+  // visibleTabs() keeps this inside the active Persona (#75). lastActiveAt is
+  // already maintained for idle-tab expiry (#79) and updated on every
+  // activation, so it is an accurate most-recently-used ordering for free.
+  const target = tabnav.mostRecent(visibleTabs(), activeId, lastActiveAt);
+  if (target === null) return;
+  activateTab(target, { cycling: true });
 }
 
 // #22: navigation-critical chords intercepted at the input level on every
@@ -1074,7 +1106,11 @@ function wireChords(wc) {
     // binding was pure duplication. Deliberately NOT handled — let it through.
     if (key === 'tab') {
       event.preventDefault();
-      cycleTab(input.shift ? -1 : 1);
+      // #113: Ctrl+Tab flips between the two most recently used tabs, the way
+      // Alt+Tab does; Ctrl+Shift+Tab steps to the next tab in sidebar order.
+      // "Previous tab" is deliberately gone — Ctrl+PageUp still walks backwards.
+      if (input.shift) cycleTab(1);
+      else flipTab();
     } else if (key === 'f4') {
       event.preventDefault();
       closeTab(activeId);
@@ -1994,8 +2030,10 @@ function menuTemplate() {
           { label: 'Bookmark This Page', accelerator: 'CmdOrCtrl+D', click: () => locked || starCurrent() },
           { label: 'Lock WebForge', accelerator: 'CmdOrCtrl+Shift+L', click: () => showLock() },
           { label: 'Import Passwords (CSV)…', click: () => locked || importPasswordsCsv() },
-          { label: 'Next Tab', accelerator: 'Control+Tab', click: () => cycleTab(1) },
-          { label: 'Previous Tab', accelerator: 'Control+Shift+Tab', click: () => cycleTab(-1) },
+          // #113: keep these in step with wireChords, or the menu advertises
+          // behaviour the app no longer has.
+          { label: 'Recent Tab', accelerator: 'Control+Tab', click: () => flipTab() },
+          { label: 'Next Tab', accelerator: 'Control+Shift+Tab', click: () => cycleTab(1) },
           {
             label: 'Focus Address Bar',
             accelerator: 'CmdOrCtrl+L',
