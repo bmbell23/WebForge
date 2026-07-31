@@ -22,6 +22,11 @@ contextBridge.exposeInMainWorld('wf', {
   certRevoke: (host, fingerprint) => ipcRenderer.invoke('int:cert-revoke', { host, fingerprint }),
   netDetails: () => ipcRenderer.invoke('int:net-details'),
   netRetry: () => ipcRenderer.invoke('int:net-retry'),
+  // HTTP auth dialog (#111)
+  authDetails: () => ipcRenderer.invoke('int:auth-details'),
+  authSubmit: (username, password, save) =>
+    ipcRenderer.invoke('int:auth-submit', { username, password, save }),
+  authCancel: () => ipcRenderer.invoke('int:auth-cancel'),
   about: () => ipcRenderer.invoke('int:about'), // #61
   openAbout: () => ipcRenderer.send('int:open-about'),
   openPasswords: () => ipcRenderer.send('int:open-passwords'), // #63

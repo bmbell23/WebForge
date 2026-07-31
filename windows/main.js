@@ -5,7 +5,7 @@
 // and added after it, so they cover chrome's dead area. Only the active tab's
 // view is visible. Full tab state is broadcast to the chrome UI on every
 // change; it re-renders from that.
-const { app, BaseWindow, WebContentsView, ipcMain, dialog, Menu, nativeTheme, session } = require('electron');
+const { app, BaseWindow, BrowserWindow, WebContentsView, ipcMain, dialog, Menu, nativeTheme, session } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto'); // #57: stable device id
@@ -42,6 +42,7 @@ const INTERNAL_PAGES = {
   passwords: path.join(__dirname, 'ui', 'passwords.html'), // #63
   certerror: path.join(__dirname, 'ui', 'certerror.html'), // #108
   neterror: path.join(__dirname, 'ui', 'neterror.html'), // #108
+  auth: path.join(__dirname, 'ui', 'auth.html'), // #111
 };
 const fileUrl = (p) => `file://${p.replace(/\\/g, '/')}`;
 const isInternalUrl = (u) =>
@@ -557,6 +558,60 @@ function pushStateNow() {
   saveSessionSoon();
 }
 
+// #111 round 2: which window.open() calls deserve a real window.
+//
+// The first attempt keyed only on `disposition === 'new-window'` and did not fix
+// the reported page. Chromium only reports 'new-window' when the features string
+// asks for a popup — `window.open(url, 'authWindow')` with NO features is
+// reported as a plain foreground-tab, so it kept being denied, kept returning
+// null, and kept breaking the page that needed the handle.
+//
+// A NAMED window is the giveaway: nobody names a window they do not intend to
+// address later. `_blank` is excluded because that is just "open a tab".
+function wantsRealWindow(details) {
+  if (details.disposition === 'new-window') return true;
+  if (details.features && String(details.features).trim().length > 0) return true;
+  const name = String(details.frameName || '').trim();
+  return name.length > 0 && !['_blank', '_self', '_parent', '_top'].includes(name);
+}
+
+// #111: translate a window.open() features string into BrowserWindow options.
+// Sizes are clamped — a page asking for a 20×20 or 9000px window gets something
+// usable instead. Web preferences deliberately match a normal tab: the page
+// preload, no node integration, context isolation on. A popup is web content
+// and must never be more privileged than the tab that opened it.
+function popupWindowOptions(features) {
+  const parsed = {};
+  for (const part of String(features || '').split(',')) {
+    const [key, value] = part.split('=').map((s) => (s || '').trim());
+    if (key) parsed[key.toLowerCase()] = value;
+  }
+  const num = (key, min, max, fallback) => {
+    const n = parseInt(parsed[key], 10);
+    return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : fallback;
+  };
+  return {
+    width: num('width', 240, 2400, 900),
+    height: num('height', 180, 1600, 700),
+    autoHideMenuBar: true,
+    show: false, // shown in did-create-window, after ready-to-show
+    // #111 round 2: the likely reason the first fix looked like nothing
+    // happened. The app always launches fullscreen (#37), and an unparented
+    // window can be created BEHIND a fullscreen one — indistinguishable from
+    // never opening. A child window always renders above its parent.
+    // `parent` accepts a BaseWindow (BrowserWindowConstructorOptions extends
+    // BaseWindowConstructorOptions), which is what `win` is.
+    // Deliberately NOT modal: a terminal popup must stay usable alongside the
+    // page that launched it.
+    parent: win,
+    webPreferences: {
+      preload: path.join(__dirname, 'content-preload.js'),
+      nodeIntegration: false,
+      contextIsolation: true,
+    },
+  };
+}
+
 function createTab(url = null, background = false, personaId = null, opts = {}) {
   if (locked) return null; // #15
   const id = nextTabId++;
@@ -592,9 +647,44 @@ function createTab(url = null, background = false, personaId = null, opts = {}) 
   // #30: they open FOREGROUND — clicking a link that spawns a tab should put
   // you in that tab (matches every mainstream browser; reverses #4's call).
   // #31: same URL already open → focus that tab instead of spawning a dupe.
-  wc.setWindowOpenHandler(({ url: popupUrl }) => {
-    openOrFocus(popupUrl, false);
+  // #111: a deliberate popup — window.open() WITH features — becomes a real
+  // window. Denying it made window.open() return null, so any page that kept
+  // the handle (`w.document.write(...)`, `w.focus()`, `w.location = …`) threw on
+  // the next line and its flow died: that is why credential prompts and terminal
+  // launchers produced nothing at all. target=_blank still becomes a tab (#30).
+  wc.setWindowOpenHandler((details) => {
+    const real = wantsRealWindow(details);
+    // #111 round 2: log every decision. The first fix keyed only on
+    // disposition === 'new-window' and did not work, and there is no Windows
+    // machine here to observe on — so the app has to say what it decided.
+    errorlog.record(
+      'window-open',
+      `decision=${real ? 'window' : 'tab'} disposition=${details.disposition} ` +
+        `frameName="${details.frameName}" features="${details.features}" ` +
+        `fullscreen=${fullscreen} url=${details.url}`
+    );
+    if (real) {
+      return { action: 'allow', overrideBrowserWindowOptions: popupWindowOptions(details.features) };
+    }
+    openOrFocus(details.url, false);
     return { action: 'deny' };
+  });
+  // #111: popups are web content too — same chords, and the #108 error pages
+  // instead of another blank rectangle when one fails to load.
+  wc.on('did-create-window', (child) => {
+    const cwc = child.webContents;
+    wireChords(cwc); // #22
+    wireLoadFailures(cwc); // #108
+    child.setMenu(null); // a popup has no business showing our app menu
+    // #111 round 2: the app ALWAYS launches fullscreen (#37), and a popup that
+    // opens behind a fullscreen window looks exactly like a popup that never
+    // opened. `parent` (set in popupWindowOptions) keeps it above the main
+    // window; this is the belt to that pair of braces.
+    child.once('ready-to-show', () => {
+      child.show();
+      child.moveTop();
+      child.focus();
+    });
   });
   // #33: hotkey tabs are STICKY — page-initiated navigation (link clicks)
   // opens elsewhere instead of navigating the hotkey tab away. Programmatic
@@ -681,23 +771,7 @@ function createTab(url = null, background = false, personaId = null, opts = {}) 
       active: result.activeMatchOrdinal,
     });
   });
-  // #108: a failed load used to render nothing at all — white page, no clue
-  // whether the site or the browser was broken. Main frame only: a subresource
-  // that fails must not blow away a page that otherwise loaded.
-  wc.on('did-fail-load', (_e2, errorCode, errorDescription, failedUrl, isMainFrame) => {
-    if (!isMainFrame) return;
-    if (errorCode === -3) return; // ERR_ABORTED — a navigation the user replaced
-    if (isCertErrorCode(errorCode)) {
-      // Prefer the real certificate details captured in certificate-error;
-      // fall back to a bare record so the page still names the host and code.
-      const details = lastCertError.get(wc.id) || certDetailsFrom(failedUrl, errorDescription, null);
-      details.url = failedUrl || details.url;
-      details.host = hostOf(details.url);
-      showCertError(wc, details);
-      return;
-    }
-    showNetError(wc, failedUrl, errorCode, errorDescription);
-  });
+  wireLoadFailures(wc); // #108 — also applied to popups by #111
   wc.on('did-finish-load', () => tryAutofill(wc)); // #12
   wc.on('dom-ready', () => {
     wc.send('sticky-mode', hotkeyByTab.has(id)); // #33
@@ -1650,6 +1724,164 @@ function showNetError(wc, url, errorCode, errorDescription) {
   });
   wc.loadFile(INTERNAL_PAGES.neterror).catch((err) => errorlog.record('showNetError', err));
 }
+
+// #108: a failed load used to render nothing at all — white page, no clue
+// whether the site or the browser was broken. Main frame only: a subresource
+// that fails must not blow away a page that otherwise loaded.
+// #111: lifted out of createTab so popup windows get error pages too.
+function wireLoadFailures(wc) {
+  wc.on('did-fail-load', (_e, errorCode, errorDescription, failedUrl, isMainFrame) => {
+    if (!isMainFrame) return;
+    if (errorCode === -3) return; // ERR_ABORTED — a navigation the user replaced
+    if (isCertErrorCode(errorCode)) {
+      // Prefer the real certificate details captured in certificate-error;
+      // fall back to a bare record so the page still names the host and code.
+      const details = lastCertError.get(wc.id) || certDetailsFrom(failedUrl, errorDescription, null);
+      details.url = failedUrl || details.url;
+      details.host = hostOf(details.url);
+      showCertError(wc, details);
+      return;
+    }
+    showNetError(wc, failedUrl, errorCode, errorDescription);
+  });
+}
+
+// --- #111 round 3: HTTP authentication (Basic / Digest / proxy) -------------
+//
+// Electron does NOT show a credential dialog on its own. A 401 fires the `login`
+// event and waits for the app to answer; with no handler, Electron cancels the
+// auth, the request goes out unauthenticated, and the server's own "you must log
+// in" body renders instantly. That is not a blocked popup — it only looks like
+// one, which is what made this take three rounds to pin down.
+
+const pendingAuth = new Map(); // realmKey -> { win, callbacks: [], info }
+const authWindowRealm = new Map(); // authWindow wcId -> realmKey
+
+const realmKeyOf = (info) => `${info.scheme}://${info.host}:${info.port}/${info.realm || ''}`;
+
+function promptForAuth(info, callback) {
+  const key = realmKeyOf(info);
+  // One dialog per realm. A page with ten protected images fires ten login
+  // events; without this the user would be answering ten identical prompts.
+  const existing = pendingAuth.get(key);
+  if (existing) {
+    existing.callbacks.push(callback);
+    return;
+  }
+
+  const authWin = new BrowserWindow({
+    width: 460,
+    height: 380,
+    resizable: false,
+    minimizable: false,
+    maximizable: false,
+    title: 'Sign in',
+    show: false,
+    // Same lesson as the popup work: the app is always fullscreen (#37), and an
+    // unparented window can open behind it and look like nothing happened.
+    parent: win,
+    modal: true,
+    backgroundColor: nativeTheme.shouldUseDarkColors ? '#000000' : '#f2f2f4',
+    webPreferences: { preload: path.join(__dirname, 'internal-preload.js') },
+  });
+  authWin.setMenu(null);
+
+  const entry = { win: authWin, callbacks: [callback], info, answered: false };
+  pendingAuth.set(key, entry);
+  authWindowRealm.set(authWin.webContents.id, key);
+
+  authWin.once('ready-to-show', () => {
+    authWin.show();
+    authWin.focus();
+  });
+  // Closing the dialog any other way (X, Esc, parent closing) must still answer
+  // every queued callback, or those requests hang until they time out.
+  authWin.on('closed', () => finishAuth(key, null));
+  authWin.loadFile(INTERNAL_PAGES.auth).catch((err) => errorlog.record('promptForAuth', err));
+}
+
+/** creds === null cancels. Every queued callback is answered exactly once. */
+function finishAuth(key, creds) {
+  const entry = pendingAuth.get(key);
+  if (!entry || entry.answered) return;
+  entry.answered = true;
+  pendingAuth.delete(key);
+  authWindowRealm.delete(entry.win?.webContents?.id);
+  for (const cb of entry.callbacks) {
+    try {
+      if (creds) cb(creds.username, creds.password);
+      else cb(); // no arguments = cancel the authentication
+    } catch (err) {
+      errorlog.record('finishAuth', err);
+    }
+  }
+  entry.callbacks.length = 0;
+}
+
+app.on('login', (event, _wc, details, authInfo, callback) => {
+  // Taking this event over is what makes the dialog possible at all.
+  event.preventDefault();
+  const info = {
+    host: authInfo.host || '',
+    port: authInfo.port || 0,
+    realm: authInfo.realm || '',
+    scheme: authInfo.scheme || 'basic',
+    isProxy: Boolean(authInfo.isProxy),
+    url: details?.url || '',
+  };
+  errorlog.record(
+    'http-auth',
+    `challenge host=${info.host}:${info.port} realm="${info.realm}" ` +
+      `scheme=${info.scheme} proxy=${info.isProxy} url=${info.url}`
+  );
+  promptForAuth(info, callback);
+});
+
+ipcMain.handle('int:auth-details', (e) => {
+  const key = authWindowRealm.get(e.sender.id);
+  const entry = key && pendingAuth.get(key);
+  if (!entry) return null;
+  const { info } = entry;
+  const origin = `https://${info.host}`;
+  // Offer a saved login if the vault happens to be unlocked — the credential
+  // store already exists (#12/#26), so making the user retype is just rude.
+  let prefill = null;
+  if (!locked) {
+    try {
+      const match = credentials.forOrigin(origin)[0] || credentials.forOrigin(`http://${info.host}`)[0];
+      if (match) prefill = { username: match.username, password: match.password };
+    } catch (err) {
+      errorlog.record('auth-prefill', err);
+    }
+  }
+  return { ...info, prefill, canSave: !locked };
+});
+
+ipcMain.handle('int:auth-submit', (e, { username, password, save }) => {
+  const key = authWindowRealm.get(e.sender.id);
+  const entry = key && pendingAuth.get(key);
+  if (!entry) return false;
+  if (save && !locked) {
+    try {
+      credentials.upsert({ origin: `https://${entry.info.host}`, username, password });
+      pushCreds();
+    } catch (err) {
+      errorlog.record('auth-save', err);
+    }
+  }
+  const winToClose = entry.win;
+  finishAuth(key, { username: String(username || ''), password: String(password || '') });
+  if (winToClose && !winToClose.isDestroyed()) winToClose.destroy();
+  return true;
+});
+
+ipcMain.handle('int:auth-cancel', (e) => {
+  const key = authWindowRealm.get(e.sender.id);
+  const entry = key && pendingAuth.get(key);
+  finishAuth(key, null);
+  if (entry?.win && !entry.win.isDestroyed()) entry.win.destroy();
+  return true;
+});
 
 // The only place a certificate is ever trusted. Registered once, app-wide.
 app.on('certificate-error', (event, wc, url, error, certificate, callback) => {
