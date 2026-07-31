@@ -40,6 +40,8 @@ const INTERNAL_PAGES = {
   manager: path.join(__dirname, 'ui', 'manager.html'),
   about: path.join(__dirname, 'ui', 'about.html'), // #61
   passwords: path.join(__dirname, 'ui', 'passwords.html'), // #63
+  certerror: path.join(__dirname, 'ui', 'certerror.html'), // #108
+  neterror: path.join(__dirname, 'ui', 'neterror.html'), // #108
 };
 const fileUrl = (p) => `file://${p.replace(/\\/g, '/')}`;
 const isInternalUrl = (u) =>
@@ -678,6 +680,23 @@ function createTab(url = null, background = false, personaId = null, opts = {}) 
       matches: result.matches,
       active: result.activeMatchOrdinal,
     });
+  });
+  // #108: a failed load used to render nothing at all — white page, no clue
+  // whether the site or the browser was broken. Main frame only: a subresource
+  // that fails must not blow away a page that otherwise loaded.
+  wc.on('did-fail-load', (_e2, errorCode, errorDescription, failedUrl, isMainFrame) => {
+    if (!isMainFrame) return;
+    if (errorCode === -3) return; // ERR_ABORTED — a navigation the user replaced
+    if (isCertErrorCode(errorCode)) {
+      // Prefer the real certificate details captured in certificate-error;
+      // fall back to a bare record so the page still names the host and code.
+      const details = lastCertError.get(wc.id) || certDetailsFrom(failedUrl, errorDescription, null);
+      details.url = failedUrl || details.url;
+      details.host = hostOf(details.url);
+      showCertError(wc, details);
+      return;
+    }
+    showNetError(wc, failedUrl, errorCode, errorDescription);
   });
   wc.on('did-finish-load', () => tryAutofill(wc)); // #12
   wc.on('dom-ready', () => {
@@ -1527,6 +1546,131 @@ function onUnlocked() {
   flushPendingExternalUrl(); // #106: a link that arrived while we were locked
 }
 
+// --- #108: TLS certificate errors and failed loads --------------------------
+//
+// Before this, an untrusted certificate meant Electron cancelled the load in
+// silence and the user got a white page — indistinguishable from a broken site.
+// Every mainstream browser shows an interstitial and lets you decide.
+//
+// The rule this code exists to honour: NEVER trust a certificate the user has
+// not explicitly accepted, and never trust one blanket-style. Exceptions are
+// stored per host AND pinned to the certificate's fingerprint, so accepting a
+// self-signed cert today does not silently trust a DIFFERENT cert on that host
+// tomorrow — cert substitution is the exact attack the warning exists to catch.
+
+const certExceptions = () => {
+  const list = getSettings().certExceptions;
+  return Array.isArray(list) ? list : [];
+};
+
+function isCertTrusted(host, fingerprint) {
+  if (!host || !fingerprint) return false;
+  return certExceptions().some((e) => e.host === host && e.fingerprint === fingerprint);
+}
+
+function addCertException(host, fingerprint) {
+  if (!host || !fingerprint || isCertTrusted(host, fingerprint)) return;
+  const s = getSettings();
+  s.certExceptions = [...certExceptions(), { host, fingerprint, addedAt: Date.now() }];
+  saveSettings();
+}
+
+function removeCertException(host, fingerprint) {
+  const s = getSettings();
+  s.certExceptions = certExceptions().filter(
+    (e) => !(e.host === host && (!fingerprint || e.fingerprint === fingerprint))
+  );
+  saveSettings();
+}
+
+const hostOf = (url) => {
+  try {
+    return new URL(url).host;
+  } catch {
+    return '';
+  }
+};
+
+// What the interstitial needs, keyed by the webContents showing it — the page
+// itself is a file:// URL and cannot be told anything through its own location.
+const pendingCertError = new Map(); // wcId -> details shown by the interstitial
+const lastCertError = new Map(); // wcId -> details captured from certificate-error
+
+// Chromium's certificate failures. Anything in this band means "the load died
+// because of the certificate", which is what tells did-fail-load to show the
+// interstitial instead of the generic network error page.
+// -200..-219 are the ERR_CERT_* family; -501 is ERR_INSECURE_RESPONSE.
+const isCertErrorCode = (code) => (code <= -200 && code >= -219) || code === -501;
+
+function certDetailsFrom(url, error, certificate) {
+  return {
+    url,
+    host: hostOf(url),
+    error: String(error || 'unknown'),
+    fingerprint: certificate?.fingerprint || '',
+    subject: certificate?.subjectName || certificate?.subject?.commonName || '',
+    issuer: certificate?.issuerName || certificate?.issuer?.commonName || '',
+    validStart: certificate?.validStart ? certificate.validStart * 1000 : null,
+    validExpiry: certificate?.validExpiry ? certificate.validExpiry * 1000 : null,
+  };
+}
+
+function showCertError(wc, details) {
+  pendingCertError.set(wc.id, details);
+  wc.loadFile(INTERNAL_PAGES.certerror).catch((err) => errorlog.record('showCertError', err));
+}
+
+// Chromium error codes worth explaining in plain English; anything else falls
+// back to the raw description rather than pretending we know what it means.
+const NET_ERRORS = {
+  '-2': 'The request failed.',
+  '-6': "The file couldn't be found.",
+  '-7': 'The connection timed out.',
+  '-15': 'The connection was interrupted.',
+  '-21': 'The network changed while the page was loading.',
+  '-100': 'The connection was closed unexpectedly.',
+  '-101': 'The connection was reset.',
+  '-102': 'The connection was refused — nothing is listening there.',
+  '-105': "That hostname couldn't be resolved. Check the address, or whether you're on the right network.",
+  '-106': 'The internet connection appears to be offline.',
+  '-109': 'That host is unreachable.',
+  '-118': 'The connection timed out while being established.',
+  '-137': "That hostname couldn't be resolved.",
+  '-324': 'The server closed the connection without sending any data.',
+};
+
+const pendingNetError = new Map(); // wcId -> details
+
+function showNetError(wc, url, errorCode, errorDescription) {
+  pendingNetError.set(wc.id, {
+    url,
+    code: errorCode,
+    description: errorDescription || '',
+    explanation: NET_ERRORS[String(errorCode)] || '',
+  });
+  wc.loadFile(INTERNAL_PAGES.neterror).catch((err) => errorlog.record('showNetError', err));
+}
+
+// The only place a certificate is ever trusted. Registered once, app-wide.
+app.on('certificate-error', (event, wc, url, error, certificate, callback) => {
+  const host = hostOf(url);
+  const fingerprint = certificate?.fingerprint || '';
+  // Remember why this failed so did-fail-load can explain it. certificate-error
+  // fires for subresources too, so the decision happens here but the interstitial
+  // is left to did-fail-load, which knows whether the MAIN frame died.
+  try {
+    lastCertError.set(wc.id, certDetailsFrom(url, error, certificate));
+  } catch {
+    // a destroyed webContents has no id — nothing to record, nothing to show
+  }
+  if (isCertTrusted(host, fingerprint)) {
+    event.preventDefault();
+    callback(true); // this exact certificate, on this exact host, accepted before
+    return;
+  }
+  callback(false); // refuse — the interstitial does the explaining
+});
+
 // --- #106: default browser — being handed URLs by the OS -------------------
 
 // Windows launches `WebForge.exe <url>` (see installer.nsh's ProgID command).
@@ -1886,6 +2030,45 @@ ipcMain.handle('int:save-tab-groups', (_e, list) => {
   pushTabGroups();
   return true;
 });
+// --- #108: interstitial IPC. The pages are file:// and know nothing about the
+// navigation that failed, so they ask for it by their own webContents id. ---
+ipcMain.handle('int:cert-details', (e) => pendingCertError.get(e.sender.id) || null);
+ipcMain.handle('int:net-details', (e) => pendingNetError.get(e.sender.id) || null);
+
+// The only path that ever records a trust decision, and it is only reachable
+// from the interstitial's Proceed button — i.e. an explicit human choice.
+ipcMain.handle('int:cert-proceed', (e) => {
+  const details = pendingCertError.get(e.sender.id);
+  if (!details?.host || !details.fingerprint) return false;
+  addCertException(details.host, details.fingerprint);
+  pendingCertError.delete(e.sender.id);
+  e.sender.loadURL(details.url).catch((err) => errorlog.record('cert-proceed', err));
+  return true;
+});
+
+ipcMain.handle('int:cert-back', (e) => {
+  pendingCertError.delete(e.sender.id);
+  const nav = e.sender.navigationHistory;
+  if (nav?.canGoBack()) nav.goBack();
+  else e.sender.loadURL(newTabUrl());
+  return true;
+});
+
+ipcMain.handle('int:net-retry', (e) => {
+  const details = pendingNetError.get(e.sender.id);
+  if (!details?.url) return false;
+  pendingNetError.delete(e.sender.id);
+  e.sender.loadURL(details.url).catch((err) => errorlog.record('net-retry', err));
+  return true;
+});
+
+// Settings: make stored exceptions auditable and revocable.
+ipcMain.handle('int:cert-exceptions', () => certExceptions());
+ipcMain.handle('int:cert-revoke', (_e, { host, fingerprint }) => {
+  removeCertException(host, fingerprint);
+  return certExceptions();
+});
+
 // #106: report, don't pretend to set — the switch is the user's to make.
 ipcMain.handle('int:default-browser-status', () => ({ isDefault: isDefaultBrowser() }));
 ipcMain.handle('int:open-default-apps', async () => {

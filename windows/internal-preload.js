@@ -14,6 +14,14 @@ contextBridge.exposeInMainWorld('wf', {
   // default browser (#106)
   defaultBrowserStatus: () => ipcRenderer.invoke('int:default-browser-status'),
   openDefaultApps: () => ipcRenderer.invoke('int:open-default-apps'),
+  // certificate + network interstitials (#108)
+  certDetails: () => ipcRenderer.invoke('int:cert-details'),
+  certProceed: () => ipcRenderer.invoke('int:cert-proceed'),
+  certBack: () => ipcRenderer.invoke('int:cert-back'),
+  certExceptions: () => ipcRenderer.invoke('int:cert-exceptions'),
+  certRevoke: (host, fingerprint) => ipcRenderer.invoke('int:cert-revoke', { host, fingerprint }),
+  netDetails: () => ipcRenderer.invoke('int:net-details'),
+  netRetry: () => ipcRenderer.invoke('int:net-retry'),
   about: () => ipcRenderer.invoke('int:about'), // #61
   openAbout: () => ipcRenderer.send('int:open-about'),
   openPasswords: () => ipcRenderer.send('int:open-passwords'), // #63

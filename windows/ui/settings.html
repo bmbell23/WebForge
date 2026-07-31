@@ -145,6 +145,15 @@
     <button class="choice" id="defbtn">Open Windows default apps settings…</button>
   </div>
 
+  <!-- #108: every certificate the user has chosen to trust, visible and
+       revocable. A security decision you cannot review is a security hole. -->
+  <h2>Certificate exceptions</h2>
+  <div class="sub" style="margin-bottom:10px">
+    Sites you chose to trust despite a certificate warning. Each is pinned to that
+    exact certificate — if a site presents a different one, you'll be warned again.
+  </div>
+  <div id="certlist" class="card status">Checking…</div>
+
   <h2>Sync (bookmarks)</h2>
   <div class="card status" id="sync">Checking…</div>
 
@@ -316,6 +325,35 @@
 
   document.getElementById('pwbtn').onclick = () => wf.openPasswords(); // #63
 
+  // --- certificate exceptions (#108) ---
+  async function refreshCertExceptions() {
+    const el = document.getElementById('certlist');
+    const list = await wf.certExceptions();
+    if (!list.length) {
+      el.innerHTML = `<span class="ok">None</span> — no certificate warnings have been overridden.`;
+      return;
+    }
+    el.innerHTML = '';
+    for (const e of list) {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:center;gap:10px;margin:6px 0;flex-wrap:wrap';
+      const txt = document.createElement('div');
+      txt.style.cssText = 'flex:1;min-width:0;word-break:break-all';
+      txt.innerHTML =
+        `<b>${e.host}</b><br><span class="sub" style="font-size:11px">${e.fingerprint || 'no fingerprint'}` +
+        `${e.addedAt ? ' · trusted ' + new Date(e.addedAt).toLocaleString() : ''}</span>`;
+      const btn = document.createElement('button');
+      btn.className = 'choice';
+      btn.textContent = 'Revoke';
+      btn.onclick = async () => {
+        await wf.certRevoke(e.host, e.fingerprint);
+        refreshCertExceptions();
+      };
+      row.append(txt, btn);
+      el.appendChild(row);
+    }
+  }
+
   // --- default browser (#106) ---
   async function refreshDefaultBrowser() {
     const el = document.getElementById('defbrowser');
@@ -486,6 +524,7 @@
     paint();
     refreshSync();
     refreshDefaultBrowser(); // #106
+    refreshCertExceptions(); // #108
   }
   load();
   setInterval(refreshSync, 30000);

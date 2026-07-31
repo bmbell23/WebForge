@@ -1,0 +1,78 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Page didn't load</title>
+<style>
+  /* #108: before this, ANY failed load rendered a blank white view — you could
+     not tell a broken site from a broken browser. */
+  :root {
+    color-scheme: light dark;
+    --bg: #f2f2f4; --card: #ffffff; --text: #1c1c1e; --dim: #6e6e73;
+    --hover: rgba(0,0,0,0.07); --accent: #2f7cf6; --border: rgba(0,0,0,0.12);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #000000; --card: #131315; --text: #e8e8ea; --dim: #7c7c82;
+      --hover: rgba(255,255,255,0.09); --accent: #3d9bff; --border: rgba(255,255,255,0.14);
+    }
+  }
+  * { box-sizing: border-box; }
+  ::-webkit-scrollbar { width: 0; height: 0; display: none; }
+  body {
+    margin: 0; padding: 48px 24px 60px;
+    background: var(--bg); color: var(--text);
+    font: 14px system-ui, sans-serif;
+  }
+  .inner { max-width: 620px; margin: 0 auto; }
+  .glyph { font-size: 40px; line-height: 1; margin-bottom: 14px; }
+  h1 { font-size: 22px; margin: 0 0 10px; }
+  p { line-height: 1.55; margin: 0 0 14px; }
+  .card {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 10px; padding: 14px 16px; margin: 20px 0;
+    font-size: 12.5px; color: var(--dim);
+  }
+  .card div { margin: 5px 0; word-break: break-all; }
+  .card b { color: var(--text); font-weight: 600; }
+  .row { display: flex; gap: 10px; margin-top: 24px; }
+  button {
+    border: 1px solid var(--border); border-radius: 8px;
+    padding: 9px 16px; font: 500 13px system-ui, sans-serif;
+    background: var(--card); color: var(--text); cursor: pointer;
+  }
+  button:hover { background: var(--hover); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+</style>
+</head>
+<body>
+<div class="inner">
+  <div class="glyph">🌐</div>
+  <h1 id="headline">This page didn't load</h1>
+  <p id="explanation"></p>
+  <div class="card" id="details"></div>
+  <div class="row">
+    <button class="primary" id="retry">Try again</button>
+    <button id="back">Go back</button>
+  </div>
+</div>
+<script>
+  const esc = (s) => String(s ?? '').replace(/[<>&]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]));
+  (async () => {
+    const d = await wf.netDetails();
+    if (!d) {
+      document.getElementById('explanation').textContent =
+        'The details of this failure are no longer available.';
+      return;
+    }
+    document.getElementById('explanation').textContent =
+      d.explanation || 'WebForge could not reach this page.';
+    document.getElementById('details').innerHTML =
+      `<div><b>Address</b> ${esc(d.url)}</div>` +
+      `<div><b>Error</b> ${esc(d.description)} (${esc(d.code)})</div>`;
+  })();
+  document.getElementById('retry').onclick = () => wf.netRetry();
+  document.getElementById('back').onclick = () => wf.certBack(); // same "go back" behaviour
+</script>
+</body>
+</html>

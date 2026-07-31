@@ -1,0 +1,110 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Certificate problem</title>
+<style>
+  /* #108: the interstitial that used to be a blank white page. Styled like the
+     rest of the internal pages, but deliberately soberer — this is a warning,
+     not a settings screen. */
+  :root {
+    color-scheme: light dark;
+    --bg: #f2f2f4; --card: #ffffff; --text: #1c1c1e; --dim: #6e6e73;
+    --hover: rgba(0,0,0,0.07); --accent: #2f7cf6; --warn: #b3261e;
+    --border: rgba(0,0,0,0.12);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #000000; --card: #131315; --text: #e8e8ea; --dim: #7c7c82;
+      --hover: rgba(255,255,255,0.09); --accent: #3d9bff; --warn: #ff6b60;
+      --border: rgba(255,255,255,0.14);
+    }
+  }
+  * { box-sizing: border-box; }
+  ::-webkit-scrollbar { width: 0; height: 0; display: none; }
+  body {
+    margin: 0; padding: 48px 24px 60px;
+    background: var(--bg); color: var(--text);
+    font: 14px system-ui, sans-serif;
+  }
+  .inner { max-width: 620px; margin: 0 auto; }
+  .glyph { font-size: 40px; line-height: 1; margin-bottom: 14px; }
+  h1 { font-size: 22px; margin: 0 0 10px; }
+  p { line-height: 1.55; margin: 0 0 14px; }
+  .host { font-weight: 600; word-break: break-all; }
+  .card {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 10px; padding: 14px 16px; margin: 20px 0;
+    font-size: 12.5px; color: var(--dim);
+  }
+  .card div { margin: 5px 0; word-break: break-all; }
+  .card b { color: var(--text); font-weight: 600; }
+  .row { display: flex; gap: 10px; margin-top: 24px; flex-wrap: wrap; }
+  button {
+    border: 1px solid var(--border); border-radius: 8px;
+    padding: 9px 16px; font: 500 13px system-ui, sans-serif;
+    background: var(--card); color: var(--text); cursor: pointer;
+  }
+  button:hover { background: var(--hover); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .danger { color: var(--warn); }
+  details { margin-top: 8px; }
+  summary { cursor: pointer; color: var(--dim); font-size: 13px; }
+  .fine { font-size: 12px; color: var(--dim); margin-top: 18px; }
+</style>
+</head>
+<body>
+<div class="inner">
+  <div class="glyph">🔒</div>
+  <h1>This connection isn't private</h1>
+  <p>
+    WebForge couldn't verify that <span class="host" id="host">this site</span> is
+    who it claims to be. Someone could be impersonating it, or — far more often on
+    an internal or work network — the site is simply using a self-signed
+    certificate that your computer hasn't been told to trust.
+  </p>
+  <p id="reason" class="danger"></p>
+
+  <div class="card" id="details"></div>
+
+  <div class="row">
+    <button class="primary" id="back">Back to safety</button>
+    <details>
+      <summary>Continue anyway</summary>
+      <p class="fine">
+        Only do this if you recognise the site and expected this warning. WebForge
+        will remember <b>this exact certificate</b> for
+        <span class="host" id="host2">this host</span> — if it is ever replaced by a
+        different one, you'll be warned again. You can revoke this in
+        Settings → Certificate exceptions.
+      </p>
+      <button id="proceed" class="danger">Proceed — I trust this certificate</button>
+    </details>
+  </div>
+</div>
+<script>
+  const fmt = (ms) => (ms ? new Date(ms).toLocaleString() : 'unknown');
+  const esc = (s) => String(s ?? '').replace(/[<>&]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]));
+
+  (async () => {
+    const d = await wf.certDetails();
+    if (!d) {
+      document.getElementById('reason').textContent =
+        'The details of this failure are no longer available. Try loading the page again.';
+      return;
+    }
+    for (const id of ['host', 'host2']) document.getElementById(id).textContent = d.host || 'this site';
+    document.getElementById('reason').textContent = d.error ? `Reported problem: ${d.error}` : '';
+    document.getElementById('details').innerHTML =
+      `<div><b>Site</b> ${esc(d.host)}</div>` +
+      `<div><b>Issued to</b> ${esc(d.subject) || '—'}</div>` +
+      `<div><b>Issued by</b> ${esc(d.issuer) || '—'}</div>` +
+      `<div><b>Valid</b> ${fmt(d.validStart)} → ${fmt(d.validExpiry)}</div>` +
+      `<div><b>Fingerprint</b> ${esc(d.fingerprint) || '—'}</div>`;
+  })();
+
+  document.getElementById('back').onclick = () => wf.certBack();
+  document.getElementById('proceed').onclick = () => wf.certProceed();
+</script>
+</body>
+</html>
