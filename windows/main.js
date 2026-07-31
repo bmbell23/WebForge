@@ -2075,6 +2075,11 @@ ipcMain.on('find-close', () => closeFind());
 ipcMain.on('stop', () => activeWc()?.stop());
 ipcMain.on('new-tab', () => openNewTab()); // #82
 ipcMain.on('close-tab', (_e, id) => closeTab(id));
+// #115: Ctrl+X from any renderer that decided the user was not typing. The
+// editable-field check lives in the preloads, where focus is known exactly.
+ipcMain.on('close-active-tab', () => {
+  if (!locked && activeId !== null) closeTab(activeId);
+});
 ipcMain.on('activate-tab', errorlog.guard('activate-tab', (_e, id) => activateTab(Number(id))));
 ipcMain.on('toggle-pin', (_e, id) => togglePin(id));
 // #25: persona IPC

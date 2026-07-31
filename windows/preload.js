@@ -66,3 +66,46 @@ contextBridge.exposeInMainWorld('webforge', {
   vaultReset: () => ipcRenderer.invoke('vault-reset'),
   lockNow: () => ipcRenderer.send('lock-now'),
 });
+
+// #115: Ctrl+X closes the tab — but ONLY when you are not typing, because
+// Ctrl+X is Cut and claiming it outright would break cut in every text field on
+// every site. That is precisely the mistake #38 made with Ctrl+Shift+Arrow,
+// which #101 had to reverse.
+//
+// The decision is made HERE rather than in the main process on reported focus
+// state: main would always be a round-trip behind, and a stale report would eat
+// a Cut. At keydown the renderer knows exactly what is focused, so nothing can
+// go stale.
+//
+// Duplicated across the three preloads rather than shared: Electron
+// sandboxes renderers by default, and a sandboxed preload can only require
+// `electron` and a couple of node built-ins — never a local file.
+function installCloseTabKey(send) {
+  const editable = (el) => {
+    if (!el) return false;
+    if (el.isContentEditable) return true;
+    const tag = el.tagName;
+    if (tag === 'TEXTAREA' || tag === 'SELECT') return true;
+    if (tag !== 'INPUT') return false;
+    // Buttons and checkboxes are inputs too, but nobody cuts text from them.
+    return !['button', 'submit', 'reset', 'checkbox', 'radio', 'file', 'image', 'range', 'color'].includes(
+      (el.type || 'text').toLowerCase()
+    );
+  };
+  window.addEventListener(
+    'keydown',
+    (e) => {
+      if (!e.ctrlKey || e.shiftKey || e.altKey || e.metaKey) return;
+      if ((e.key || '').toLowerCase() !== 'x') return;
+      // composedPath()[0] sees INTO shadow roots, where e.target is retargeted
+      // to the host — the same trap the sticky-click handler below hit (#33).
+      const focused = e.composedPath?.()[0] || document.activeElement;
+      if (editable(focused) || editable(document.activeElement)) return; // let Cut happen
+      e.preventDefault();
+      send();
+    },
+    true
+  );
+}
+
+installCloseTabKey(() => ipcRenderer.send('close-active-tab'));
