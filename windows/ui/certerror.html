@@ -86,11 +86,24 @@
   const fmt = (ms) => (ms ? new Date(ms).toLocaleString() : 'unknown');
   const esc = (s) => String(s ?? '').replace(/[<>&]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]));
 
+  // #112: this page had no way to report its own failure. When the `wf` bridge
+  // was missing the script threw on the first line, leaving the placeholder text
+  // in place and a Proceed button that did nothing — which is precisely how the
+  // bug presented. Never fail silently here again.
+  function fail(msg) {
+    const el = document.getElementById('reason');
+    el.textContent = msg;
+    el.style.fontWeight = '600';
+  }
+
   (async () => {
+    if (typeof wf === 'undefined' || !wf.certDetails) {
+      fail('WebForge could not load this warning properly (missing internal bridge). Please report this.');
+      return;
+    }
     const d = await wf.certDetails();
     if (!d) {
-      document.getElementById('reason').textContent =
-        'The details of this failure are no longer available. Try loading the page again.';
+      fail('The details of this failure are no longer available. Try loading the page again.');
       return;
     }
     for (const id of ['host', 'host2']) document.getElementById(id).textContent = d.host || 'this site';
@@ -104,7 +117,15 @@
   })();
 
   document.getElementById('back').onclick = () => wf.certBack();
-  document.getElementById('proceed').onclick = () => wf.certProceed();
+  document.getElementById('proceed').onclick = async () => {
+    try {
+      const res = await wf.certProceed();
+      // A refusal now explains itself instead of looking like a dead button.
+      if (res && res.ok === false) fail(res.reason || 'WebForge could not continue to this site.');
+    } catch (err) {
+      fail(`Continuing failed: ${err && err.message ? err.message : err}`);
+    }
+  };
 </script>
 </body>
 </html>

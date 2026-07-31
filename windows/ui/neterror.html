@@ -58,7 +58,14 @@
 </div>
 <script>
   const esc = (s) => String(s ?? '').replace(/[<>&]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]));
+  // #112: same defect as certerror.html — a missing bridge threw on the first
+  // line and left Retry / Go back dead with no explanation.
   (async () => {
+    if (typeof wf === 'undefined' || !wf.netDetails) {
+      document.getElementById('explanation').textContent =
+        'WebForge could not load this error page properly (missing internal bridge). Please report this.';
+      return;
+    }
     const d = await wf.netDetails();
     if (!d) {
       document.getElementById('explanation').textContent =

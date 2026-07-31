@@ -6,7 +6,33 @@
 // bouncing it back just flickered). So intercept the CLICK instead, in the
 // capture phase, before the page's own handlers see it: cancel the click and
 // hand the href to main, which opens it in a new foreground tab.
-const { ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer } = require('electron');
+
+// #112: the interstitials (#108) are loaded INTO an existing content tab, and a
+// tab's preload is fixed at creation from its first URL — so a tab opened on
+// https:// keeps THIS preload when it is navigated to certerror.html. The pages
+// were calling a `wf` bridge that therefore did not exist: nothing rendered and
+// Proceed did nothing.
+//
+// So expose a bridge here — but a deliberately tiny one, and only for our own
+// interstitial documents. Web content must never receive the full privileged
+// internal-preload API (#40); that is the whole reason two preloads exist.
+// Gating on a file:// URL is sound because web pages cannot navigate themselves
+// to file://, so a real site can never reach this branch.
+const INTERSTITIALS = ['certerror.html', 'neterror.html'];
+const isInterstitial =
+  location.protocol === 'file:' &&
+  INTERSTITIALS.some((name) => location.pathname.endsWith(`/ui/${name}`));
+
+if (isInterstitial) {
+  contextBridge.exposeInMainWorld('wf', {
+    certDetails: () => ipcRenderer.invoke('int:cert-details'),
+    certProceed: () => ipcRenderer.invoke('int:cert-proceed'),
+    certBack: () => ipcRenderer.invoke('int:cert-back'),
+    netDetails: () => ipcRenderer.invoke('int:net-details'),
+    netRetry: () => ipcRenderer.invoke('int:net-retry'),
+  });
+}
 
 let sticky = false;
 ipcRenderer.on('sticky-mode', (_e, on) => {

@@ -1638,14 +1638,21 @@ const certExceptions = () => {
 };
 
 function isCertTrusted(host, fingerprint) {
-  if (!host || !fingerprint) return false;
-  return certExceptions().some((e) => e.host === host && e.fingerprint === fingerprint);
+  if (!host) return false;
+  return certExceptions().some((e) => {
+    if (e.host !== host) return false;
+    // A pinned exception must match the exact certificate — that is the point:
+    // accepting one self-signed cert must not bless a DIFFERENT one later.
+    // An unpinned entry (we never saw the certificate; see cert-proceed) can
+    // only be host-wide, and is labelled as such in Settings.
+    return e.fingerprint ? e.fingerprint === fingerprint : true;
+  });
 }
 
 function addCertException(host, fingerprint) {
-  if (!host || !fingerprint || isCertTrusted(host, fingerprint)) return;
+  if (!host || isCertTrusted(host, fingerprint)) return;
   const s = getSettings();
-  s.certExceptions = [...certExceptions(), { host, fingerprint, addedAt: Date.now() }];
+  s.certExceptions = [...certExceptions(), { host, fingerprint: fingerprint || null, addedAt: Date.now() }];
   saveSettings();
 }
 
@@ -2271,11 +2278,19 @@ ipcMain.handle('int:net-details', (e) => pendingNetError.get(e.sender.id) || nul
 // from the interstitial's Proceed button — i.e. an explicit human choice.
 ipcMain.handle('int:cert-proceed', (e) => {
   const details = pendingCertError.get(e.sender.id);
-  if (!details?.host || !details.fingerprint) return false;
-  addCertException(details.host, details.fingerprint);
+  // #112: this used to `return false` on a missing fingerprint and the page
+  // ignored the result, so a refusal looked exactly like a dead button. Say why.
+  if (!details?.host) {
+    errorlog.record('cert-proceed', 'refused: no pending certificate error for this view');
+    return { ok: false, reason: 'This warning is no longer active. Reload the page and try again.' };
+  }
+  // No fingerprint means we never saw the certificate itself, so the exception
+  // cannot be pinned. Still let the user through — a Proceed that silently does
+  // nothing is worse — but record it unpinned so Settings can say so honestly.
+  addCertException(details.host, details.fingerprint || null);
   pendingCertError.delete(e.sender.id);
   e.sender.loadURL(details.url).catch((err) => errorlog.record('cert-proceed', err));
-  return true;
+  return { ok: true };
 });
 
 ipcMain.handle('int:cert-back', (e) => {

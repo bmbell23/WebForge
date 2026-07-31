@@ -339,8 +339,14 @@
       row.style.cssText = 'display:flex;align-items:center;gap:10px;margin:6px 0;flex-wrap:wrap';
       const txt = document.createElement('div');
       txt.style.cssText = 'flex:1;min-width:0;word-break:break-all';
+      // #112: an entry with no fingerprint trusts ANY certificate on that host.
+      // That is weaker than the pinned case and must not be presented as if it
+      // were the same thing.
+      const pin = e.fingerprint
+        ? e.fingerprint
+        : '<span class="bad">not pinned — trusts any certificate on this host</span>';
       txt.innerHTML =
-        `<b>${e.host}</b><br><span class="sub" style="font-size:11px">${e.fingerprint || 'no fingerprint'}` +
+        `<b>${e.host}</b><br><span class="sub" style="font-size:11px">${pin}` +
         `${e.addedAt ? ' · trusted ' + new Date(e.addedAt).toLocaleString() : ''}</span>`;
       const btn = document.createElement('button');
       btn.className = 'choice';
