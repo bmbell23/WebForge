@@ -77,6 +77,22 @@ function installCloseTabKey(send) {
 
 installCloseTabKey(() => ipcRenderer.send('close-active-tab'));
 
+// #100: Ctrl+J opens the current selection through the URL rules. Read here
+// because before-input-event in the main process is synchronous and cannot ask
+// the page what is selected. Main stays silent when nothing matches.
+window.addEventListener(
+  'keydown',
+  (e) => {
+    if (!e.ctrlKey || e.shiftKey || e.altKey || e.metaKey) return;
+    if ((e.key || '').toLowerCase() !== 'j') return;
+    const text = String(window.getSelection?.() || '');
+    if (!text.trim()) return; // nothing selected: leave the key to the page
+    e.preventDefault();
+    ipcRenderer.send('open-text-rule', text);
+  },
+  true
+);
+
 let sticky = false;
 ipcRenderer.on('sticky-mode', (_e, on) => {
   sticky = Boolean(on);

@@ -25,6 +25,7 @@ const hotkeys = require('./hotkeys');
 const personas = require('./personas'); // #25
 const errorlog = require('./errorlog'); // #75
 const tabnav = require('./tabnav'); // #113/#114 — unit-tested, Electron-free
+const textrules = require('./textrules'); // #100 — ditto
 
 // #43: new tabs land on our own search page; Google is the default engine.
 const ENGINES = {
@@ -777,6 +778,19 @@ function createTab(url = null, background = false, personaId = null, opts = {}) 
       matches: result.matches,
       active: result.activeMatchOrdinal,
     });
+  });
+  // #100: right-click a matching selection. WebForge has no context menu at all
+  // today, so this shows one ONLY when a rule matches — right-click stays inert
+  // otherwise, exactly as before. (A general context menu with copy/paste is
+  // worth having, but that is its own ticket, not a rider on this one.)
+  wc.on('context-menu', (_e2, params) => {
+    if (locked) return;
+    const hit = textrules.resolve(params.selectionText, textRules());
+    if (!hit) return;
+    const label = hit.rule.name ? `Open ${hit.matched} in ${hit.rule.name}` : `Open ${hit.matched}`;
+    Menu.buildFromTemplate([
+      { label, click: () => openFromSelection(params.selectionText) },
+    ]).popup({ window: win });
   });
   wireLoadFailures(wc); // #108 — also applied to popups by #111
   wc.on('did-finish-load', () => tryAutofill(wc)); // #12
@@ -1663,6 +1677,32 @@ function onUnlocked() {
   flushPendingExternalUrl(); // #106: a link that arrived while we were locked
 }
 
+// --- #100: selected text -> URL rules ---------------------------------------
+
+const textRules = () => {
+  const list = getSettings().textRules;
+  return Array.isArray(list) && list.length ? list : textrules.DEFAULT_RULES;
+};
+
+function saveTextRules(list) {
+  const s = getSettings();
+  s.textRules = Array.isArray(list) ? list.filter((r) => r && r.pattern && r.template) : [];
+  saveSettings();
+  return textRules();
+}
+
+/**
+ * Open whatever the selection resolves to. Silent when nothing matches — a
+ * hotkey that navigates somewhere useless is worse than one that does nothing.
+ */
+function openFromSelection(text) {
+  if (locked) return false;
+  const hit = textrules.resolve(text, textRules());
+  if (!hit) return false;
+  openOrFocus(hit.url, false); // new foreground tab; Persona rules still apply (#96)
+  return true;
+}
+
 // --- #108: TLS certificate errors and failed loads --------------------------
 //
 // Before this, an untrusted certificate meant Electron cancelled the load in
@@ -2087,6 +2127,11 @@ ipcMain.on('close-tab', (_e, id) => closeTab(id));
 ipcMain.on('close-active-tab', () => {
   if (!locked && activeId !== null) closeTab(activeId);
 });
+// #100: Ctrl+J — the selection comes from the renderer, because
+// before-input-event is synchronous and cannot read the page's selection.
+ipcMain.on('open-text-rule', (_e, text) => openFromSelection(String(text || '')));
+ipcMain.handle('int:get-text-rules', () => textRules());
+ipcMain.handle('int:save-text-rules', (_e, list) => saveTextRules(list));
 ipcMain.on('activate-tab', errorlog.guard('activate-tab', (_e, id) => activateTab(Number(id))));
 ipcMain.on('toggle-pin', (_e, id) => togglePin(id));
 // #25: persona IPC

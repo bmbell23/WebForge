@@ -145,6 +145,19 @@
     <button class="choice" id="defbtn">Open Windows default apps settings…</button>
   </div>
 
+  <!-- #100: highlight text, press Ctrl+J or right-click, land on a URL. -->
+  <h2>Text shortcuts</h2>
+  <div class="sub" style="margin-bottom:10px">
+    Select text in a page and press <b>Ctrl+J</b> (or right-click it) to open a
+    matching URL. <b>$0</b> is the whole match, <b>$1</b>–<b>$9</b> are capture
+    groups. First matching rule wins. Matching ignores case.
+  </div>
+  <div id="rulelist"></div>
+  <div class="row" style="margin-top:8px">
+    <button class="choice" id="ruleadd">＋ Add rule</button>
+  </div>
+  <div class="sub" id="rulemsg" style="margin-top:6px"></div>
+
   <!-- #108: every certificate the user has chosen to trust, visible and
        revocable. A security decision you cannot review is a security hole. -->
   <h2>Certificate exceptions</h2>
@@ -324,6 +337,87 @@
   }
 
   document.getElementById('pwbtn').onclick = () => wf.openPasswords(); // #63
+
+  // --- text shortcut rules (#100) ---
+  let textRules = [];
+
+  function ruleRow(rule, index) {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;gap:8px;align-items:center;margin:6px 0;flex-wrap:wrap';
+
+    const mk = (value, placeholder, width) => {
+      const i = document.createElement('input');
+      i.type = 'text';
+      i.value = value || '';
+      i.placeholder = placeholder;
+      i.spellcheck = false;
+      i.style.cssText = `flex:${width};min-width:120px;padding:6px 8px;border-radius:6px;` +
+        'border:1px solid var(--border,rgba(128,128,128,.35));background:var(--field-bg,#131315);' +
+        'color:inherit;font:12px ui-monospace,monospace';
+      return i;
+    };
+
+    const name = mk(rule.name, 'Name', '0 0 110px');
+    const pattern = mk(rule.pattern, 'Pattern e.g. [A-Z]+-\\d+', '1');
+    const template = mk(rule.template, 'https://example.com/$0', '2');
+
+    const save = async () => {
+      textRules[index] = {
+        name: name.value.trim(),
+        pattern: pattern.value.trim(),
+        template: template.value.trim(),
+      };
+      await persistRules();
+    };
+    for (const input of [name, pattern, template]) input.onchange = save;
+
+    const del = document.createElement('button');
+    del.className = 'choice';
+    del.textContent = 'Remove';
+    del.onclick = async () => {
+      textRules.splice(index, 1);
+      await persistRules();
+      renderRules();
+    };
+
+    row.append(name, pattern, template, del);
+    return row;
+  }
+
+  async function persistRules() {
+    const msg = document.getElementById('rulemsg');
+    // A pattern that will not compile is worth saying so about now, rather than
+    // leaving the user wondering why their rule never fires.
+    const bad = textRules.filter((r) => {
+      if (!r.pattern) return false;
+      try { new RegExp(r.pattern); return false; } catch { return true; }
+    });
+    textRules = await wf.saveTextRules(textRules);
+    msg.innerHTML = bad.length
+      ? `<span class="bad">Saved, but ${bad.length} pattern(s) are not valid regular ` +
+        `expressions and will be skipped: ${bad.map((r) => r.pattern).join(', ')}</span>`
+      : '<span class="ok">Saved.</span>';
+  }
+
+  function renderRules() {
+    const list = document.getElementById('rulelist');
+    list.innerHTML = '';
+    if (!textRules.length) {
+      list.innerHTML = '<div class="sub">No rules — Ctrl+J will do nothing.</div>';
+      return;
+    }
+    textRules.forEach((r, i) => list.appendChild(ruleRow(r, i)));
+  }
+
+  document.getElementById('ruleadd').onclick = () => {
+    textRules.push({ name: '', pattern: '', template: '' });
+    renderRules();
+  };
+
+  async function loadRules() {
+    textRules = await wf.getTextRules();
+    renderRules();
+  }
 
   // --- certificate exceptions (#108) ---
   async function refreshCertExceptions() {
@@ -531,6 +625,7 @@
     refreshSync();
     refreshDefaultBrowser(); // #106
     refreshCertExceptions(); // #108
+    loadRules(); // #100
   }
   load();
   setInterval(refreshSync, 30000);
