@@ -28,6 +28,7 @@ const tabnav = require('./tabnav'); // #113/#114 — unit-tested, Electron-free
 const textrules = require('./textrules'); // #100 — ditto
 const taburl = require('./taburl'); // #107 — ditto
 const taborder = require('./taborder'); // #107 — ditto
+const stickytab = require('./stickytab'); // #117 — ditto
 
 // #43: new tabs land on our own search page; Google is the default engine.
 const ENGINES = {
@@ -76,6 +77,26 @@ let tabOrder = [];      // ids in sidebar order (pinned group first)
 let activeId = null;
 let nextTabId = 1;
 const pinnedIds = new Set(); // #9
+// #117: a pinned tab is sticky like a quick-launch tab, so it needs a home to be
+// sticky TO. Hotkey tabs get theirs from the binding; a pin captures whatever
+// the tab was showing when it was pinned. Persisted in the session, or
+// stickiness would silently die on restart — the #116 failure mode.
+const pinnedHome = new Map(); // tabId -> url
+
+// #117: the two kinds of tab that only ever show their own site.
+const isStickyTab = (id) => hotkeyByTab.has(id) || pinnedIds.has(id);
+
+/** Where a sticky tab belongs: its binding's URL, or the URL it was pinned on. */
+function stickyHomeUrl(id) {
+  const keyId = hotkeyByTab.get(id);
+  if (keyId) {
+    // #78/#116: resolve in THIS tab's Persona — a persona-less lookup reads the
+    // Unassigned bucket and silently finds nothing.
+    const home = hotkeys.get(keyId, personaByTab.get(id))?.url;
+    if (home) return home;
+  }
+  return pinnedHome.get(id) || null;
+}
 const hotkeyByTab = new Map(); // #16: tabId -> keyId (a tab per bound hotkey)
 const faviconByTab = new Map(); // #45: tabId -> icon URL
 const personaByTab = new Map(); // #25: tabId -> personaId
@@ -137,6 +158,7 @@ function sessionSnapshot() {
         url: lazyTabs.get(id)?.url || tabs.get(id).webContents.getURL(),
         title: lazyTabs.get(id)?.title || tabs.get(id).webContents.getTitle(), // #78
         pinned: pinnedIds.has(id),
+        pinHome: pinnedHome.get(id) || null, // #117: or stickiness dies on restart
         hotkey: hotkeyByTab.get(id) || null,
         persona: personaByTab.get(id) || personas.UNASSIGNED, // #25
         lastActiveAt: lastActiveAt.get(id) || Date.now(), // #79
@@ -731,7 +753,7 @@ function createTab(url = null, background = false, personaId = null, opts = {}) 
   // so they still steer this tab. Known caveat: form submissions are
   // indistinguishable from link clicks here.
   wc.on('will-navigate', (event, navUrl) => {
-    if (hotkeyByTab.has(id)) {
+    if (isStickyTab(id)) { // #117: pinned tabs divert like hotkey tabs
       event.preventDefault();
       openOrFocus(navUrl, false);
     }
@@ -745,27 +767,12 @@ function createTab(url = null, background = false, personaId = null, opts = {}) 
   let reHoming = false;
   const enforceHome = (navUrl, isMainFrame) => {
     if (isMainFrame === false || reHoming || locked) return;
-    const keyId = hotkeyByTab.get(id);
-    if (!keyId) return;
-    // #78: resolve in THIS tab's Persona. Calling hotkeys.get(keyId) with no
-    // Persona was a leftover from #25 and read the Unassigned bucket.
-    const home = hotkeys.get(keyId, personaByTab.get(id))?.url;
+    // #117: pinned tabs are sticky too, and get their home from the pin.
+    const home = stickyHomeUrl(id);
     if (!home) return;
-    // #78: only enforce across ORIGINS. Comparing full URLs livelocked the
-    // app: a home that redirects (login, /dashboard -> /dashboard/self) or an
-    // SPA firing did-navigate-in-page kept tripping this, and each cycle
-    // re-loaded home and re-triggered the redirect — several times a second,
-    // for ever. Link clicks are already caught in-page by content-preload.
-    const originOf = (u) => {
-      try {
-        return new URL(u).origin;
-      } catch {
-        return null;
-      }
-    };
-    const from = originOf(navUrl);
-    const to = originOf(home);
-    if (!from || !to || from === to) return;
+    // #78: only enforce across ORIGINS — comparing full URLs livelocked the app.
+    // The rule and the reasoning now live in stickytab.js, under test.
+    if (!stickytab.shouldRehome(navUrl, home)) return;
     reHoming = true;
     openOrFocus(navUrl, false);
     wc.loadURL(home);
@@ -829,7 +836,7 @@ function createTab(url = null, background = false, personaId = null, opts = {}) 
   wireLoadFailures(wc); // #108 — also applied to popups by #111
   wc.on('did-finish-load', () => tryAutofill(wc)); // #12
   wc.on('dom-ready', () => {
-    wc.send('sticky-mode', hotkeyByTab.has(id)); // #33
+    wc.send('sticky-mode', isStickyTab(id)); // #33, #117
     // #36 round 2: hide scrollbars on PAGES too (user: "most certainly not
     // gone") — scrolling itself is untouched.
     wc.insertCSS(
@@ -929,6 +936,7 @@ function closeTab(id, opts = {}) {
   const idx = tabOrder.indexOf(id);
   tabs.delete(id);
   hotkeyByTab.delete(id); // #16: the binding survives; only the open tab dies
+  pinnedHome.delete(id); // #117: no stale homes for dead tabs
   faviconByTab.delete(id);
   personaByTab.delete(id);
   lazyTabs.delete(id);
@@ -1198,9 +1206,15 @@ function wireChords(wc) {
 // #9: pinned tabs.
 function togglePin(id) {
   if (!tabs.has(id)) return;
-  if (pinnedIds.has(id)) pinnedIds.delete(id);
-  else pinnedIds.add(id);
+  if (pinnedIds.has(id)) {
+    pinnedIds.delete(id);
+    pinnedHome.delete(id); // #117: unpinning restores ordinary behaviour at once
+  } else {
+    pinnedIds.add(id);
+    pinnedHome.set(id, tabUrlOf(id)); // #117: whatever it shows now is its home
+  }
   sortTabOrder();
+  pushStickyModes(); // #117: the preload must learn it now intercepts clicks here
   pushState();
 }
 
@@ -1215,7 +1229,7 @@ function closeNormalTabs() {
 // click interception). Call after anything that changes hotkeyByTab.
 function pushStickyModes() {
   for (const [tid, view] of tabs) {
-    view.webContents.send('sticky-mode', hotkeyByTab.has(tid));
+    view.webContents.send('sticky-mode', isStickyTab(tid)); // #117
   }
 }
 
@@ -1697,7 +1711,12 @@ function onUnlocked() {
         lastActiveAt: t.lastActiveAt, // #79: age survives the restart
       });
       if (id === null) continue;
-      if (t.pinned) pinnedIds.add(id);
+      if (t.pinned) {
+        pinnedIds.add(id);
+        // #117: fall back to the tab's own URL for pins made before this shipped,
+        // so existing pinned tabs become sticky rather than staying inert.
+        pinnedHome.set(id, t.pinHome || t.url);
+      }
       // #116: resolve in THIS tab's Persona. hotkeys.get() with no Persona reads
       // the Unassigned bucket (#25), so every hotkey bound inside a real Persona
       // failed this check and the restored tab silently stopped counting as a
