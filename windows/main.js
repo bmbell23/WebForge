@@ -26,6 +26,8 @@ const personas = require('./personas'); // #25
 const errorlog = require('./errorlog'); // #75
 const tabnav = require('./tabnav'); // #113/#114 — unit-tested, Electron-free
 const textrules = require('./textrules'); // #100 — ditto
+const taburl = require('./taburl'); // #107 — ditto
+const taborder = require('./taborder'); // #107 — ditto
 
 // #43: new tabs land on our own search page; Google is the default engine.
 const ENGINES = {
@@ -57,6 +59,13 @@ const SIDEBAR_W = 240;
 const TOPBAR_H = 44;
 const BM_PANEL_W = 280; // #11 bookmarks panel / #26 passwords panel, right side
 const FIND_H = 38; // #101: find bar, docked under the nav bar
+// #107 part B: the slow/flickering switches are not diagnosed yet, and guessing
+// at a fix for a performance complaint is how you ship a change that helps
+// nothing. Record the switches that are actually slow, with the context needed
+// to tell the candidates apart — tab count, whether the tab had to load for the
+// first time (#78), and whether a sync was mid-flight (#57). Declared up here
+// with the other constants because both users sit far above its old position.
+const SLOW_SWITCH_MS = 120;
 let bmPanelOpen = false;
 let pwPanelOpen = false; // #26 — shares the right-panel slot with bookmarks
 let findOpen = false; // #101
@@ -85,6 +94,7 @@ let locked = true;           // #15: the app is a brick until the vault unlocks
 
 // #25: switch persona — land on one of its tabs, creating one if it has none.
 function switchPersona(personaId) {
+  const startedAt = Date.now(); // #107 part B
   if (locked || !personas.get(personaId)) return;
   personas.setActive(personaId);
   const mine = tabOrder.filter((t) => (personaByTab.get(t) || personas.UNASSIGNED) === personaId);
@@ -101,6 +111,13 @@ function switchPersona(personaId) {
   }
   broadcastHotkeys(); // #71: badges must follow the Persona's bindings
   pushState();
+  const elapsed = Date.now() - startedAt; // #107 part B
+  if (elapsed > SLOW_SWITCH_MS) {
+    errorlog.record(
+      'slow-persona-switch',
+      `${elapsed}ms to=${personaId} tabs=${tabs.size} inPersona=${mine.length} syncing=${tabsSyncing}`
+    );
+  }
 }
 
 function sortTabOrder() {
@@ -475,8 +492,25 @@ function visibleTabs() {
   return tabOrder.filter((id) => (personaByTab.get(id) || personas.UNASSIGNED) === active);
 }
 
+// #107: the ONE definition of "the order tabs appear in". Both the sidebar
+// (through tabState) and the cycling chords use it, so they cannot disagree —
+// which is exactly what made Ctrl+PageUp/PageDown appear to hop around the
+// screen: it walked tabOrder, which knows nothing about hotkey-key sorting (#44)
+// or group buckets (#34), while the sidebar drew something else entirely.
+function displayOrderedIds() {
+  const items = visibleTabs().map((id) => ({
+    id,
+    url: tabUrlOf(id),
+    hotkey: hotkeyByTab.get(id) || null,
+    pinned: pinnedIds.has(id),
+  }));
+  // personas.matches is the same pattern algorithm the sidebar uses (#72),
+  // reused rather than reimplemented.
+  return taborder.displayOrder(items, getSettings().tabGroups || [], personas.matches).map((t) => t.id);
+}
+
 function tabState() {
-  return visibleTabs().map((id) => {
+  return displayOrderedIds().map((id) => {
     const wc = tabs.get(id).webContents;
     const pending = lazyTabs.get(id); // #78: not loaded yet — use saved values
     const rawUrl = pending ? pending.url : wc.getURL();
@@ -813,6 +847,7 @@ function createTab(url = null, background = false, personaId = null, opts = {}) 
 }
 
 function activateTab(id, opts = {}) {
+  const startedAt = Date.now();
   if (!tabs.has(id)) {
     errorlog.record('activateTab', new Error(`no such tab id=${id} (known: ${[...tabs.keys()].join(',')})`));
     return;
@@ -863,6 +898,14 @@ function activateTab(id, opts = {}) {
     closeTab(leaving);
   }
   pushState();
+  const elapsed = Date.now() - startedAt; // #107 part B
+  if (elapsed > SLOW_SWITCH_MS) {
+    errorlog.record(
+      'slow-activate',
+      `${elapsed}ms tabs=${tabs.size} inPersona=${visibleTabs().length} ` +
+        `firstLoad=${Boolean(pending)} syncing=${tabsSyncing}`
+    );
+  }
 }
 
 function closeTab(id, opts = {}) {
@@ -907,12 +950,18 @@ function closeTab(id, opts = {}) {
 // #31: dedup for link/bookmark-opened tabs. Explicit new tabs (Ctrl+T) and
 // session restore bypass this — only "open this URL somewhere" paths dedup.
 function findTabByUrl(url) {
+  // #107: compare CANONICAL forms, not raw strings. Exact equality meant a
+  // trailing slash, a #anchor, http-vs-https or a www. prefix counted as a
+  // different page — so a tab that redirected on load stopped matching what the
+  // other device published, and the 30s sync adoption loop opened it again.
+  const key = taburl.canonical(url);
+  if (!key) return null;
   for (const id of tabOrder) {
     // #95: tabUrlOf, not getURL() — a lazily-restored tab (#78) has an empty
     // webContents URL until it is first shown, so it was invisible here. Tab
     // adoption then re-created it every sync, and clicking a bookmark for a
     // restored-but-unopened tab opened a second copy.
-    if (tabUrlOf(id) === url) return id;
+    if (taburl.canonical(tabUrlOf(id)) === key) return id;
   }
   return null;
 }
@@ -977,6 +1026,12 @@ function reopenClosedTab() {
   if (locked) return;
   const last = closedTabs.pop();
   if (!last) return;
+  // #107: if it is open again already, focus it rather than making a twin.
+  const existing = findTabByUrl(last.url);
+  if (existing !== null) {
+    activateTab(existing);
+    return;
+  }
   createTab(last.url, false, last.personaId);
 }
 
@@ -984,7 +1039,9 @@ function cycleTab(dir) {
   // #75: cycle within the ACTIVE Persona only — walking the global tabOrder
   // jumped into other Personas' tabs and yanked the workspace out from under
   // the user, which reads as "Ctrl+Tab does nothing sensible".
-  const next = tabnav.nextInOrder(visibleTabs(), activeId, dir);
+  // #107: walk the order the SIDEBAR shows, not tabOrder. Ctrl+PageUp/PageDown
+  // (and Ctrl+Shift+Tab) now move strictly up and down the visible list.
+  const next = tabnav.nextInOrder(displayOrderedIds(), activeId, dir);
   if (next === null) return;
   // #114: `cycling` stops activateTab from destroying the tab we are stepping
   // off. Without it, every step off a new-tab page removed an entry from
@@ -2504,6 +2561,12 @@ ipcMain.handle('int:recently-closed', () => recentlyClosed.slice(0, 25)); // #57
 ipcMain.handle('int:restore-closed', (_e, url) => {
   if (locked || !url) return false;
   closedFacts.delete(String(url)); // stop republishing the tombstone
+  // #107: focus an existing tab for this URL instead of duplicating it.
+  const existing = findTabByUrl(String(url));
+  if (existing !== null) {
+    activateTab(existing);
+    return true;
+  }
   const id = createTab(String(url), false);
   return id !== null;
 });

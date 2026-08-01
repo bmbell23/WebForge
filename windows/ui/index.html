@@ -942,6 +942,11 @@
 
   function renderTabs(state) {
     // #16: sidebar sections — Hotkeys, Pinned, then normal tabs.
+    // #107: `state` already arrives in display order from main (taborder.js),
+    // which is the same order the cycling chords walk. The bucketing below
+    // preserves that order, so what you see and what Ctrl+PageDown steps through
+    // are the same sequence. Keep them in step: reordering here would silently
+    // reintroduce the hopping.
     const hot = state
       .filter((t) => t.hotkey)
       .sort((a, b) => a.hotkey.localeCompare(b.hotkey, undefined, { numeric: true })); // #44
@@ -973,7 +978,9 @@
         }
       }
       if (singles.length) {
-        if (nodes.length) nodes.push(groupHdr('Tabs'));
+        // #107: "Other" — these are the tabs that belong to no group, and
+        // calling the section "Tabs" implied the others somehow weren't.
+        if (nodes.length) nodes.push(groupHdr('Other'));
         nodes.push(...singles.map(makeTab));
       }
     }
