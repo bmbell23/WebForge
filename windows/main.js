@@ -1627,7 +1627,14 @@ function onUnlocked() {
       });
       if (id === null) continue;
       if (t.pinned) pinnedIds.add(id);
-      if (t.hotkey && hotkeys.get(t.hotkey)) hotkeyByTab.set(id, t.hotkey); // #16
+      // #116: resolve in THIS tab's Persona. hotkeys.get() with no Persona reads
+      // the Unassigned bucket (#25), so every hotkey bound inside a real Persona
+      // failed this check and the restored tab silently stopped counting as a
+      // hotkey tab — losing Ctrl+Shift+X protection, sticky mode (#33),
+      // enforceHome and expiry immunity all at once. Same leftover #78 fixed in
+      // enforceHome; it survived here. personaByTab is the authority because
+      // createTab has already applied #96's URL-rule claim.
+      if (t.hotkey && hotkeys.get(t.hotkey, personaByTab.get(id))) hotkeyByTab.set(id, t.hotkey); // #16
     }
     sortTabOrder();
     pushStickyModes(); // #33
