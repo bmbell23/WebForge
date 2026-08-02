@@ -67,6 +67,9 @@ const FIND_H = 38; // #101: find bar, docked under the nav bar
 // first time (#78), and whether a sync was mid-flight (#57). Declared up here
 // with the other constants because both users sit far above its old position.
 const SLOW_SWITCH_MS = 120;
+// #118: for spotting the tab flicker — two activations in quick succession.
+let lastActivationAt = 0;
+let lastActivationId = null;
 let bmPanelOpen = false;
 let pwPanelOpen = false; // #26 — shares the right-panel slot with bookmarks
 let findOpen = false; // #101
@@ -773,6 +776,9 @@ function createTab(url = null, background = false, personaId = null, opts = {}) 
     // #78: only enforce across ORIGINS — comparing full URLs livelocked the app.
     // The rule and the reasoning now live in stickytab.js, under test.
     if (!stickytab.shouldRehome(navUrl, home)) return;
+    // #118: a re-home ACTIVATES another tab. If that lands mid-switch it looks
+    // exactly like the reported flicker, so make it visible in diagnostics.
+    errorlog.record('sticky-rehome', `tab=${id} left ${home} for ${navUrl}`);
     reHoming = true;
     openOrFocus(navUrl, false);
     wc.loadURL(home);
@@ -889,9 +895,17 @@ function activateTab(id, opts = {}) {
   // #32: overlay raises leave chrome stacked above content, whose empty
   // region then covers the page ("black tabs"). Keep the active view on top
   // whenever no chrome overlay is meant to be showing.
-  if (!fsRevealed && !bmDialogOpen && !settingsOpen && !managerOpen) {
-    win.contentView.addChildView(view);
-  }
+  //
+  // #118: but the OLD wording skipped the raise entirely while an overlay or a
+  // fullscreen hover-reveal was up — and clicking a tab in the sidebar always
+  // means a reveal is up, because the sidebar IS the left-edge reveal region.
+  // The newly activated view could therefore stay below the outgoing one in
+  // z-order. Now the active view is always raised above the other PAGE views,
+  // and chrome is put back on top afterwards when it is meant to be showing —
+  // which preserves #32's fix rather than trading one for the other.
+  const chromeOnTop = fsRevealed || bmDialogOpen || settingsOpen || managerOpen;
+  win.contentView.addChildView(view);
+  if (chromeOnTop) win.contentView.addChildView(chrome);
   layout();
   // #30: keyboard focus MUST follow activation — if it stays on a hidden view
   // (or nothing), key events vanish and hotkey swapping "stops working".
@@ -905,6 +919,19 @@ function activateTab(id, opts = {}) {
     closeTab(leaving);
   }
   pushState();
+  // #118: the flicker signature is two activations in quick succession — the
+  // view genuinely bouncing between tabs rather than merely repainting. Log only
+  // that case, so diagnostics stay readable instead of one line per switch.
+  const sinceLast = startedAt - lastActivationAt;
+  if (lastActivationId !== null && lastActivationId !== id && sinceLast < 600) {
+    errorlog.record(
+      'tab-bounce',
+      `${lastActivationId} -> ${id} after ${sinceLast}ms chromeOnTop=${chromeOnTop}`
+    );
+  }
+  lastActivationAt = startedAt;
+  lastActivationId = id;
+
   const elapsed = Date.now() - startedAt; // #107 part B
   if (elapsed > SLOW_SWITCH_MS) {
     errorlog.record(
