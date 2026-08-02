@@ -221,15 +221,17 @@ function layout() {
   }
   chrome.setBounds({ x: 0, y: 0, width, height });
   if (view) {
-    // #101: an open find bar takes a strip under the nav rather than floating
+    // #101: an open find bar takes a strip beside the nav rather than floating
     // over the page — the page view is a separate native view and would draw
     // straight over anything the chrome painted in its region.
-    const top = TOPBAR_H + (findOpen ? FIND_H : 0);
+    // #119: the nav bar lives at the BOTTOM, so both it and the find bar come
+    // off the bottom of the page view and the page starts at y = 0.
+    const reserved = TOPBAR_H + (findOpen ? FIND_H : 0);
     view.setBounds({
       x: SIDEBAR_W,
-      y: top,
+      y: 0,
       width: width - SIDEBAR_W - (bmPanelOpen || pwPanelOpen ? BM_PANEL_W : 0),
-      height: height - top,
+      height: height - reserved,
     });
   }
 }
@@ -242,13 +244,15 @@ let fsPollTimer = null;
 function fsRegionBounds() {
   const { width, height } = win.getContentBounds();
   // #101: find beats a hover-reveal — you asked for the bar, so it stays put
-  // until you close it, even as the mouse wanders off the top edge.
-  if (findOpen) return { x: 0, y: 0, width, height: FIND_H };
+  // until you close it, even as the mouse wanders off the edge.
+  // #119: anchored to the bottom now, following the nav bar.
+  if (findOpen) return { x: 0, y: height - FIND_H, width, height: FIND_H };
   switch (fsRevealed) {
     case 'tabs':
       return { x: 0, y: 0, width: SIDEBAR_W, height };
     case 'nav':
-      return { x: 0, y: 0, width, height: TOPBAR_H + 2 };
+      // #119: the nav reveals from the BOTTOM edge.
+      return { x: 0, y: height - (TOPBAR_H + 2), width, height: TOPBAR_H + 2 };
     case 'bookmarks':
       return { x: width - BM_PANEL_W, y: 0, width: BM_PANEL_W, height };
     default:
@@ -287,7 +291,7 @@ function fsPoll() {
   }
   if (!want && inWindow) {
     if (x <= 2) want = 'tabs';
-    if (y <= 2) want = 'nav'; // top edge wins the corners
+    if (y >= height - 2) want = 'nav'; // #119: bottom edge, and it wins the corners
     if (x >= width - 2) want = 'bookmarks';
   }
   if (want !== fsRevealed) {

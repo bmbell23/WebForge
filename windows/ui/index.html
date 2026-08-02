@@ -43,7 +43,10 @@
     margin: 0;
     display: grid;
     grid-template-columns: 240px 1fr;
-    grid-template-rows: 44px 1fr;
+    /* #119: the nav bar is the BOTTOM row now. Keep 240px / 44px in step with
+       SIDEBAR_W / TOPBAR_H in main.js, which reserves the same strip at the
+       bottom for the page view. */
+    grid-template-rows: 1fr 44px;
     background: var(--bg);
     color: var(--text);
     font: 13px system-ui, sans-serif;
@@ -185,7 +188,7 @@
   /* --- nav bar --- */
   #nav {
     grid-column: 2;
-    grid-row: 1;
+    grid-row: 2; /* #119: bottom */
     position: relative;
     display: flex;
     align-items: center;
@@ -213,15 +216,16 @@
      main.js pushes the page view down by FIND_H so this is never covered. --- */
   #findbar {
     grid-column: 2;
-    grid-row: 2;
-    align-self: start;
+    /* #119: still docked against the nav bar — which is now underneath it. */
+    grid-row: 1;
+    align-self: end;
     display: none;
     align-items: center;
     gap: 6px;
     height: 38px;
     padding: 0 10px;
     background: var(--bg);
-    border-bottom: 1px solid var(--border);
+    border-top: 1px solid var(--border); /* #119: the page is above it now */
   }
   #findbar.open { display: flex; }
   #findinput {
@@ -254,7 +258,9 @@
   /* --- right-side panels: bookmarks (#11) and passwords (#26) --- */
   #bmpanel, #pwpanel {
     position: absolute;
-    top: 44px; right: 0; bottom: 0;
+    /* #119: the nav bar owns the bottom 44px now, so the panels start at the
+       top and stop above it — previously the reverse. */
+    top: 0; right: 0; bottom: 44px;
     width: 280px;
     display: none;
     flex-direction: column;
@@ -392,7 +398,13 @@
   body[data-fs] { display: block; }
   body[data-fs] > * { display: none !important; }
   body[data-fs="tabs"] #sidebar { display: flex !important; width: 100%; height: 100vh; }
-  body[data-fs="nav"] #nav { display: flex !important; }
+  /* #119: height matters here, unlike the other reveals. body[data-fs] switches
+     to display:block, so #nav stops being a grid item and shrinks to its ~30px
+     content inside main's 46px strip — align-items:center then centres within 30px
+     rather than the strip. While the bar was at the TOP that slack fell below it
+     against the page and was invisible; at the bottom it became a gap between the
+     buttons and the screen edge. */
+  body[data-fs="nav"] #nav { display: flex !important; width: 100%; height: 100vh; }
   body[data-fs="bookmarks"] #bmpanel {
     display: flex !important;
     position: static;
@@ -403,7 +415,7 @@
   body[data-fs="find"] #findbar {
     display: flex !important;
     width: 100%; height: 100vh;
-    border-bottom: none;
+    border-top: none;
   }
 
   /* --- bookmark edit dialog (#29): centered popup; main raises chrome --- */
@@ -605,7 +617,8 @@
   /* --- load progress (indeterminate), pinned to the nav bar's bottom --- */
   #progress {
     position: absolute;
-    left: 0; right: 0; bottom: 0;
+    /* #119: top of the nav bar, so it still sits against the page content. */
+    left: 0; right: 0; top: 0;
     height: 2px;
     overflow: hidden;
   }
