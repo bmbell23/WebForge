@@ -20,7 +20,9 @@ echo "🔨 Building WebForge debug APK (version: $VERSION)"
 ASSETS="$REPO_ROOT/android/app/src/main/assets"
 mkdir -p "$ASSETS"
 cp "$REPO_ROOT/shared/about.json" "$ASSETS/about.json"
-echo "📄 Staged shared/about.json -> assets/"
+# #121: the new-tab page is shared with the Windows app — one copy, in shared/.
+cp "$REPO_ROOT/shared/newtab.html" "$ASSETS/newtab.html"
+echo "📄 Staged shared/about.json + shared/newtab.html -> assets/"
 
 if [ "$1" = "--clean" ]; then
     ./gradlew clean

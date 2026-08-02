@@ -41,14 +41,23 @@ class Tab(val id: Int, val webView: WebView) {
     var folder = ""      // #86: manual grouping, set in tab edit mode
     var persona = Personas.UNASSIGNED // #88
     var label: String? = null // #86: user-given name overriding the page title
-    val title: String get() = label ?: pendingTitle ?: webView.title?.takeIf { it.isNotBlank() } ?: url
+    val title: String get() =
+        label ?: pendingTitle
+        ?: if (MainActivity.isNewTabUrl(pendingUrl ?: webView.url)) "New tab" else null
+        ?: webView.title?.takeIf { it.isNotBlank() } ?: url
     val url: String get() = pendingUrl ?: webView.url ?: "about:blank"
 }
 
 class MainActivity : Activity() {
 
     companion object {
-        private const val START_URL = "https://www.google.com/"
+        // #121: new tabs land on WebForge's own page, not google.com. The page is
+        // shared/newtab.html, staged into assets by the build, and is entirely
+        // self-contained — the engine arrives as ?e= so it needs no JS bridge.
+        private const val NEW_TAB_URL = "file:///android_asset/newtab.html"
+
+        /** True for our new-tab page, whatever query string it carries. */
+        fun isNewTabUrl(u: String?) = u != null && u.startsWith(NEW_TAB_URL)
     }
 
     private lateinit var webContainer: FrameLayout
@@ -71,6 +80,9 @@ class MainActivity : Activity() {
     private var findOpen = false // #101: find in page
 
     private val active: Tab? get() = tabs.getOrNull(activeIndex)
+
+    /** #121: the new-tab page, told which engine to search with (?e=...). */
+    private fun newTabUrl() = "$NEW_TAB_URL?e=${Prefs.engineKey(this)}"
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -98,7 +110,7 @@ class MainActivity : Activity() {
         findViewById<TextView>(R.id.bookmarksBtn).setOnClickListener { showBookmarks() } // #87
         wireFindBar() // #101
 
-        newTab(START_URL)
+        newTab(newTabUrl())
         BookmarkStore.sync(this) { }
         Personas.sync(this) { runOnUiThread { rehomeTabs() } } // #88/#96
         syncTabsAcrossDevices() // #57 // warm the cache for the bookmarks panel
@@ -432,7 +444,7 @@ class MainActivity : Activity() {
         (tab.webView.parent as? ViewGroup)?.removeView(tab.webView)
         tab.webView.destroy()
         if (tabs.isEmpty()) {
-            newTab(START_URL)
+            newTab(newTabUrl())
             return
         }
         if (wasActive) {
@@ -451,7 +463,7 @@ class MainActivity : Activity() {
         val local = HashMap<String, MutableList<Triple<String, String, Long>>>()
         for (t in tabs) {
             val u = t.url
-            if (u.isBlank() || u == "about:blank") continue
+            if (u.isBlank() || u == "about:blank" || isNewTabUrl(u)) continue // #121
             local.getOrPut(t.persona) { mutableListOf() }.add(Triple(u, t.title, t.openedAt))
         }
         TabSync.sync(this, local) {
@@ -577,7 +589,8 @@ class MainActivity : Activity() {
 
     private fun syncChrome() {
         val t = active ?: return
-        if (!urlEditing) urlBar.setText(if (t.url == "about:blank") "" else t.url)
+        // #121: the asset path is an implementation detail — show nothing.
+        if (!urlEditing) urlBar.setText(if (t.url == "about:blank" || isNewTabUrl(t.url)) "" else t.url)
         tabsBtn.text = tabs.count { it.persona == Personas.activeId(this) }.toString() // #93
     }
 
@@ -882,7 +895,7 @@ class MainActivity : Activity() {
                     if (mine.isNotEmpty()) {
                         activateTab(mine.maxByOrNull { tabs[it].lastActiveAt } ?: mine.first())
                     } else {
-                        newTab(START_URL)
+                        newTab(newTabUrl())
                     }
                     showTabSheet()
                 }
@@ -932,7 +945,7 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(8), dp(13), dp(8), dp(13))
             isClickable = true
-            setOnClickListener { closePanel(); newTab(START_URL) }
+            setOnClickListener { closePanel(); newTab(newTabUrl()) }
         }
         addRow.addView(TextView(this).apply {
             text = "＋   New tab"

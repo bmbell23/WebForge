@@ -37,7 +37,18 @@ const ENGINES = {
   bing: 'https://www.bing.com/search?q=',
   brave: 'https://search.brave.com/search?q=',
 };
-const NEWTAB_FILE = path.join(__dirname, 'ui', 'newtab.html');
+// #121: the new-tab page moved to shared/ so Android loads the SAME file — two
+// copies of one page would drift, as two copies of one behaviour repeatedly have
+// in this repo. Resolved with the candidate list already proven for
+// shared/about.json below: repo layout in dev, resources or the asar once packaged.
+const NEWTAB_FILE = (() => {
+  const candidates = [
+    path.join(__dirname, '..', 'shared', 'newtab.html'),
+    path.join(process.resourcesPath || '', 'shared', 'newtab.html'),
+    path.join(__dirname, 'shared', 'newtab.html'),
+  ];
+  return candidates.find((c) => fs.existsSync(c)) || candidates[candidates.length - 1];
+})();
 // #40: WebForge's own pages open as ordinary tabs (no more full-window
 // overlays fighting the view stack).
 const INTERNAL_PAGES = {
