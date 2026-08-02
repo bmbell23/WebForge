@@ -988,6 +988,24 @@ function closeTab(id, opts = {}) {
 
 // #31: dedup for link/bookmark-opened tabs. Explicit new tabs (Ctrl+T) and
 // session restore bypass this — only "open this URL somewhere" paths dedup.
+// #120: re-home every open tab against the current Persona rules.
+//
+// Two rules, both learned the hard way:
+//  - tabUrlOf(), never webContents.getURL(). A lazily-restored tab (#78) has an
+//    EMPTY webContents URL until first shown, so getURL() fed forUrl('') and
+//    every unopened tab was reassigned to Unassigned. Same trap as #95/#116.
+//  - PROMOTE, never demote. A URL matching no rule keeps the Persona it already
+//    has, matching the #96 loop in onUnlocked.
+//
+// This existed inline in three places (persona sync, editing a Persona's rules,
+// and #70's bookmark assignment) and all three had both defects. One copy now.
+function rehomeAllTabs() {
+  for (const tid of tabOrder) {
+    const claimed = personas.forUrl(tabUrlOf(tid));
+    if (claimed !== personas.UNASSIGNED) personaByTab.set(tid, claimed);
+  }
+}
+
 function findTabByUrl(url) {
   // #107: compare CANONICAL forms, not raw strings. Exact equality meant a
   // trailing slash, a #anchor, http-vs-https or a www. prefix counted as a
@@ -1454,9 +1472,7 @@ async function syncPersonas() {
     const remoteAt = remote.updatedAt || 0;
     if (remoteAt > localAt && Array.isArray(remote.data) && remote.data.length) {
       personas.replaceAll(remote.data, remoteAt);
-      for (const tid of tabOrder) {
-        personaByTab.set(tid, personas.forUrl(tabs.get(tid).webContents.getURL()));
-      }
+      rehomeAllTabs(); // #120
       pushState();
     } else if (localAt > remoteAt) {
       await fetch(PERSONA_SYNC_URL, {
@@ -2252,10 +2268,7 @@ ipcMain.handle('int:add-persona', (_e, name) => {
 ipcMain.handle('int:update-persona', (_e, { id, name, rules }) => {
   const ok = personas.update(String(id), { name, rules });
   // Re-home every tab against the new rules so edits take effect immediately.
-  for (const tid of tabOrder) {
-    const claimed = personas.forUrl(tabs.get(tid).webContents.getURL());
-    personaByTab.set(tid, claimed);
-  }
+  rehomeAllTabs(); // #120
   pushState();
   return ok;
 });
@@ -2597,9 +2610,7 @@ ipcMain.handle('int:assign-persona', (_e, { url, personaId, force }) => {
   const res = personas.assign(String(url || ''), String(personaId || ''), { force: Boolean(force) });
   if (res.ok) {
     // Rules changed — re-home every open tab so routing takes effect at once.
-    for (const tid of tabOrder) {
-      personaByTab.set(tid, personas.forUrl(tabs.get(tid).webContents.getURL()));
-    }
+    rehomeAllTabs(); // #120
     pushState();
   }
   return res;
