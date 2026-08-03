@@ -47,6 +47,22 @@ mkdir -p "$REPO_ROOT/releases/windows"
 cp "$EXE" dist/latest.yml "$REPO_ROOT/releases/windows/"
 cp "dist/WebForge Setup $VERSION.exe.blockmap" "$REPO_ROOT/releases/windows/" 2>/dev/null || true
 
+# #124: keep the release dir from growing without bound. Each installer is ~83MB
+# and this had reached 5.4G across 69 builds with the disk at 96% — the same
+# failure mode as the Jan 7 2026 data-loss incident. electron-updater only needs
+# latest.yml, the installer it names, and its blockmap; older ones are kept purely
+# for rollback, so a handful is plenty. Git tags are the real history.
+KEEP=3
+prune_dir() {
+    local dir="$1"
+    ls -t "$dir"/*.exe 2>/dev/null | tail -n +$((KEEP + 1)) | while read -r old; do
+        rm -f "$old" "$old.blockmap"
+        echo "🧹 pruned $(basename "$old")"
+    done
+}
+prune_dir "$REPO_ROOT/releases/windows"
+prune_dir "$REPO_ROOT/windows/dist"
+
 SIZE=$(stat -c%s "$REPO_ROOT/releases/windows/WebForge Setup $VERSION.exe")
 echo
 echo "✅ Staged: releases/windows/WebForge Setup $VERSION.exe ($SIZE bytes) + latest.yml"

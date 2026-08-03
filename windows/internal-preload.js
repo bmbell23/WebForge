@@ -11,6 +11,10 @@ contextBridge.exposeInMainWorld('wf', {
   setTabExpiry: (c) => ipcRenderer.invoke('int:set-tab-expiry', c), // #79
   saveTabGroups: (list) => ipcRenderer.invoke('int:save-tab-groups', list),
   syncStatus: () => ipcRenderer.invoke('int:sync-status'),
+  // update visibility (#123)
+  updateState: () => ipcRenderer.invoke('int:update-state'),
+  updateCheck: () => ipcRenderer.invoke('int:update-check'),
+  updateRestart: () => ipcRenderer.invoke('int:update-restart'),
   // selected-text URL rules (#100)
   getTextRules: () => ipcRenderer.invoke('int:get-text-rules'),
   saveTextRules: (list) => ipcRenderer.invoke('int:save-text-rules', list),

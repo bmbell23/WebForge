@@ -29,6 +29,7 @@ const textrules = require('./textrules'); // #100 — ditto
 const taburl = require('./taburl'); // #107 — ditto
 const taborder = require('./taborder'); // #107 — ditto
 const stickytab = require('./stickytab'); // #117 — ditto
+const popuprule = require('./popuprule'); // #125 — ditto
 
 // #43: new tabs land on our own search page; Google is the default engine.
 const ENGINES = {
@@ -81,6 +82,9 @@ const SLOW_SWITCH_MS = 120;
 // #118: for spotting the tab flicker — two activations in quick succession.
 let lastActivationAt = 0;
 let lastActivationId = null;
+// #123: update progress, surfaced in Settings so the flow is never silent again.
+let updateState = { status: 'idle', at: 0 };
+let updateCheckNow = null; // set once the updater is wired (packaged builds only)
 let bmPanelOpen = false;
 let pwPanelOpen = false; // #26 — shares the right-panel slot with bookmarks
 let findOpen = false; // #101
@@ -637,23 +641,6 @@ function pushStateNow() {
   saveSessionSoon();
 }
 
-// #111 round 2: which window.open() calls deserve a real window.
-//
-// The first attempt keyed only on `disposition === 'new-window'` and did not fix
-// the reported page. Chromium only reports 'new-window' when the features string
-// asks for a popup — `window.open(url, 'authWindow')` with NO features is
-// reported as a plain foreground-tab, so it kept being denied, kept returning
-// null, and kept breaking the page that needed the handle.
-//
-// A NAMED window is the giveaway: nobody names a window they do not intend to
-// address later. `_blank` is excluded because that is just "open a tab".
-function wantsRealWindow(details) {
-  if (details.disposition === 'new-window') return true;
-  if (details.features && String(details.features).trim().length > 0) return true;
-  const name = String(details.frameName || '').trim();
-  return name.length > 0 && !['_blank', '_self', '_parent', '_top'].includes(name);
-}
-
 // #111: translate a window.open() features string into BrowserWindow options.
 // Sizes are clamped — a page asking for a 20×20 or 9000px window gets something
 // usable instead. Web preferences deliberately match a normal tab: the page
@@ -732,7 +719,7 @@ function createTab(url = null, background = false, personaId = null, opts = {}) 
   // the next line and its flow died: that is why credential prompts and terminal
   // launchers produced nothing at all. target=_blank still becomes a tab (#30).
   wc.setWindowOpenHandler((details) => {
-    const real = wantsRealWindow(details);
+    const real = popuprule.wantsRealWindow(details); // #125
     // #111 round 2: log every decision. The first fix keyed only on
     // disposition === 'new-window' and did not work, and there is no Windows
     // machine here to observe on — so the app has to say what it decided.
@@ -2542,6 +2529,28 @@ ipcMain.handle('int:cert-revoke', (_e, { host, fingerprint }) => {
   return certExceptions();
 });
 
+// #123: update visibility. The flow existed since #5 but reported nothing, so a
+// broken check looked exactly like "no update available".
+ipcMain.handle('int:update-state', () => ({
+  ...updateState,
+  packaged: app.isPackaged, // an unpackaged dev run never checks at all
+  current: app.getVersion(),
+}));
+ipcMain.handle('int:update-check', () => {
+  if (!updateCheckNow) return false; // not packaged — nothing to check
+  updateCheckNow();
+  return true;
+});
+ipcMain.handle('int:update-restart', () => {
+  try {
+    require('electron-updater').autoUpdater.quitAndInstall();
+    return true;
+  } catch (err) {
+    errorlog.record('update-restart', err);
+    return false;
+  }
+});
+
 // #106: report, don't pretend to set — the switch is the user's to make.
 ipcMain.handle('int:default-browser-status', () => ({ isDefault: isDefaultBrowser() }));
 ipcMain.handle('int:open-default-apps', async () => {
@@ -2791,14 +2800,52 @@ function setupAutoUpdate() {
   if (!app.isPackaged) return;
   const { autoUpdater } = require('electron-updater');
   autoUpdater.autoDownload = true;
-  autoUpdater.on('error', () => {});
+
+  // #123: this used to be `on('error', () => {})` and `.catch(() => {})` — every
+  // failure was swallowed, so a broken update check was indistinguishable from
+  // "no update available". The user manually installed ~15 builds in one session
+  // without ever seeing a prompt, and nothing anywhere recorded why.
+  const setUpdateState = (status, extra = {}) => {
+    updateState = { status, at: Date.now(), ...extra };
+    chrome?.webContents.send('update-state', updateState);
+  };
+  autoUpdater.on('error', (err) => {
+    errorlog.record('update-error', err);
+    setUpdateState('error', { message: String(err?.message || err) });
+  });
+  autoUpdater.on('checking-for-update', () => setUpdateState('checking'));
+  autoUpdater.on('update-not-available', (info) => {
+    errorlog.record('update', `up to date (${info?.version || 'unknown'})`);
+    setUpdateState('current', { version: info?.version });
+  });
+  autoUpdater.on('update-available', (info) => {
+    errorlog.record('update', `available: ${info?.version} — downloading`);
+    setUpdateState('downloading', { version: info?.version, percent: 0 });
+  });
+  autoUpdater.on('download-progress', (p) => {
+    setUpdateState('downloading', { percent: Math.round(p?.percent || 0) });
+  });
 
   // #5: don't re-prompt a version the user already declined — the downloaded
   // update still applies on next quit (electron-updater's autoInstallOnAppQuit).
   let promptedVersion = null;
   autoUpdater.on('update-downloaded', (info) => {
+    errorlog.record('update', `downloaded ${info?.version} — prompting`);
+    // #123: the state persists even if the dialog is dismissed, so Settings can
+    // still offer "Restart to apply" afterwards.
+    setUpdateState('ready', { version: info?.version });
     if (info.version === promptedVersion) return;
     promptedVersion = info.version;
+    // #123: the app is ALWAYS fullscreen (#37), and a dialog that opens behind
+    // the window is indistinguishable from no dialog — the #111 round-2 failure.
+    // Raise and focus before asking.
+    try {
+      if (win.isMinimized()) win.restore();
+      win.show();
+      win.focus();
+    } catch (err) {
+      errorlog.record('update-focus', err);
+    }
     dialog
       .showMessageBox(win, {
         type: 'info',
@@ -2813,7 +2860,14 @@ function setupAutoUpdate() {
   });
 
   // Off the tailnet / server down → checks just fail quietly.
-  const check = () => autoUpdater.checkForUpdates().catch(() => {});
+  // #123: a failed check is logged rather than silently discarded. Off the
+  // tailnet this is expected and harmless — but it must be visible, not assumed.
+  const check = () =>
+    autoUpdater.checkForUpdates().catch((err) => {
+      errorlog.record('update-check-failed', err);
+      setUpdateState('error', { message: String(err?.message || err) });
+    });
+  updateCheckNow = check;
 
   // #5: a long-running window must notice releases staged after launch —
   // startup + every 4h + on window focus. Focus checks are throttled to one

@@ -222,6 +222,15 @@
     <button id="gadd">Add</button>
   </div>
 
+  <!-- #123: the update flow existed since #5 but reported nothing, so a broken
+       check looked identical to "no update available". Now it says so. -->
+  <h2>Updates</h2>
+  <div class="card status" id="updstate">Checking…</div>
+  <div class="row">
+    <button class="choice" id="updcheck">Check for updates now</button>
+    <button class="choice" id="updrestart" style="display:none">Restart to apply</button>
+  </div>
+
   <h2>About</h2>
   <div class="row">
     <button class="choice" id="aboutbtn">About WebForge — architecture, engines, dependencies, build</button>
@@ -418,6 +427,35 @@
     textRules = await wf.getTextRules();
     renderRules();
   }
+
+  // --- updates (#123) ---
+  async function refreshUpdate() {
+    const el = document.getElementById('updstate');
+    const restart = document.getElementById('updrestart');
+    const s = await wf.updateState();
+    restart.style.display = s.status === 'ready' ? '' : 'none';
+    if (!s.packaged) {
+      el.innerHTML = `Running <b>v${s.current}</b> unpackaged (dev) — updates are not checked.`;
+      return;
+    }
+    const seen = s.at ? ` <span class="sub">· last change ${new Date(s.at).toLocaleTimeString()}</span>` : '';
+    const body = {
+      idle: `Running <b>v${s.current}</b>. No check has completed yet.`,
+      checking: `Running <b>v${s.current}</b> — checking…`,
+      current: `<span class="ok">Up to date</span> — running <b>v${s.current}</b>.`,
+      downloading: `Downloading <b>v${s.version || '?'}</b>… ${s.percent || 0}%`,
+      ready: `<span class="ok">v${s.version} is ready</span> — restart to apply.`,
+      error: `<span class="bad">Update check failed</span> — ${s.message || 'unknown error'}.` +
+             ` If you are off the tailnet this is expected.`,
+    }[s.status] || `Running <b>v${s.current}</b>.`;
+    el.innerHTML = body + seen;
+  }
+  document.getElementById('updcheck').onclick = async () => {
+    document.getElementById('updstate').textContent = 'Checking…';
+    await wf.updateCheck();
+    setTimeout(refreshUpdate, 1200);
+  };
+  document.getElementById('updrestart').onclick = () => wf.updateRestart();
 
   // --- certificate exceptions (#108) ---
   async function refreshCertExceptions() {
@@ -626,9 +664,11 @@
     refreshDefaultBrowser(); // #106
     refreshCertExceptions(); // #108
     loadRules(); // #100
+    refreshUpdate(); // #123
   }
   load();
   setInterval(refreshSync, 30000);
+  setInterval(refreshUpdate, 5000); // #123: reflect download progress
 </script>
 </body>
 </html>
