@@ -7,6 +7,9 @@ contextBridge.exposeInMainWorld('webforge', {
   reload: () => ipcRenderer.send('reload'),
   // #126: ticket-key box — same channel Ctrl+J uses (#100).
   openTextRule: (text) => ipcRenderer.send('open-text-rule', text),
+  // #127: direct-template quick boxes (Amazon). Reuses the channel
+  // content-preload already uses for sticky-tab link diversion.
+  openInNewTab: (url) => ipcRenderer.send('open-in-new-tab', url),
   // find in page (#101)
   findRun: (text, opts) => ipcRenderer.send('find-run', { text, ...opts }),
   findClose: () => ipcRenderer.send('find-close'),

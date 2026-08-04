@@ -211,18 +211,19 @@
     background: var(--field-bg); color: var(--field-text);
     font-size: 13px; outline: none;
   }
-  /* #126: just wide enough for a ticket key — it must not compete with the
-     address bar for space, so no flex growth. */
-  #jira {
-    width: 112px; height: 30px; flex: none;
+  /* #126/#127: quick boxes — sized to their content and never flex-growing, so
+     they cannot steal width from the address bar. */
+  #navboxes { display: flex; gap: 6px; flex: none; }
+  .navbox {
+    height: 30px; flex: none;
     border: none; border-radius: 15px;
     padding: 0 12px;
     background: var(--field-bg); color: var(--field-text);
     font: 12.5px ui-monospace, monospace;
     outline: none;
   }
-  #jira::placeholder { color: var(--text-dim); opacity: 1; }
-  #jira:focus { outline: 1px solid var(--accent); }
+  .navbox::placeholder { color: var(--text-dim); opacity: 1; }
+  .navbox:focus { outline: 1px solid var(--accent); }
 
   /* --- #101: find in page. Row 2 of the content column, pinned to the top;
      main.js pushes the page view down by FIND_H so this is never covered. --- */
@@ -661,11 +662,11 @@
     <button id="reloadstop" title="Reload">⟳</button>
     <input id="url" type="text" spellcheck="false"
            placeholder="Search or enter address">
-    <!-- #126: paste a ticket key, go straight there. Resolved through the same
-         Settings rules as Ctrl+J (#100), so it is not Jira-specific in the code
-         even though the placeholder is. -->
-    <input id="jira" type="text" spellcheck="false" placeholder="SFAP-123456"
-           title="Paste a ticket key and press Enter (uses Settings → Text shortcuts)">
+    <!-- #126/#127: quick boxes. The Jira one resolves through the shared text
+         rules (validated, inert on a miss); the Amazon one searches directly,
+         because any text is a valid search. Both are built from NAV_BOXES below
+         so a third is one line. -->
+    <span id="navboxes"></span>
     <button id="star" title="Bookmark this page (Ctrl+D)">☆</button>
     <button id="settingsbtn" title="Settings (Ctrl+Shift+S)">⚙</button>
     <div id="progress"></div>
@@ -1472,30 +1473,57 @@
   const bmsearch = document.getElementById('bmsearch');
   bmsearch.addEventListener('input', () => renderBookmarks(lastBookmarks));
 
-  // --- #126: ticket-key box ---
-  // Deliberately routed through the SAME resolver as Ctrl+J and the right-click
-  // item (#100), so the Settings rules are the single definition of what a key
-  // looks like and where it goes. Add a GitHub rule there and this box handles
-  // it too, with no second matcher to keep in step.
-  const jira = document.getElementById('jira');
-  jira.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') {
-      const text = jira.value.trim();
-      if (text) {
-        webforge.openTextRule(text);
-        // Clear immediately: it is a jump box, not a field with state. Main stays
-        // silent when nothing matches, so this never claims success it didn't have.
-        jira.value = '';
-        jira.blur();
+  // --- #126/#127: quick boxes on the nav bar ---
+  //
+  // Two kinds, deliberately:
+  //  - `rule: true`  resolves through the SHARED text rules (#100), the same path
+  //    as Ctrl+J and the right-click item. Validated, and inert on a miss — right
+  //    for a ticket key.
+  //  - `template`    searches directly, because ANY text is a valid search.
+  //
+  // Amazon is NOT expressed as a text rule on purpose: a rule broad enough to
+  // catch every search (`.*`) would win first-match and hijack Ctrl+J, so
+  // selecting any text anywhere would offer to search Amazon.
+  const NAV_BOXES = [
+    { id: 'jira', width: 112, placeholder: 'SFAP-123456', rule: true,
+      title: 'Paste a ticket key and press Enter (Settings → Text shortcuts)' },
+    { id: 'amazon', width: 150, placeholder: 'Search Amazon',
+      template: 'https://www.amazon.com/s?k=$0', title: 'Search Amazon in a new tab' },
+  ];
+
+  for (const box of NAV_BOXES) {
+    const el = document.createElement('input');
+    el.type = 'text';
+    el.className = 'navbox';
+    el.id = box.id;
+    el.spellcheck = false;
+    el.placeholder = box.placeholder;
+    el.title = box.title;
+    el.style.width = `${box.width}px`;
+    el.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        const text = el.value.trim();
+        if (text) {
+          if (box.rule) {
+            webforge.openTextRule(text); // main stays silent when nothing matches
+          } else {
+            // encodeURIComponent so spaces and & survive the trip.
+            webforge.openInNewTab(box.template.replace('$0', encodeURIComponent(text)));
+          }
+          // Clear right away: these are jump boxes, not fields with state.
+          el.value = '';
+          el.blur();
+        }
+        e.preventDefault();
+      } else if (e.key === 'Escape') {
+        el.value = '';
+        el.blur();
+        e.preventDefault();
       }
-      e.preventDefault();
-    } else if (e.key === 'Escape') {
-      jira.value = '';
-      jira.blur();
-      e.preventDefault();
-    }
-    e.stopPropagation(); // typing here must never fire hotkeys
-  });
+      e.stopPropagation(); // typing here must never fire hotkeys
+    });
+    document.getElementById('navboxes').appendChild(el);
+  }
 
   // --- find in page (#101) ---
   const findbar = document.getElementById('findbar');
