@@ -211,6 +211,18 @@
     background: var(--field-bg); color: var(--field-text);
     font-size: 13px; outline: none;
   }
+  /* #126: just wide enough for a ticket key — it must not compete with the
+     address bar for space, so no flex growth. */
+  #jira {
+    width: 112px; height: 30px; flex: none;
+    border: none; border-radius: 15px;
+    padding: 0 12px;
+    background: var(--field-bg); color: var(--field-text);
+    font: 12.5px ui-monospace, monospace;
+    outline: none;
+  }
+  #jira::placeholder { color: var(--text-dim); opacity: 1; }
+  #jira:focus { outline: 1px solid var(--accent); }
 
   /* --- #101: find in page. Row 2 of the content column, pinned to the top;
      main.js pushes the page view down by FIND_H so this is never covered. --- */
@@ -649,6 +661,11 @@
     <button id="reloadstop" title="Reload">⟳</button>
     <input id="url" type="text" spellcheck="false"
            placeholder="Search or enter address">
+    <!-- #126: paste a ticket key, go straight there. Resolved through the same
+         Settings rules as Ctrl+J (#100), so it is not Jira-specific in the code
+         even though the placeholder is. -->
+    <input id="jira" type="text" spellcheck="false" placeholder="SFAP-123456"
+           title="Paste a ticket key and press Enter (uses Settings → Text shortcuts)">
     <button id="star" title="Bookmark this page (Ctrl+D)">☆</button>
     <button id="settingsbtn" title="Settings (Ctrl+Shift+S)">⚙</button>
     <div id="progress"></div>
@@ -1454,6 +1471,31 @@
   // --- bookmark search (#27) ---
   const bmsearch = document.getElementById('bmsearch');
   bmsearch.addEventListener('input', () => renderBookmarks(lastBookmarks));
+
+  // --- #126: ticket-key box ---
+  // Deliberately routed through the SAME resolver as Ctrl+J and the right-click
+  // item (#100), so the Settings rules are the single definition of what a key
+  // looks like and where it goes. Add a GitHub rule there and this box handles
+  // it too, with no second matcher to keep in step.
+  const jira = document.getElementById('jira');
+  jira.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      const text = jira.value.trim();
+      if (text) {
+        webforge.openTextRule(text);
+        // Clear immediately: it is a jump box, not a field with state. Main stays
+        // silent when nothing matches, so this never claims success it didn't have.
+        jira.value = '';
+        jira.blur();
+      }
+      e.preventDefault();
+    } else if (e.key === 'Escape') {
+      jira.value = '';
+      jira.blur();
+      e.preventDefault();
+    }
+    e.stopPropagation(); // typing here must never fire hotkeys
+  });
 
   // --- find in page (#101) ---
   const findbar = document.getElementById('findbar');

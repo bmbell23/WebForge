@@ -5,6 +5,8 @@ contextBridge.exposeInMainWorld('webforge', {
   goBack: () => ipcRenderer.send('go-back'),
   goForward: () => ipcRenderer.send('go-forward'),
   reload: () => ipcRenderer.send('reload'),
+  // #126: ticket-key box — same channel Ctrl+J uses (#100).
+  openTextRule: (text) => ipcRenderer.send('open-text-rule', text),
   // find in page (#101)
   findRun: (text, opts) => ipcRenderer.send('find-run', { text, ...opts }),
   findClose: () => ipcRenderer.send('find-close'),
