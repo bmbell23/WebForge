@@ -68,20 +68,22 @@ contextBridge.exposeInMainWorld('wf', {
   onBookmarksChanged: (cb) => ipcRenderer.on('int:bookmarks', () => cb()),
 });
 
-// #115: Ctrl+X closes the tab — but ONLY when you are not typing, because
-// Ctrl+X is Cut and claiming it outright would break cut in every text field on
-// every site. That is precisely the mistake #38 made with Ctrl+Shift+Arrow,
-// which #101 had to reverse.
+// #115/#109: keys that belong to the app ONLY when you are not typing.
+//
+// Ctrl+X is Cut and Ctrl+S is Save — claiming either outright would break them in
+// every text field on every site. That is the mistake #38 made with
+// Ctrl+Shift+Arrow, which #101 had to reverse.
 //
 // The decision is made HERE rather than in the main process on reported focus
-// state: main would always be a round-trip behind, and a stale report would eat
-// a Cut. At keydown the renderer knows exactly what is focused, so nothing can
-// go stale.
+// state: main would always be a round-trip behind, and a stale report would eat a
+// Cut. At keydown the renderer knows exactly what is focused, so nothing can go
+// stale.
 //
-// Duplicated across the three preloads rather than shared: Electron
-// sandboxes renderers by default, and a sandboxed preload can only require
-// `electron` and a couple of node built-ins — never a local file.
-function installCloseTabKey(send) {
+// Duplicated across the three preloads rather than shared: Electron sandboxes
+// renderers by default, and a sandboxed preload can only require `electron` and a
+// couple of node built-ins — never a local file. closekey.test.js asserts the
+// three copies stay byte-identical.
+function installGuardedKeys(handlers) {
   const editable = (el) => {
     if (!el) return false;
     if (el.isContentEditable) return true;
@@ -97,16 +99,17 @@ function installCloseTabKey(send) {
     'keydown',
     (e) => {
       if (!e.ctrlKey || e.shiftKey || e.altKey || e.metaKey) return;
-      if ((e.key || '').toLowerCase() !== 'x') return;
+      const handler = handlers[(e.key || '').toLowerCase()];
+      if (!handler) return;
       // composedPath()[0] sees INTO shadow roots, where e.target is retargeted
-      // to the host — the same trap the sticky-click handler below hit (#33).
+      // to the host — the same trap the sticky-click handler hit (#33).
       const focused = e.composedPath?.()[0] || document.activeElement;
-      if (editable(focused) || editable(document.activeElement)) return; // let Cut happen
+      if (editable(focused) || editable(document.activeElement)) return; // let the page have it
       e.preventDefault();
-      send();
+      handler();
     },
     true
   );
 }
 
-installCloseTabKey(() => ipcRenderer.send('close-active-tab'));
+installGuardedKeys({ x: () => ipcRenderer.send('close-active-tab') });

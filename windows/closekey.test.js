@@ -10,15 +10,19 @@ const fs = require('fs');
 const path = require('path');
 
 const PRELOADS = ['content-preload.js', 'preload.js', 'internal-preload.js'];
-const START = '// #115: Ctrl+X closes the tab';
-const END = "installCloseTabKey(() => ipcRenderer.send('close-active-tab'));";
+// The shared guard function must be byte-identical everywhere; each file's
+// install CALL differs (content-preload also binds Ctrl+S for hints, #109),
+// so the comparison stops at the function's closing brace.
+const START = '// #115/#109: keys that belong to the app';
+const END = '\n}';
 
 function extract(file) {
   const src = fs.readFileSync(path.join(__dirname, file), 'utf8');
   const from = src.indexOf(START);
-  const to = src.indexOf(END);
-  assert.notStrictEqual(from, -1, `${file}: #115 handler is missing entirely`);
-  assert.notStrictEqual(to, -1, `${file}: #115 handler is not installed`);
+  assert.notStrictEqual(from, -1, `${file}: guard block is missing entirely`);
+  const to = src.indexOf(END, from);
+  assert.notStrictEqual(to, -1, `${file}: guard block is unterminated`);
+  assert.ok(src.includes('installGuardedKeys({'), `${file}: guard is never installed`);
   return src.slice(from, to + END.length);
 }
 
