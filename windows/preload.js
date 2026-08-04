@@ -117,3 +117,56 @@ function installGuardedKeys(handlers) {
 }
 
 installGuardedKeys({ x: () => ipcRenderer.send('close-active-tab') });
+
+// #128: hide the cursor while typing, and when the mouse sits still.
+//
+// A stylesheet rather than `documentElement.style.cursor`: every link and button
+// sets its own cursor and would win the cascade, so the pointer would keep
+// reappearing over exactly the things you are reading past.
+//
+// Installed in ALL THREE preloads — the cursor belongs to whichever view it is
+// over (page, app chrome, internal pages), and hiding in only one means it pops
+// back the instant it crosses a boundary. Duplicated for the same reason as
+// installGuardedKeys: a sandboxed preload cannot require a local file, and
+// closekey.test.js asserts the copies stay identical.
+function installCursorHiding(idleMs) {
+  let styleEl = null;
+  let hidden = false;
+  let timer = null;
+
+  const ensureStyle = () => {
+    if (styleEl && styleEl.isConnected) return styleEl;
+    const parent = document.head || document.documentElement;
+    if (!parent) return null; // too early — the next event will retry
+    styleEl = document.createElement('style');
+    styleEl.textContent = '*,*::before,*::after{cursor:none !important}';
+    styleEl.disabled = true;
+    parent.appendChild(styleEl);
+    return styleEl;
+  };
+
+  const hide = () => {
+    if (hidden) return;
+    const el = ensureStyle();
+    if (!el) return;
+    el.disabled = false;
+    hidden = true;
+  };
+
+  const show = () => {
+    clearTimeout(timer);
+    timer = setTimeout(hide, idleMs); // still => hidden again
+    if (!hidden) return;
+    if (styleEl) styleEl.disabled = true;
+    hidden = false;
+  };
+
+  // Typing and keybinds hide it at once; anything the MOUSE does brings it back.
+  window.addEventListener('keydown', hide, true);
+  for (const ev of ['mousemove', 'mousedown', 'wheel']) {
+    window.addEventListener(ev, show, true);
+  }
+  timer = setTimeout(hide, idleMs);
+}
+
+installCursorHiding(3000);

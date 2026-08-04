@@ -10,6 +10,17 @@ const fs = require('fs');
 const path = require('path');
 
 const PRELOADS = ['content-preload.js', 'preload.js', 'internal-preload.js'];
+
+/** Pull a duplicated block out of a preload, from `start` to its closing brace. */
+function block(file, start, installMarker) {
+  const src = fs.readFileSync(path.join(__dirname, file), 'utf8');
+  const from = src.indexOf(start);
+  assert.notStrictEqual(from, -1, `${file}: "${start}" is missing entirely`);
+  const to = src.indexOf('\n}', from);
+  assert.notStrictEqual(to, -1, `${file}: block is unterminated`);
+  assert.ok(src.includes(installMarker), `${file}: block is never installed`);
+  return src.slice(from, to + 2);
+}
 // The shared guard function must be byte-identical everywhere; each file's
 // install CALL differs (content-preload also binds Ctrl+S for hints, #109),
 // so the comparison stops at the function's closing brace.
@@ -86,6 +97,40 @@ test('handles a missing element without throwing', () => {
 test('input type matching is case-insensitive', () => {
   assert.strictEqual(editable(el('INPUT', { type: 'CHECKBOX' })), false);
   assert.strictEqual(editable(el('INPUT', { type: 'Text' })), true);
+});
+
+console.log('#128 cursor hiding is duplicated too — same drift risk');
+
+const CURSOR = PRELOADS.map((f) =>
+  block(f, '// #128: hide the cursor while typing', 'installCursorHiding(')
+);
+
+test('all three preloads carry an identical cursor helper', () => {
+  for (let i = 1; i < CURSOR.length; i++) {
+    assert.strictEqual(CURSOR[i], CURSOR[0], `${PRELOADS[i]} has drifted from ${PRELOADS[0]}`);
+  }
+});
+
+test('it hides on keydown and restores on any mouse activity', () => {
+  const body = CURSOR[0];
+  assert.ok(body.includes("window.addEventListener('keydown', hide, true)"), 'typing must hide it');
+  for (const ev of ['mousemove', 'mousedown', 'wheel']) {
+    assert.ok(body.includes(`'${ev}'`), `${ev} must bring the cursor back`);
+  }
+});
+
+test('it uses a stylesheet, not an inline cursor style', () => {
+  // documentElement.style.cursor loses to every link and button that sets its own.
+  assert.ok(CURSOR[0].includes('cursor:none !important'), 'needs an !important rule');
+  assert.ok(CURSOR[0].includes('*,*::before,*::after'), 'must cover pseudo-elements too');
+});
+
+test('every preload installs it with the same idle delay', () => {
+  const delays = PRELOADS.map((f) => {
+    const src = fs.readFileSync(path.join(__dirname, f), 'utf8');
+    return (src.match(/installCursorHiding\((\d+)\)/) || [])[1];
+  });
+  assert.ok(delays.every((d) => d && d === delays[0]), `idle delays differ: ${delays.join(', ')}`);
 });
 
 console.log(`\n${run} tests passed`);
