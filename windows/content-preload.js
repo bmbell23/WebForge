@@ -185,12 +185,47 @@ const HINT_SELECTOR = [
   '[tabindex]:not([tabindex="-1"])',
 ].join(',');
 
+/**
+ * Every hintable element, INCLUDING those inside open shadow roots.
+ *
+ * #129: `document.querySelectorAll` stops at shadow boundaries, so on a
+ * web-component app (Gerrit's PolyGerrit and friends) every link lives somewhere
+ * this could not see and hinting silently found nothing. #33 learned the same
+ * lesson for click interception; the collector repeated it.
+ *
+ * Closed shadow roots remain unreachable — nothing can see into those.
+ */
+function hintCollect(root, out) {
+  for (const el of root.querySelectorAll('*')) {
+    if (el.matches(HINT_SELECTOR)) out.push(el);
+    if (el.shadowRoot) hintCollect(el.shadowRoot, out); // open roots only
+  }
+  return out;
+}
+
+/**
+ * The deepest element actually painted at a point, piercing shadow boundaries.
+ *
+ * #129: `document.elementFromPoint` returns the shadow HOST, so comparing it to
+ * an element inside that host fails in BOTH directions (neither `contains` the
+ * other across the boundary) and every shadow target would be judged covered.
+ */
+function hintTopmostAt(x, y) {
+  let hit = document.elementFromPoint(x, y);
+  while (hit && hit.shadowRoot) {
+    const deeper = hit.shadowRoot.elementFromPoint(x, y);
+    if (!deeper || deeper === hit) break;
+    hit = deeper;
+  }
+  return hit;
+}
+
 function hintTargets() {
   const vw = window.innerWidth;
   const vh = window.innerHeight;
   const seen = new Set();
   const out = [];
-  for (const el of document.querySelectorAll(HINT_SELECTOR)) {
+  for (const el of hintCollect(document, [])) {
     if (el.disabled || seen.has(el)) continue;
     const r = el.getBoundingClientRect();
     if (r.width < 4 || r.height < 4) continue;
@@ -201,8 +236,13 @@ function hintTargets() {
     // must not earn it a label the user cannot actually click.
     const x = Math.min(vw - 1, Math.max(0, r.left + r.width / 2));
     const y = Math.min(vh - 1, Math.max(0, r.top + r.height / 2));
-    const hit = document.elementFromPoint(x, y);
-    if (hit && hit !== el && !el.contains(hit) && !hit.contains(el)) continue;
+    const hit = hintTopmostAt(x, y);
+    if (hit && hit !== el && !el.contains(hit) && !hit.contains(el)) {
+      // Across a shadow boundary `contains` is false both ways, so also accept a
+      // hit that shares this element's shadow root — it is the same widget.
+      const sameRoot = el.getRootNode() === hit.getRootNode();
+      if (!sameRoot) continue;
+    }
     seen.add(el);
     out.push({ el, rect: r });
   }

@@ -77,4 +77,26 @@ test('capacity covers a realistically busy page', () => {
   assert.ok(ALPHA * ALPHA >= 100, 'two-character labels should cover 100+ targets');
 });
 
+console.log('#129 shadow-DOM traversal is present in the shipped source');
+
+// The collector cannot be exercised without a DOM, so assert the mechanism is
+// there: this bug was invisible precisely because it failed silently.
+const collector = src.slice(src.indexOf('function hintCollect'), src.indexOf('let hintSession'));
+
+test('the collector recurses into open shadow roots', () => {
+  assert.ok(collector.includes('el.shadowRoot'), 'must look for shadow roots');
+  assert.ok(collector.includes('hintCollect(el.shadowRoot'), 'must recurse into them');
+  assert.ok(
+    !collector.includes('document.querySelectorAll(HINT_SELECTOR)'),
+    'a flat document query cannot see shadow content — that was the bug'
+  );
+});
+
+test('the hit test pierces shadow roots too', () => {
+  // Otherwise elementFromPoint returns the HOST and every shadow target is
+  // judged covered, which would have silently undone the fix above.
+  assert.ok(collector.includes('shadowRoot.elementFromPoint'), 'must descend while hit-testing');
+  assert.ok(collector.includes('getRootNode()'), 'must treat same-root hits as the same widget');
+});
+
 console.log(`\n${run} tests passed`);
