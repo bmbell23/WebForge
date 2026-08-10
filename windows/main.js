@@ -1304,13 +1304,22 @@ function handleHotkeyPress(keyId) {
   if (!entry) return;
   const tabId = tabForHotkey(keyId);
   if (tabId !== null && tabs.has(tabId)) {
-    if (activeId === tabId) {
-      // Already in the hotkey tab → the hotkey means "take me home".
-      tabs.get(tabId).webContents.loadURL(entry.url);
-      tabs.get(tabId).webContents.focus(); // #30
-    } else {
-      activateTab(tabId);
+    // #132: the key means "take me to THAT URL", whether or not the tab is
+    // already in front. It used to only re-home when you were already there, so
+    // pressing it from another tab just switched to wherever the tab had drifted
+    // — and an SPA drifts constantly, because enforceHome tolerates same-origin
+    // movement by design (#78, to avoid the livelock full-URL comparison caused).
+    // That contradicted #33's own invariant that a quick-launch tab is ONLY ever
+    // its own site. Accepted cost: using the key merely to switch to the tab now
+    // also resets it.
+    if (activeId !== tabId) activateTab(tabId);
+    const wc = tabs.get(tabId).webContents;
+    // Skip the reload when it is already showing the bound URL, so repeat presses
+    // are not a needless page load.
+    if (taburl.canonical(tabUrlOf(tabId)) !== taburl.canonical(entry.url)) {
+      wc.loadURL(entry.url);
     }
+    wc.focus(); // #30
   } else {
     // #71: honour a routing rule when one claims this URL, otherwise keep the
     // tab in the Persona the user is actually working in — landing it in
