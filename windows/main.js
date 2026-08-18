@@ -857,7 +857,12 @@ function createTab(url = null, background = false, personaId = null, opts = {}) 
     // exactly like the reported flicker, so make it visible in diagnostics.
     errorlog.record('sticky-rehome', `tab=${id} left ${home} for ${navUrl}`);
     reHoming = true;
-    openOrFocus(navUrl, false);
+    // #138: exclude THIS tab. enforceHome runs on did-navigate, so the drift has
+    // already landed and this tab is currently the one showing navUrl — without
+    // the exclusion openOrFocus picked it as its own rescue target, opened
+    // nothing, and the loadURL below then threw the page away. That is the
+    // "bookmark flickers and never opens" report.
+    openOrFocus(navUrl, false, id);
     wc.loadURL(home);
     setTimeout(() => {
       reHoming = false;
@@ -1081,25 +1086,29 @@ function rehomeAllTabs() {
   }
 }
 
-function findTabByUrl(url) {
-  // #107: compare CANONICAL forms, not raw strings. Exact equality meant a
-  // trailing slash, a #anchor, http-vs-https or a www. prefix counted as a
-  // different page — so a tab that redirected on load stopped matching what the
-  // other device published, and the 30s sync adoption loop opened it again.
-  const key = taburl.canonical(url);
-  if (!key) return null;
-  for (const id of tabOrder) {
-    // #95: tabUrlOf, not getURL() — a lazily-restored tab (#78) has an empty
-    // webContents URL until it is first shown, so it was invisible here. Tab
-    // adoption then re-created it every sync, and clicking a bookmark for a
-    // restored-but-unopened tab opened a second copy.
-    if (taburl.canonical(tabUrlOf(id)) === key) return id;
-  }
-  return null;
+// #107: compare CANONICAL forms, not raw strings. Exact equality meant a
+// trailing slash, a #anchor, http-vs-https or a www. prefix counted as a
+// different page — so a tab that redirected on load stopped matching what the
+// other device published, and the 30s sync adoption loop opened it again.
+// #95: tabUrlOf, not getURL() — a lazily-restored tab (#78) has an empty
+// webContents URL until it is first shown, so it was invisible here. Tab
+// adoption then re-created it every sync, and clicking a bookmark for a
+// restored-but-unopened tab opened a second copy.
+// #138: `exceptId` excludes a tab from being its own answer; the selection rule
+// itself now lives in taburl.pickTab, under test.
+function findTabByUrl(url, exceptId) {
+  return taburl.pickTab(
+    tabOrder.map((id) => ({ id, url: tabUrlOf(id) })),
+    url,
+    exceptId
+  );
 }
 
-function openOrFocus(url, background) {
-  const existing = findTabByUrl(url);
+// #138: `exceptId` must be threaded through — a sticky tab re-homing itself
+// calls this to put the destination SOMEWHERE ELSE, and without the exclusion
+// "somewhere else" could be the very tab it is about to send home.
+function openOrFocus(url, background, exceptId) {
+  const existing = findTabByUrl(url, exceptId);
   if (existing !== null) {
     if (!background) activateTab(existing);
     return existing;
@@ -2501,8 +2510,14 @@ ipcMain.on('open-bookmark', errorlog.guard('open-bookmark', (_e, { url, backgrou
   const existing = findTabByUrl(url);
   if (existing !== null) {
     if (!background) activateTab(existing);
-  } else if (background) {
-    createTab(url, true);
+  } else if (background || isStickyTab(activeId)) {
+    // #138: never navigate a sticky tab (pinned #117 / hotkey #33) to a
+    // bookmark. It used to load here and then get re-homed a moment later,
+    // which is precisely the flicker — the page appeared in the pinned tab and
+    // was thrown away. Being sticky MEANS "this tab is only ever its own site",
+    // so a bookmark belongs in its own tab. Opening it directly also skips the
+    // load-then-undo entirely, rather than merely surviving it.
+    createTab(url, background);
   } else {
     activeWc()?.loadURL(url);
   }
