@@ -32,6 +32,8 @@ const ctxmenu = require('./ctxmenu'); // #133 — ditto
 const stickytab = require('./stickytab'); // #117 — ditto
 const popuprule = require('./popuprule'); // #125 — ditto
 const useragent = require('./useragent'); // #134 — ditto
+const credmatch = require('./credmatch'); // #136 — ditto
+const autofillInject = require('./autofill-inject'); // #136
 
 // #134: banks and other sites with a "supported browsers" allowlist refuse to
 // let you sign in when the UA says Electron, even though the engine below is
@@ -911,7 +913,13 @@ function createTab(url = null, background = false, personaId = null, opts = {}) 
     Menu.buildFromTemplate(contextMenuFor(wc, params)).popup({ window: win });
   });
   wireLoadFailures(wc); // #108 — also applied to popups by #111
-  wc.on('did-finish-load', () => tryAutofill(wc)); // #12
+  // #12, reworked in #136. One shot at did-finish-load filled almost nothing in
+  // practice: on an SPA the password field does not exist yet, and a two-step
+  // login (Google, Microsoft, most banks) only renders it after you submit the
+  // username — long after the document finished loading. So each of these
+  // events starts a short bounded retry schedule instead of a single attempt.
+  wc.on('did-finish-load', () => scheduleAutofill(wc));
+  wc.on('did-navigate-in-page', () => scheduleAutofill(wc)); // SPA route change
   wc.on('dom-ready', () => {
     wc.send('sticky-mode', isStickyTab(id)); // #33, #117
     // #36 round 2: hide scrollbars on PAGES too (user: "most certainly not
@@ -1730,34 +1738,49 @@ function scheduleSyncSoon() {
 // #12: automatic login fill — user decision: "everything once I'm in".
 // Exact-origin match; fills the first saved login for the page's origin into
 // the first empty password form found. Silent no-op when locked or unmatched.
-function tryAutofill(wc) {
+// #136: when to retry, in ms after the triggering event. A two-step login can
+// take several seconds of the user typing before the password field appears, so
+// the tail is long — but the schedule is FINITE and per-navigation on purpose.
+// An open-ended watcher that types a password into whatever field turns up next
+// is not a nicer version of this feature; it is a way to leak a credential into
+// a form the user never meant to fill.
+const AUTOFILL_RETRIES_MS = [0, 300, 800, 1800, 3500, 6000, 9000];
+const autofillTimers = new WeakMap();
+
+function cancelAutofill(wc) {
+  for (const t of autofillTimers.get(wc) || []) clearTimeout(t);
+  autofillTimers.set(wc, []);
+}
+
+function scheduleAutofill(wc) {
   if (locked || wc.isDestroyed()) return;
-  let origin;
-  try {
-    origin = new URL(wc.getURL()).origin;
-  } catch {
-    return;
-  }
-  const match = credentials.forOrigin(origin)[0];
-  if (!match) return;
-  wc.executeJavaScript(
-    `(() => {
-      const pw = document.querySelector('input[type="password"]');
-      if (!pw || pw.value) return false;
-      const scope = pw.form || document;
-      const user = scope.querySelector(
-        'input[autocomplete="username"], input[type="email"], input[type="text"]'
-      );
-      const fire = (el) => {
-        el.dispatchEvent(new Event('input', { bubbles: true }));
-        el.dispatchEvent(new Event('change', { bubbles: true }));
-      };
-      if (user && !user.value) { user.value = ${JSON.stringify(match.username)}; fire(user); }
-      pw.value = ${JSON.stringify(match.password)}; fire(pw);
-      return true;
-    })()`,
-    true
-  ).catch(() => {});
+  cancelAutofill(wc); // a new navigation supersedes the old page's attempts
+  const url = wc.getURL();
+  const timers = AUTOFILL_RETRIES_MS.map((delay) =>
+    setTimeout(async () => {
+      // Bail if we drifted to a different page mid-schedule — otherwise a
+      // credential picked for page A could be typed into page B.
+      if (wc.isDestroyed() || wc.getURL() !== url) return cancelAutofill(wc);
+      const filled = await tryAutofill(wc);
+      if (filled) cancelAutofill(wc); // done — stop the remaining attempts
+    }, delay)
+  );
+  autofillTimers.set(wc, timers);
+}
+
+async function tryAutofill(wc) {
+  if (locked || wc.isDestroyed()) return false;
+  // #136: was an exact-string origin match, so a login saved for
+  // https://www.chase.com could never fill on chase.com or secure.chase.com.
+  // credmatch ranks origin > host > registrable domain and refuses unsafe folds.
+  const match = credmatch.bestMatch(credentials.list(), wc.getURL());
+  if (!match) return false;
+  // The injected filler lives in autofill-inject.js so the DOM harness in
+  // scripts/autofill-dom-check.js can run exactly what ships.
+  return wc
+    .executeJavaScript(autofillInject.fillScript(match.username, match.password), true)
+    .then((r) => r === 'filled')
+    .catch(() => false);
 }
 
 async function importPasswordsCsv() {
@@ -2137,7 +2160,9 @@ ipcMain.handle('int:auth-details', (e) => {
   let prefill = null;
   if (!locked) {
     try {
-      const match = credentials.forOrigin(origin)[0] || credentials.forOrigin(`http://${info.host}`)[0];
+      // #136: was an exact-origin lookup plus a hand-rolled http fallback, so a
+      // realm on a sibling host never prefilled. credmatch subsumes both.
+      const match = credmatch.bestMatch(credentials.list(), origin);
       if (match) prefill = { username: match.username, password: match.password };
     } catch (err) {
       errorlog.record('auth-prefill', err);

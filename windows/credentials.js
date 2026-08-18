@@ -30,9 +30,11 @@ function count() {
   return load().length;
 }
 
-function forOrigin(origin) {
-  return load().filter((c) => c.origin === origin);
-}
+// #136: `forOrigin` used to live here and matched origins as exact strings, so
+// a login saved for https://www.chase.com could never fill on chase.com. It is
+// gone rather than deprecated — leaving it exported is an invitation to
+// reintroduce the bug. Matching now lives in credmatch.js, which ranks
+// origin > host > registrable domain and refuses unsafe folds.
 
 // Minimal correct CSV: quoted fields, escaped quotes, commas/newlines inside
 // quotes, CRLF endings.
@@ -117,7 +119,8 @@ function list() {
 }
 
 // With an id: update that entry; without: add a new one. Origin is normalized
-// to a real origin so autofill's exact-origin match keeps working.
+// to a real origin so entries stay comparable; #136's matcher is tolerant of
+// looser values but the store should not be the thing producing them.
 function upsert({ id, origin, username, password }) {
   if (!vault.isUnlocked()) return false;
   let normOrigin;
@@ -148,4 +151,4 @@ function removeById(id) {
   return save(creds);
 }
 
-module.exports = { count, forOrigin, importCsv, list, upsert, removeById };
+module.exports = { count, importCsv, list, upsert, removeById };
