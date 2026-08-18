@@ -5,7 +5,7 @@
 // and added after it, so they cover chrome's dead area. Only the active tab's
 // view is visible. Full tab state is broadcast to the chrome UI on every
 // change; it re-renders from that.
-const { app, BaseWindow, BrowserWindow, WebContentsView, ipcMain, dialog, Menu, nativeTheme, session } = require('electron');
+const { app, BaseWindow, BrowserWindow, WebContentsView, clipboard, ipcMain, dialog, Menu, nativeTheme, session } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto'); // #57: stable device id
@@ -28,10 +28,23 @@ const tabnav = require('./tabnav'); // #113/#114 — unit-tested, Electron-free
 const textrules = require('./textrules'); // #100 — ditto
 const taburl = require('./taburl'); // #107 — ditto
 const taborder = require('./taborder'); // #107 — ditto
+const ctxmenu = require('./ctxmenu'); // #133 — ditto
 const stickytab = require('./stickytab'); // #117 — ditto
 const popuprule = require('./popuprule'); // #125 — ditto
+const useragent = require('./useragent'); // #134 — ditto
+
+// #134: banks and other sites with a "supported browsers" allowlist refuse to
+// let you sign in when the UA says Electron, even though the engine below is
+// stock Chromium. Drop the WebForge/Electron tokens so we read as plain Chrome.
+// Set on `app` (not a session) and before ready, so EVERY session and every
+// WebContentsView inherits it — including tabs created much later.
+app.userAgentFallback = useragent.cleanUserAgent(app.userAgentFallback);
 
 // #43: new tabs land on our own search page; Google is the default engine.
+// #133: display names for the "Search <engine> for …" context item.
+const ENGINE_NAMES = {
+  google: 'Google', duckduckgo: 'DuckDuckGo', bing: 'Bing', brave: 'Brave',
+};
 const ENGINES = {
   google: 'https://www.google.com/search?q=',
   duckduckgo: 'https://duckduckgo.com/?q=',
@@ -678,6 +691,66 @@ function popupWindowOptions(features) {
   };
 }
 
+// --- #133: the right-click menu ----------------------------------------------
+//
+// Before this the only context menu was #100's, which returned early unless the
+// selection matched a text rule — so right-clicking a link, an image or a text
+// box produced nothing at all.
+//
+// WHICH items appear lives in ctxmenu.js (unit-tested: six conditional sections,
+// and a wrong branch shows up as a silently missing item). This half only maps
+// each id to what it does.
+function contextMenuFor(wc, params) {
+  const selection = String(params.selectionText || '').trim();
+  const hit = selection && !params.isEditable ? textrules.resolve(selection, textRules()) : null;
+  const nav = wc.navigationHistory;
+
+  const actions = {
+    'link.open': () => openOrFocus(params.linkURL, false),
+    'link.openBackground': () => openOrFocus(params.linkURL, true),
+    'link.copy': () => clipboard.writeText(params.linkURL),
+    // There is no downloads surface yet — Electron's default Save As dialog is
+    // what makes this item honest. A real downloads UI is its own ticket.
+    'link.save': () => wc.downloadURL(params.linkURL),
+    'image.open': () => openOrFocus(params.srcURL, false),
+    'image.copy': () => wc.copyImageAt(params.x, params.y),
+    'image.copyAddress': () => clipboard.writeText(params.srcURL),
+    'image.save': () => wc.downloadURL(params.srcURL),
+    'rule.open': () => openFromSelection(selection), // #100, same resolver as Ctrl+J
+    'selection.copy': () => wc.copy(),
+    'selection.search': () =>
+      openOrFocus(ENGINES[searchEngine()] + encodeURIComponent(selection), false),
+    'edit.undo': () => wc.undo(),
+    'edit.redo': () => wc.redo(),
+    'edit.cut': () => wc.cut(),
+    'edit.copy': () => wc.copy(),
+    'edit.paste': () => wc.paste(),
+    'edit.selectAll': () => wc.selectAll(),
+    'nav.back': () => nav.goBack(),
+    'nav.forward': () => nav.goForward(),
+    'nav.reload': () => wc.reload(),
+    'page.viewSource': () => viewSource(),
+    'page.inspect': () => wc.inspectElement(params.x, params.y),
+  };
+
+  const items = ctxmenu.build(params, {
+    ruleLabel: hit ? (hit.rule.name ? `Open ${hit.matched} in ${hit.rule.name}` : `Open ${hit.matched}`) : null,
+    engineName: ENGINE_NAMES[searchEngine()] || 'the web',
+    canGoBack: nav.canGoBack(),
+    canGoForward: nav.canGoForward(),
+  });
+
+  return items.map((item) =>
+    item.type === 'separator'
+      ? { type: 'separator' }
+      : {
+          label: item.label,
+          enabled: item.enabled !== false,
+          click: actions[item.id] || (() => errorlog.record('context-menu', `no action for ${item.id}`)),
+        }
+  );
+}
+
 function createTab(url = null, background = false, personaId = null, opts = {}) {
   if (locked) return null; // #15
   const id = nextTabId++;
@@ -832,14 +905,10 @@ function createTab(url = null, background = false, personaId = null, opts = {}) 
   // today, so this shows one ONLY when a rule matches — right-click stays inert
   // otherwise, exactly as before. (A general context menu with copy/paste is
   // worth having, but that is its own ticket, not a rider on this one.)
+  // #133: a full context menu, assembled from what was actually right-clicked.
   wc.on('context-menu', (_e2, params) => {
     if (locked) return;
-    const hit = textrules.resolve(params.selectionText, textRules());
-    if (!hit) return;
-    const label = hit.rule.name ? `Open ${hit.matched} in ${hit.rule.name}` : `Open ${hit.matched}`;
-    Menu.buildFromTemplate([
-      { label, click: () => openFromSelection(params.selectionText) },
-    ]).popup({ window: win });
+    Menu.buildFromTemplate(contextMenuFor(wc, params)).popup({ window: win });
   });
   wireLoadFailures(wc); // #108 — also applied to popups by #111
   wc.on('did-finish-load', () => tryAutofill(wc)); // #12

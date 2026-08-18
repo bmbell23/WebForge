@@ -441,17 +441,34 @@
     z-index: 30;
   }
   #bmdialog.open { display: grid; }
+  /* #135: the card was a fixed 380px and the tree a fixed 168px — about six
+     folder rows, identical on a 4K monitor and a laptop. Sized off the viewport
+     now. main.js gives the chrome view the WHOLE window while bmDialogOpen, so
+     there is no native bound to fight here.
+     The 90vh cap plus the shrink order below is what keeps this honest: the
+     tree gives up height first (flex), and only if it hits its floor does the
+     card itself scroll — so Save/Remove/Cancel can never end up stranded off
+     the bottom of a short window, which is what a plain "make it bigger" does. */
   #bmdialog .card {
-    width: 380px;
+    width: min(720px, 92vw);
+    max-height: 90vh;
+    overflow-y: auto;
     padding: 18px;
     border-radius: 12px;
     background: var(--bg);
     display: flex; flex-direction: column; gap: 8px;
   }
+  /* #135: everything except the tree keeps its height — otherwise a short
+     window squashes the inputs and buttons instead of the list, which is the
+     one thing in the card that can afford to lose rows. */
+  #bmdialog .card > *:not(#bmdlgtree) { flex-shrink: 0; }
   #bmdialog h3 { margin: 0 0 4px; font-size: 15px; }
   /* #81: folder picker as a real tree, mirroring the sidebar */
   #bmdlgtree {
-    max-height: 168px; overflow-y: auto;
+    flex: 1 1 auto;
+    min-height: 72px;
+    max-height: min(60vh, 520px);
+    overflow: auto;
     border-radius: 8px; background: var(--field-bg);
     padding: 4px; scrollbar-width: none;
   }
@@ -490,7 +507,19 @@
     background: var(--field-bg); color: var(--field-text);
     font-size: 13px; outline: none;
   }
-  #bmdialog .btnrow { display: flex; gap: 8px; margin-top: 6px; }
+  /* #135: measured at 800x420 the card runs out of room even after the tree has
+     shrunk to its floor, and Save/Remove/Cancel scrolled off the bottom. Sticky
+     pins them to the card's lower edge so they are reachable at ANY window
+     height. Costs nothing at normal sizes — with no overflow to scroll, sticky
+     is inert and the layout is byte-for-byte what it was.
+     The negative margin cancels the padding we add back under the buttons, so
+     the resting card does not grow an extra 18px of dead space. */
+  #bmdialog .btnrow {
+    display: flex; gap: 8px; margin-top: 6px;
+    position: sticky; bottom: 0;
+    padding: 8px 0 18px; margin-bottom: -18px;
+    background: var(--bg);
+  }
   #bmdialog .btnrow button {
     flex: 1; height: 32px;
     border: none; border-radius: 8px;

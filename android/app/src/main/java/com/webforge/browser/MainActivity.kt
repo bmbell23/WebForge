@@ -278,6 +278,11 @@ class MainActivity : Activity() {
             javaScriptCanOpenWindowsAutomatically = true
             // Self-hosted services are often plain HTTP behind an HTTPS page.
             mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+            // #134: sites with a supported-browser allowlist (banks) reject an
+            // embedded WebView by name. Subtract the giveaway tokens from the
+            // engine's OWN string so the Chrome version stays truthful as Play
+            // updates System WebView underneath us.
+            userAgentString = UserAgent.clean(userAgentString)
         }
         // #101: find-in-page counts come back here. Only the visible tab's may
         // reach the bar — a background tab still settling would clobber the
