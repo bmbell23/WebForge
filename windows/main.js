@@ -1755,6 +1755,32 @@ function scheduleSyncSoon() {
 // a form the user never meant to fill.
 const AUTOFILL_RETRIES_MS = [0, 300, 800, 1800, 3500, 6000, 9000];
 const autofillTimers = new WeakMap();
+// #144: how many times a username may be written when there is NO password
+// field on the page. Exactly once per navigation. Framework-controlled inputs
+// re-render and wipe a raw value write, so an unbounded schedule refilled the
+// same field over and over — that is what made a single stray fill look like
+// the field was being spammed.
+const usernameFills = new WeakMap();
+
+// #144 round 3: the two-step-login fill is OFF.
+//
+// It is the only path that writes to a page with no password field on it, which
+// makes it a standing guess about "does this page want a username" — and three
+// rounds of tightening that guess (loose type=text, then strong field signals)
+// still put text into fields on a GitHub Enterprise instance. A login-form
+// heuristic that is wrong on real pages is not a convenience, it is the app
+// typing into your work.
+//
+// Password forms are unaffected: a page with a visible password field still
+// fills username-and-password, scoped to that field's own form. What is lost is
+// pre-filling the username on the FIRST screen of a two-step login (Google,
+// Microsoft) — you type the username there yourself, and the password step
+// still fills automatically.
+//
+// Re-enabling needs evidence the PAGE is a sign-in page (URL, form action, or
+// submit-button text), not merely evidence that a field looks login-ish. That
+// is its own ticket; flipping this constant without it just restarts the cycle.
+const AUTOFILL_TWO_STEP = false;
 
 function cancelAutofill(wc) {
   for (const t of autofillTimers.get(wc) || []) clearTimeout(t);
@@ -1765,19 +1791,27 @@ function scheduleAutofill(wc) {
   if (locked || wc.isDestroyed()) return;
   cancelAutofill(wc); // a new navigation supersedes the old page's attempts
   const url = wc.getURL();
+  usernameFills.set(wc, 0); // #144: budget is per navigation, so reset it here
   const timers = AUTOFILL_RETRIES_MS.map((delay) =>
     setTimeout(async () => {
       // Bail if we drifted to a different page mid-schedule — otherwise a
       // credential picked for page A could be typed into page B.
       if (wc.isDestroyed() || wc.getURL() !== url) return cancelAutofill(wc);
-      const filled = await tryAutofill(wc);
-      if (filled) cancelAutofill(wc); // done — stop the remaining attempts
+      // #144: once the username step has happened, later attempts are told not
+      // to write a username at all. The schedule keeps running so the password
+      // step is still caught — suppressing the write is not the same as giving
+      // up on the login, and cancelling here would have been the latter.
+      const mayFillUsername = AUTOFILL_TWO_STEP && (usernameFills.get(wc) || 0) < 1;
+      const result = await tryAutofill(wc, mayFillUsername);
+      if (result === 'filled') return cancelAutofill(wc); // done
+      if (result === 'user') usernameFills.set(wc, 1);
     }, delay)
   );
   autofillTimers.set(wc, timers);
 }
 
-async function tryAutofill(wc) {
+// Returns 'filled' | 'user' | false — see autofill-inject.js.
+async function tryAutofill(wc, mayFillUsername = true) {
   if (locked || wc.isDestroyed()) return false;
   // #136: was an exact-string origin match, so a login saved for
   // https://www.chase.com could never fill on chase.com or secure.chase.com.
@@ -1787,8 +1821,10 @@ async function tryAutofill(wc) {
   // The injected filler lives in autofill-inject.js so the DOM harness in
   // scripts/autofill-dom-check.js can run exactly what ships.
   return wc
-    .executeJavaScript(autofillInject.fillScript(match.username, match.password), true)
-    .then((r) => r === 'filled')
+    .executeJavaScript(
+      autofillInject.fillScript(match.username, match.password, mayFillUsername),
+      true
+    )
     .catch(() => false);
 }
 

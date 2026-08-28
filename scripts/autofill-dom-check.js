@@ -97,15 +97,121 @@ const CASES = [
   },
   {
     name: 'a two-step login fills the username and reports it is not done',
-    html: `<form><input type="text" name="u"><button>Next</button></form>`,
+    html: `<form><input type="text" name="username"><button>Next</button></form>`,
     expect: 'user',
-    check: 'document.querySelector(\'input[name="u"]\').value',
+    check: 'document.querySelector(\'input[name="username"]\').value',
     checkIs: USER,
+  },
+  {
+    name: '#144: with the username budget spent, the field is left alone',
+    html: `<form><input type="text" name="username" id="u"><button>Next</button></form>`,
+    mayFillUsername: false,
+    expect: false,
+    check: `document.getElementById('u').value`,
+    checkIs: '',
+  },
+  {
+    name: '#144: budget spent still fills a real password form',
+    html: `<form><input type="text" name="username"><input type="password" id="p"></form>`,
+    mayFillUsername: false,
+    expect: 'filled',
+    check: `document.getElementById('p').value`,
+    checkIs: PASS,
   },
   {
     name: 'a page with no login form does nothing',
     html: `<h1>hello</h1><input type="search">`,
     expect: false,
+  },
+  // --- #144 regression cases. The case above passed while the bug was live,
+  // because type="search" never matched the faulty predicate. These use
+  // type="text" — the type that is actually everywhere — which is exactly what
+  // the original check should have done.
+  {
+    name: '#144: an ordinary text box on a page with no login form is NOT touched',
+    html: `<h1>Search</h1><input type="text" id="q" placeholder="Search the site">`,
+    expect: false,
+    check: `document.getElementById('q').value`,
+    checkIs: '',
+  },
+  {
+    name: '#144: a comment box is not treated as a username field',
+    html: `<textarea id="c"></textarea><input type="text" id="subject" placeholder="Subject">`,
+    expect: false,
+    check: `document.getElementById('subject').value`,
+    checkIs: '',
+  },
+  {
+    name: '#144: a bare unlabelled text input is not a username field',
+    html: `<form><input type="text" name="q"></form>`,
+    expect: false,
+  },
+  {
+    name: 'a two-step login with autocomplete=username still fills',
+    html: `<form><input type="text" autocomplete="username" id="u"><button>Next</button></form>`,
+    expect: 'user',
+    check: `document.getElementById('u').value`,
+    checkIs: USER,
+  },
+  {
+    name: 'a two-step login identified by name="username" still fills',
+    html: `<form><input type="text" name="username" id="u"><button>Next</button></form>`,
+    expect: 'user',
+    check: `document.getElementById('u').value`,
+    checkIs: USER,
+  },
+  {
+    name: 'a two-step login identified by an email placeholder still fills',
+    html: `<form><input type="text" id="u" placeholder="Email address"><button>Next</button></form>`,
+    expect: 'user',
+    check: `document.getElementById('u').value`,
+    checkIs: USER,
+  },
+  // --- #144 round 2: the username must come from BESIDE the password field.
+  // Reported as "bbell randomly on some sites, like my work github instance":
+  // a header search box sits earlier in the DOM than the login form, and the
+  // whole-page search handed it the username.
+  {
+    name: '#144r2: a header search box does NOT get the username',
+    html: `<header><input type="text" id="search" name="q" aria-label="Search GitHub"></header>
+           <form><input type="text" id="realuser" name="login" autocomplete="username">
+           <input type="password" id="pw"></form>`,
+    expect: 'filled',
+    check: `document.getElementById('search').value + '|' + document.getElementById('realuser').value`,
+    checkIs: `|${USER}`,
+  },
+  {
+    name: '#144r2: with no <form>, the nearby field wins over a distant one',
+    html: `<div><input type="text" id="far" name="q"></div>
+           <div><input type="text" id="near"><input type="password"></div>`,
+    expect: 'filled',
+    check: `document.getElementById('far').value + '|' + document.getElementById('near').value`,
+    checkIs: `|${USER}`,
+  },
+  {
+    name: '#144r2: a username BELOW the password is still found',
+    html: `<form><input type="password"><input type="text" id="u" name="username"></form>`,
+    expect: 'filled',
+    check: `document.getElementById('u').value`,
+    checkIs: USER,
+  },
+  {
+    name: '#144r2: two login forms on a page do not cross-contaminate',
+    html: `<form id="f1"><input type="text" id="u1"><input type="password" id="p1"></form>
+           <form id="f2"><input type="text" id="u2"><input type="password" id="p2"></form>`,
+    expect: 'filled',
+    // only the FIRST form is touched; the second is left entirely alone
+    check: `document.getElementById('u1').value + '|' + document.getElementById('u2').value
+            + '|' + document.getElementById('p2').value`,
+    checkIs: `${USER}||`,
+  },
+  {
+    name: '#144: autofill never moves focus',
+    html: `<input type="text" id="typing"><form><input type="text"><input type="password"></form>
+           <script>document.getElementById('typing').focus();</script>`,
+    expect: 'filled',
+    check: `document.activeElement.id`,
+    checkIs: 'typing',
   },
   {
     name: 'a password the user already typed is never overwritten',
@@ -153,7 +259,7 @@ app.whenReady().then(async () => {
     await wc.loadURL(
       'data:text/html;charset=utf-8,' + encodeURIComponent(`<!doctype html><body>${c.html}`)
     );
-    const got = await wc.executeJavaScript(fillScript(USER, PASS), true);
+    const got = await wc.executeJavaScript(fillScript(USER, PASS, c.mayFillUsername !== false), true);
     let ok = got === c.expect;
     let detail = `returned ${JSON.stringify(got)}, expected ${JSON.stringify(c.expect)}`;
     if (ok && c.check) {
