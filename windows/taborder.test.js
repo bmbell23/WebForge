@@ -98,6 +98,79 @@ test('stepping the display order never jumps between sections at random', () => 
   }
 });
 
+
+console.log('#142: a hotkey tab shows inside the group it belongs to');
+
+test('a hotkey tab joins a host group that has ordinary tabs', () => {
+  const tabs = [
+    { id: 'hk', url: 'https://gh.com/mine', hotkey: 'g' },
+    { id: 'a', url: 'https://gh.com/a' },
+    { id: 'b', url: 'https://gh.com/b' },
+  ];
+  // All three in one section — no Hotkeys header hoisting the quick-launch tab out.
+  assert.deepStrictEqual(ids(displayOrder(tabs, [], matchPattern)), ['hk', 'a', 'b']);
+});
+
+test('a hotkey tab COUNTS toward the two-tab threshold', () => {
+  // Previously: the ordinary tab sat alone under "Other" and the hotkey tab
+  // sat under "Hotkeys" — the group never formed at all.
+  const tabs = [
+    { id: 'hk', url: 'https://gh.com/mine', hotkey: 'g' },
+    { id: 'solo', url: 'https://gh.com/a' },
+    { id: 'elsewhere', url: 'https://other.com/' },
+  ];
+  assert.deepStrictEqual(ids(displayOrder(tabs, [], matchPattern)), ['hk', 'solo', 'elsewhere']);
+});
+
+test('a hotkey tab joins a CUSTOM group even as its only member (#34)', () => {
+  const tabs = [
+    { id: 'loose', url: 'https://zzz.com/' },
+    { id: 'hk', url: 'https://gerrit.corp/x', hotkey: 'r' },
+  ];
+  const groups = [{ name: 'Work', pattern: 'gerrit.corp' }];
+  // The custom group is deliberate, so the hotkey tab belongs in it and the
+  // section sorts above loose tabs.
+  assert.deepStrictEqual(ids(displayOrder(tabs, groups, matchPattern)), ['hk', 'loose']);
+});
+
+test('hotkey tabs alone on a host do NOT convene a group of their own', () => {
+  // They stay in the Hotkeys section, in key order — the keyboard map (#44)
+  // must not be broken up by an accidental host bucket.
+  const tabs = [
+    { id: 'z', url: 'https://same.com/z', hotkey: 'z' },
+    { id: 'a', url: 'https://same.com/a', hotkey: 'a' },
+  ];
+  assert.deepStrictEqual(ids(displayOrder(tabs, [], matchPattern)), ['a', 'z']);
+});
+
+test('a hotkey tab with no group still sits under Hotkeys, above everything', () => {
+  const tabs = [
+    { id: 'pair1', url: 'https://pair.com/1' },
+    { id: 'hk', url: 'https://solo-host.com/', hotkey: 'a' },
+    { id: 'pair2', url: 'https://pair.com/2' },
+  ];
+  assert.deepStrictEqual(ids(displayOrder(tabs, [], matchPattern)), ['hk', 'pair1', 'pair2']);
+});
+
+test('inside a group, hotkey tabs lead and keep KEY order (#44 survives #142)', () => {
+  const tabs = [
+    { id: 'ordinary', url: 'https://gh.com/z' },
+    { id: 'hkZ', url: 'https://gh.com/z2', hotkey: 'z' },
+    { id: 'hkA', url: 'https://gh.com/a2', hotkey: 'a' },
+  ];
+  assert.deepStrictEqual(ids(displayOrder(tabs, [], matchPattern)), ['hkA', 'hkZ', 'ordinary']);
+});
+
+test('pinned tabs are untouched by #142 and keep their own section', () => {
+  const tabs = [
+    { id: 'pin', url: 'https://gh.com/pinned', pinned: true },
+    { id: 'a', url: 'https://gh.com/a' },
+    { id: 'b', url: 'https://gh.com/b' },
+  ];
+  // pinned first, then the gh.com group of the two ordinary tabs
+  assert.deepStrictEqual(ids(displayOrder(tabs, [], matchPattern)), ['pin', 'a', 'b']);
+});
+
 console.log('degenerate input');
 
 test('empty and non-array input do not throw', () => {

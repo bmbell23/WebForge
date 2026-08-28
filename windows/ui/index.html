@@ -1008,42 +1008,60 @@
     // preserves that order, so what you see and what Ctrl+PageDown steps through
     // are the same sequence. Keep them in step: reordering here would silently
     // reintroduce the hopping.
-    const hot = state
-      .filter((t) => t.hotkey)
-      .sort((a, b) => a.hotkey.localeCompare(b.hotkey, undefined, { numeric: true })); // #44
+    // #142: hotkey tabs are bucketed like everything else now, so one that
+    // belongs to a group is DRAWN in that group (keeping its key badge, which
+    // makeTab renders from t.hotkey either way). Only the ones that land in no
+    // section keep the Hotkeys header.
+    // This mirrors taborder.js displayOrder() deliberately and must keep
+    // mirroring it — see the warning above about the cycling chords.
+    const byKey = (list) =>
+      list.slice().sort((a, b) => a.hotkey.localeCompare(b.hotkey, undefined, { numeric: true })); // #44
+    const orderWithin = (list) => [
+      ...byKey(list.filter((t) => t.hotkey)),
+      ...list.filter((t) => !t.hotkey),
+    ];
+
     const pin = state.filter((t) => !t.hotkey && t.pinned);
-    const rest = state.filter((t) => !t.hotkey && !t.pinned);
+    const bucketable = state.filter((t) => !t.pinned);
+
+    const buckets = new Map(); // key -> {name, custom, tabs}, insertion-ordered
+    for (const t of bucketable) {
+      const name = bucketFor(t.url);
+      if (!buckets.has(name)) {
+        buckets.set(name, { name, custom: tabGroups.some((g) => g.name === name), tabs: [] });
+      }
+      buckets.get(name).tabs.push(t);
+    }
+
+    const sections = [];
+    const looseHot = [];
+    const singles = [];
+    for (const b of buckets.values()) {
+      // #142: a hotkey tab JOINS an existing section; hotkey tabs alone never
+      // convene one, or the Hotkeys keyboard map gets broken up by accident.
+      const hasOrdinary = b.tabs.some((t) => !t.hotkey);
+      if (b.custom || (b.tabs.length >= 2 && hasOrdinary)) {
+        sections.push({ name: b.name, tabs: orderWithin(b.tabs) });
+      } else {
+        for (const t of b.tabs) (t.hotkey ? looseHot : singles).push(t);
+      }
+    }
+    const hot = byKey(looseHot);
+
     const nodes = [];
     if (hot.length) nodes.push(groupHdr('Hotkeys'), ...hot.map(makeTab));
     if (pin.length) nodes.push(groupHdr('Pinned'), ...pin.map(makeTab));
-    if (rest.length) {
-      // #34: named pattern groups first (shown even as singletons — they're
-      // deliberate), then full-host buckets for ≥2 tabs, then flat singles.
-      const buckets = new Map(); // key -> {name, custom, tabs}, insertion-ordered
-      for (const t of rest) {
-        const name = bucketFor(t.url);
-        if (!buckets.has(name)) {
-          buckets.set(name, { name, custom: tabGroups.some((g) => g.name === name), tabs: [] });
-        }
-        buckets.get(name).tabs.push(t);
-      }
-      const singles = [];
-      for (const b of buckets.values()) {
-        if (b.custom || b.tabs.length >= 2) {
-          nodes.push(
-            groupHdr(b.name, b.tabs.map((t) => t.id)), // #46, count dropped in #67
-            ...b.tabs.map(makeTab)
-          );
-        } else {
-          singles.push(b.tabs[0]);
-        }
-      }
-      if (singles.length) {
-        // #107: "Other" — these are the tabs that belong to no group, and
-        // calling the section "Tabs" implied the others somehow weren't.
-        if (nodes.length) nodes.push(groupHdr('Other'));
-        nodes.push(...singles.map(makeTab));
-      }
+    for (const s of sections) {
+      nodes.push(
+        groupHdr(s.name, s.tabs.map((t) => t.id)), // #46, count dropped in #67
+        ...s.tabs.map(makeTab)
+      );
+    }
+    if (singles.length) {
+      // #107: "Other" — these are the tabs that belong to no group, and
+      // calling the section "Tabs" implied the others somehow weren't.
+      if (nodes.length) nodes.push(groupHdr('Other'));
+      nodes.push(...singles.map(makeTab));
     }
     for (const dev of remoteTabs) {
       nodes.push(groupHdr(`On ${dev.device}`));
