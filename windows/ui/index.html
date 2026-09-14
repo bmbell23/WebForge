@@ -675,6 +675,39 @@
   @keyframes slide {
     to { left: 100%; }
   }
+
+  /* #145: save/update password prompt — a centred card over a dimmed page,
+     modelled on the bookmark dialog (#29). It was a docked strip first, which
+     in fullscreen painted the screen black: chrome had the whole window but was
+     never raised and no reveal mode was set, so body[data-fs] hid everything.
+     main now raises chrome for this exactly as it does for #bmdialog.
+     Deliberately not a native dialog — that steals focus from the page you are
+     signing in to (#144). */
+  #loginprompt {
+    position: absolute;
+    inset: 0;
+    display: none;
+    place-items: center;
+    background: rgba(0, 0, 0, 0.45);
+    z-index: 35;
+  }
+  #loginprompt.open { display: grid; }
+  #loginprompt .card {
+    width: min(440px, 90vw);
+    padding: 18px;
+    border-radius: 12px;
+    background: var(--bg);
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.45);
+    display: flex; flex-direction: column; gap: 12px;
+  }
+  #loginprompt .msg { font-size: 14px; line-height: 1.45; }
+  #loginprompt .row { display: flex; gap: 8px; }
+  #loginprompt button {
+    flex: 1; height: 32px; border: none; border-radius: 8px;
+    background: var(--accent); color: #fff; font-size: 13px; font-weight: 600;
+    cursor: pointer;
+  }
+  #loginprompt button.dismiss { background: var(--surface); color: var(--text); font-weight: 500; }
 </style>
 </head>
 <body>
@@ -702,6 +735,15 @@
   </div>
   <!-- #101: find in page. Docked under the nav; main.js shrinks the page view
        by FIND_H so this strip is real estate, not an overlay the page covers. -->
+  <div id="loginprompt">
+    <div class="card">
+      <div class="msg" id="lpmsg"></div>
+      <div class="row">
+        <button id="lpok">Save</button>
+        <button id="lpno" class="dismiss">Not now</button>
+      </div>
+    </div>
+  </div>
   <div id="findbar">
     <input id="findinput" type="text" placeholder="Find in page" spellcheck="false">
     <span id="findcount"></span>
@@ -1857,6 +1899,48 @@
     el.onauxclick = (e) => { if (e.button === 1) webforge.openBookmark(b.url, true); };
     return el;
   }
+
+  // --- #145: offer to save or update a login ---
+  // Nothing is stored unless the button is pressed; declining sends no answer,
+  // so the vault is untouched.
+  (() => {
+    const box = document.getElementById('loginprompt');
+    const msg = document.getElementById('lpmsg');
+    const ok = document.getElementById('lpok');
+    const no = document.getElementById('lpno');
+    let current = null;
+
+    const close = () => {
+      current = null;
+      box.classList.remove('open');
+    };
+
+    webforge.onLoginPrompt((p) => {
+      current = p;
+      msg.textContent = p.title;
+      ok.textContent = p.confirm;
+      box.classList.add('open');
+    });
+
+    ok.onclick = () => {
+      if (!current) return;
+      webforge.answerLoginPrompt({ ...current, accepted: true });
+      close();
+    };
+    // Always answer, even on a decline: main reserved screen height for this
+    // strip and needs to know to give it back.
+    no.onclick = () => {
+      if (current) webforge.answerLoginPrompt({ ...current, accepted: false });
+      close();
+    };
+    // Esc dismisses, like every other transient thing in this UI.
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && current) {
+        webforge.answerLoginPrompt({ ...current, accepted: false });
+        close();
+      }
+    });
+  })();
 </script>
 </body>
 </html>

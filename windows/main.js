@@ -33,6 +33,7 @@ const stickytab = require('./stickytab'); // #117 — ditto
 const popuprule = require('./popuprule'); // #125 — ditto
 const useragent = require('./useragent'); // #134 — ditto
 const credmatch = require('./credmatch'); // #136 — ditto
+const credsave = require('./credsave'); // #145 — ditto
 const autofillInject = require('./autofill-inject'); // #136
 
 // #134: banks and other sites with a "supported browsers" allowlist refuse to
@@ -103,6 +104,7 @@ let updateCheckNow = null; // set once the updater is wired (packaged builds onl
 let bmPanelOpen = false;
 let pwPanelOpen = false; // #26 — shares the right-panel slot with bookmarks
 let findOpen = false; // #101
+let loginPromptOpen = false; // #145
 
 let win, chrome, lockView;
 const tabs = new Map(); // id -> WebContentsView
@@ -203,7 +205,13 @@ function sessionSnapshot() {
 function saveSessionSoon() {
   if (locked) return;
   clearTimeout(saveSessionTimer);
-  saveSessionTimer = setTimeout(() => vault.writeFile('session', sessionSnapshot()), 500);
+  // #147: sessionSnapshot() reads every tab's webContents; on quit those are
+  // already gone. Nothing to save at that point anyway — the session was
+  // flushed synchronously on the way out.
+  saveSessionTimer = setTimeout(() => {
+    if (!alive()) return;
+    vault.writeFile('session', sessionSnapshot());
+  }, 500);
 }
 function saveSessionNow() {
   if (locked) return;
@@ -243,7 +251,7 @@ function layout() {
     // settings) is open — then chrome needs the full window to show it.
     view?.setBounds({ x: 0, y: 0, width, height });
     chrome.setBounds(
-      bmDialogOpen || settingsOpen || managerOpen || bmPanelOpen || pwPanelOpen
+      bmDialogOpen || settingsOpen || managerOpen || bmPanelOpen || pwPanelOpen || loginPromptOpen
         ? { x: 0, y: 0, width, height }
         : fsRegionBounds()
     );
@@ -634,6 +642,18 @@ function pushPersonas() {
   });
 }
 
+// #147: every deferred callback in this file can outlive the thing it touches.
+// #20 was this exact bug in fsPoll — the window died with the interval still
+// scheduled, and "Object has been destroyed" fired every tick until Electron's
+// modal error dialog made the app unusable. That fix guarded one callback; this
+// is the guard as a shared rule, because the next timer added would have had to
+// remember on its own, and pushState did not.
+function alive() {
+  if (!win || win.isDestroyed()) return false;
+  if (!chrome || chrome.webContents.isDestroyed()) return false;
+  return true;
+}
+
 // #78: a loading page fires start/stop/title/favicon/navigate in quick
 // succession, and each one rebuilt and shipped the whole tab list. Coalesce.
 let pushTimer = null;
@@ -646,7 +666,11 @@ function pushState() {
 }
 
 function pushStateNow() {
-  if (!chrome) return;
+  // #147: `chrome` being non-null said nothing about whether its WebContents —
+  // or the window — was still alive. Quitting inside the 40ms coalescing window
+  // threw here, and a throw in this function means the sidebar silently stops
+  // updating until the next successful push.
+  if (!alive()) return;
   pushPersonas(); // #25
   chrome.webContents.send('tabs-updated', tabState());
   chrome.webContents.send('remote-tabs', remoteTabsForActive()); // #57
@@ -869,7 +893,13 @@ function createTab(url = null, background = false, personaId = null, opts = {}) 
     }, 800);
   };
   wc.on('did-navigate', (_e2, navUrl) => enforceHome(navUrl, true));
-  wc.on('did-navigate-in-page', (_e2, navUrl, isMainFrame) => enforceHome(navUrl, isMainFrame));
+  wc.on('did-navigate-in-page', (_e2, navUrl, isMainFrame) => {
+    enforceHome(navUrl, isMainFrame);
+    // #145: plenty of sign-ins never fire a full did-navigate — an SPA router
+    // pushState()s to the landing page. Without this the prompt simply never
+    // appeared on those sites.
+    if (isMainFrame !== false) settleLogin(id, wc, navUrl);
+  });
   for (const ev of [
     'did-navigate',
     'did-navigate-in-page',
@@ -886,6 +916,7 @@ function createTab(url = null, background = false, personaId = null, opts = {}) 
     }
   });
   wc.on('did-navigate', (_e2, navUrl) => {
+    settleLogin(id, wc, navUrl); // #145: did a submitted login just succeed?
     // Re-home the tab if it navigated into another persona's territory (#25).
     const claimed = personas.forUrl(navUrl);
     const current = personaByTab.get(id);
@@ -987,7 +1018,7 @@ function activateTab(id, opts = {}) {
   // z-order. Now the active view is always raised above the other PAGE views,
   // and chrome is put back on top afterwards when it is meant to be showing —
   // which preserves #32's fix rather than trading one for the other.
-  const chromeOnTop = fsRevealed || bmDialogOpen || settingsOpen || managerOpen;
+  const chromeOnTop = fsRevealed || bmDialogOpen || settingsOpen || managerOpen || loginPromptOpen; // #145
   win.contentView.addChildView(view);
   if (chromeOnTop) win.contentView.addChildView(chrome);
   layout();
@@ -1466,6 +1497,13 @@ function createWindow() {
   win.on('resize', layout);
   win.on('maximize', layout);
   win.on('unmaximize', layout);
+  // #148: restore/show/focus were missing from this set. A view sized while the
+  // window was still minimised gets stale bounds from getContentBounds() and
+  // never paints — the "black page until I alt-tab" report. Alt-tabbing worked
+  // only because it happened to generate a resize.
+  win.on('restore', layout);
+  win.on('show', layout);
+  win.on('focus', layout);
 
   showLock(); // #15: nothing exists until the vault opens
 }
@@ -1741,7 +1779,7 @@ async function syncTabs() {
 
 function scheduleSyncSoon() {
   clearTimeout(syncTimer);
-  syncTimer = setTimeout(syncBookmarks, 5000);
+  syncTimer = setTimeout(() => alive() && syncBookmarks(), 5000); // #147
 }
 
 // #12: automatic login fill — user decision: "everything once I'm in".
@@ -1810,6 +1848,166 @@ function scheduleAutofill(wc) {
   autofillTimers.set(wc, timers);
 }
 
+// --- #145: offer to save or update a login after signing in ---
+//
+// Two rules shape this, both learned rather than assumed:
+//  * Submitting is not succeeding. Prompting on submit fills the store with
+//    typos and rejected passwords — exactly the stale-credential problem this
+//    is meant to end. So a candidate is held until the page navigates away from
+//    the form, which is the usual evidence a sign-in was accepted.
+//  * The prompt lives in the chrome UI, not a native dialog, so it cannot steal
+//    focus from the page mid-login (#144's lesson).
+const pendingLogin = new Map(); // tabId -> {origin, username, password, url}
+
+/** Which tab sent this IPC? Content preloads have no id of their own. */
+function tabIdForSender(sender) {
+  for (const [id, view] of tabs) {
+    if (view.webContents === sender) return id;
+  }
+  return null;
+}
+
+ipcMain.on('login-submitted', (e, data) => {
+  if (locked) return; // nothing is captured while the vault is shut
+  const id = tabIdForSender(e.sender);
+  if (id === null) return;
+  const origin = String(data?.origin || '');
+  const password = String(data?.password || '');
+  if (!origin || !password) {
+    errorlog.record('login-capture', `ignored: origin=${Boolean(origin)} password=${Boolean(password)}`);
+    return;
+  }
+  errorlog.record('login-capture', `held ${origin} user=${data?.username ? 'yes' : 'empty'}`);
+  pendingLogin.set(id, {
+    origin,
+    username: String(data?.username || ''),
+    password,
+    url: e.sender.getURL(), // the form's page, so we can tell when we leave it
+  });
+});
+
+/** Is a usable password field on screen? Then we are still being asked to log in. */
+function hasVisiblePasswordField(wc) {
+  return wc
+    .executeJavaScript(
+      `(() => {
+        const seen = [];
+        const walk = (root, d) => {
+          if (!root || d > 8) return;
+          for (const el of root.querySelectorAll('input')) {
+            if (el.type === 'password') seen.push(el);
+            if (el.shadowRoot) walk(el.shadowRoot, d + 1);
+          }
+          for (const el of root.querySelectorAll('*')) if (el.shadowRoot) walk(el.shadowRoot, d + 1);
+        };
+        walk(document, 0);
+        return seen.some((el) => {
+          const r = el.getBoundingClientRect();
+          return r.width > 24 && r.height > 8;
+        });
+      })()`,
+      true
+    )
+    .catch(() => false);
+}
+
+/** Called on navigation: did a held login just look successful? */
+async function settleLogin(id, wc, navUrl) {
+  const pending = pendingLogin.get(id);
+  if (!pending || locked) return;
+  errorlog.record('login-capture', `navigated ${pending.url} -> ${navUrl}`);
+  // Still on the same page — a failed sign-in usually re-renders in place, so
+  // this is not yet evidence of anything. Keep holding.
+  if (taburl.canonical(navUrl) === taburl.canonical(pending.url)) {
+    errorlog.record('login-capture', 'same page — sign-in not confirmed yet, still holding');
+    return;
+  }
+
+  // #145 round 3: "the URL changed" is NOT the same as "you got in". A rejected
+  // password very often navigates too — /login -> /login?error=1, or a bounce
+  // through the identity provider and back to a fresh sign-in form. Treating
+  // that as success consumed the held credential on the FAILED attempt, so when
+  // the right password went in afterwards there was frequently nothing left to
+  // compare and no prompt appeared. That is the reported symptom.
+  //
+  // A visible password field on the page we landed on is much better evidence:
+  // sites do not ask for a password again once you are in.
+  if (await hasVisiblePasswordField(wc)) {
+    // Keep holding, and re-anchor to where we are now so the NEXT navigation is
+    // judged against this page rather than the original one.
+    pendingLogin.set(id, { ...pending, url: navUrl });
+    errorlog.record('login-capture', 'landed on another password form — sign-in failed, still holding');
+    // ...but a landing page can render a password field for a moment on its way
+    // to being logged in, and if no further navigation follows we would hold
+    // forever and never prompt. One bounded re-check covers that without
+    // turning this into a polling loop.
+    // #147's rule: a deferred callback must not touch anything that can die.
+    setTimeout(async () => {
+      if (!alive() || wc.isDestroyed() || locked) return;
+      const held = pendingLogin.get(id);
+      // Only if nothing else moved on in the meantime.
+      if (!held || taburl.canonical(wc.getURL()) !== taburl.canonical(navUrl)) return;
+      if (await hasVisiblePasswordField(wc)) return; // genuinely still a login page
+      pendingLogin.delete(id);
+      errorlog.record('login-capture', 're-check: password form gone, treating as signed in');
+      offerToSave(id, held);
+    }, 2500);
+    return;
+  }
+
+  pendingLogin.delete(id);
+  offerToSave(id, pending);
+}
+
+/** Decide what to offer for a login we believe succeeded, and show the dialog. */
+function offerToSave(id, held) {
+  const decision = credsave.decide(credentials.list(), held);
+  errorlog.record('login-capture', `decision=${decision.action} for ${held.origin}`);
+  if (decision.action === 'none') return;
+  const prompt = credsave.promptFor(decision, held.origin);
+  if (!prompt) return;
+  // The chrome UI renders it; nothing is written until the answer comes back.
+  // #145 round 2: this is a centred dialog over a dimmed page, modelled on the
+  // bookmark dialog (#29/#32) — the pattern this app already has for "chrome
+  // needs the whole window for a moment". The first version was a docked strip,
+  // and in fullscreen it painted the screen black: chrome was given the full
+  // window but never RAISED above the page and no reveal mode was set, so
+  // body[data-fs] hid every child and all you saw was chrome's backdrop.
+  loginPromptOpen = true;
+  clearFsReveal();
+  setChromeRaised(true);
+  layout(); // #32: in fullscreen, chrome must expand to show the dialog
+  errorlog.record('login-capture', `prompting: ${prompt.confirm} — ${prompt.title}`);
+  chrome?.webContents.send('login-prompt', {
+    id: `${id}:${Date.now()}`,
+    title: prompt.title,
+    confirm: prompt.confirm,
+    action: decision.action,
+    entryId: decision.id || null,
+    origin: held.origin,
+    username: held.username,
+    password: held.password,
+  });
+  chrome.webContents.focus(); // so Esc and the buttons are reachable
+}
+
+ipcMain.on('login-prompt-answer', (_e, answer) => {
+  // Put the window back the way it was first, whatever the answer is.
+  loginPromptOpen = false;
+  if (!bmDialogOpen && !settingsOpen && !managerOpen) setChromeRaised(false);
+  layout();
+  activeWc()?.focus();
+  if (locked || !answer || !answer.accepted) return;
+  const ok = credentials.upsert({
+    id: answer.action === 'update' ? answer.entryId : undefined,
+    origin: answer.origin,
+    username: answer.username,
+    password: answer.password,
+  });
+  if (!ok) return errorlog.record('login-save', `upsert refused for ${answer.origin}`);
+  pushCreds();
+});
+
 // Returns 'filled' | 'user' | false — see autofill-inject.js.
 async function tryAutofill(wc, mayFillUsername = true) {
   if (locked || wc.isDestroyed()) return false;
@@ -1860,6 +2058,10 @@ function showLock() {
   if (lockView) return;
   if (!locked) saveSessionNow();
   locked = true; // #37: locking no longer exits fullscreen (we live there now)
+  // #145: a prompt in flight must not survive a lock — it holds a plaintext
+  // password, and its reserved strip would otherwise be stuck on screen.
+  pendingLogin.clear();
+  loginPromptOpen = false;
   vault.lock();
   // Tear the whole session down — nothing sensitive stays rendered or mapped.
   for (const id of [...tabOrder]) {
@@ -2274,6 +2476,22 @@ function urlFromArgv(argv) {
 // A URL can arrive before the vault is unlocked, and createTab() refuses while
 // locked — so it would vanish silently. Hold it until onUnlocked() runs.
 let pendingExternalUrl = null;
+
+// #148: run `fn` once the window is genuinely on screen and sized, so anything
+// it creates is laid out against real geometry rather than a pending request.
+function whenWindowReady(fn) {
+  if (!win || win.isDestroyed()) return;
+  let ran = false; // both listeners below can fire; the work must happen once
+  const go = () => {
+    if (ran || !win || win.isDestroyed()) return;
+    ran = true;
+    layout(); // geometry is real by now; re-sync every view before adding more
+    fn();
+  };
+  if (win.isVisible() && !win.isMinimized()) return setImmediate(go);
+  win.once('show', () => setImmediate(go));
+  win.once('restore', () => setImmediate(go));
+}
 
 function openExternalUrl(url) {
   if (!url) return;
@@ -3028,7 +3246,7 @@ function setupAutoUpdate() {
   // per 2 min (#6: 10 min made a freshly staged release feel broken; a check
   // against the LAN endpoint costs nothing).
   check();
-  setInterval(check, 4 * 60 * 60 * 1000);
+  setInterval(() => alive() && check(), 4 * 60 * 60 * 1000); // #147
   let lastFocusCheck = Date.now();
   win.on('focus', () => {
     if (Date.now() - lastFocusCheck < 2 * 60 * 1000) return;
@@ -3053,7 +3271,11 @@ if (!isPrimaryInstance) {
       win.show();
       win.focus();
     }
-    openExternalUrl(url);
+    // #148: restore()/show() are REQUESTS to the window manager, not completed
+    // state changes. Creating the tab in this same tick sized it against the
+    // pre-restore geometry, so it painted black until something else forced a
+    // relayout. Let the window actually come up first.
+    whenWindowReady(() => openExternalUrl(url));
   });
 }
 
@@ -3070,7 +3292,7 @@ app.whenReady().then(() => {
   claimProtocols(); // #106
   // #106: a cold start from a clicked link. showLock() runs inside
   // createWindow(), so this is queued and flushed by onUnlocked().
-  openExternalUrl(urlFromArgv(process.argv));
+  whenWindowReady(() => openExternalUrl(urlFromArgv(process.argv))); // #148
   setInterval(syncBookmarks, 10 * 60 * 1000); // #13: periodic catch-up
   setInterval(syncPersonas, 10 * 60 * 1000); // #88
   setInterval(syncTabs, 30 * 1000); // #95: 30s, matching Android — a minute felt dead
@@ -3080,6 +3302,14 @@ app.whenReady().then(() => {
 app.on('before-quit', () => {
   clearInterval(fsPollTimer); // #20: never let the poll outlive the window
   fsPollTimer = null;
+  // #147: #20 cleared the one timer that existed then. Everything deferred
+  // since — the 40ms pushState coalesce, the 500ms session debounce, the
+  // bookmark sync — could still fire after the window went away. The alive()
+  // guard makes that harmless; cancelling here means it does not happen at all.
+  clearTimeout(pushTimer);
+  pushTimer = null;
+  clearTimeout(saveSessionTimer);
+  clearTimeout(syncTimer);
   saveSessionNow(); // flush any pending debounce
 });
 app.on('window-all-closed', () => app.quit());

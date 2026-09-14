@@ -100,6 +100,88 @@ window.addEventListener(
   true
 );
 
+// #145: watch a login being submitted so main can offer to save or update it.
+//
+// This only ever REPORTS what was typed; it never stores anything and never
+// decides anything. Main compares it with the vault (credsave.js) and asks you
+// first — a store that updated itself would be a new way to lose a working
+// password.
+//
+// Runs in the page, because a form submission is a DOM event that the main
+// process cannot see. Shadow roots are walked for the same reason autofill
+// walks them (#129): SSO portals put their forms inside one.
+(() => {
+  const passwordFields = (root, depth, out) => {
+    if (!root || depth > 12) return out;
+    for (const el of root.querySelectorAll('input')) {
+      if (el.type === 'password') out.push(el);
+      if (el.shadowRoot) passwordFields(el.shadowRoot, depth + 1, out);
+    }
+    for (const el of root.querySelectorAll('*')) {
+      if (el.shadowRoot) passwordFields(el.shadowRoot, depth + 1, out);
+    }
+    return out;
+  };
+
+  // The username that goes WITH a password field — the same "beside it, not the
+  // first box on the page" rule autofill had to learn the hard way (#144).
+  const usernameFor = (pw) => {
+    const userish = (el) =>
+      el.type === 'email' || el.type === 'text' || el.autocomplete === 'username';
+    const scopes = [];
+    if (pw.form) scopes.push(pw.form);
+    let node = pw.parentElement;
+    for (let i = 0; node && i < 5; i++, node = node.parentElement) scopes.push(node);
+    for (const scope of scopes) {
+      const found = Array.from(scope.querySelectorAll('input')).filter(
+        (el) => el !== pw && userish(el) && el.value
+      );
+      if (!found.length) continue;
+      const before = found.filter(
+        (el) => pw.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_PRECEDING
+      );
+      return (before.length ? before[before.length - 1] : found[0]).value;
+    }
+    return '';
+  };
+
+  const report = () => {
+    const pw = passwordFields(document, 0, []).find((el) => el.value);
+    if (!pw) return;
+    ipcRenderer.send('login-submitted', {
+      origin: location.origin,
+      username: usernameFor(pw),
+      password: pw.value,
+    });
+  };
+
+  // A real submit is the clearest signal.
+  window.addEventListener('submit', report, true);
+
+  // ...but plenty of sign-in forms are buttons and fetch(), never submitting.
+  // A click on anything that looks like the submit control is the fallback.
+  // Deliberately generous: main discards anything that turns out not to be a
+  // login, and the cost of missing a real one is the feature silently not
+  // working — the failure the user reported in the first place.
+  window.addEventListener(
+    'click',
+    (e) => {
+      const el = e.target && e.target.closest && e.target.closest('button, input[type=submit], [role=button]');
+      if (el) setTimeout(report, 0); // after the page's own handler reads the field
+    },
+    true
+  );
+
+  // Enter inside a password field submits on most sign-in forms.
+  window.addEventListener(
+    'keydown',
+    (e) => {
+      if (e.key === 'Enter' && e.target && e.target.type === 'password') setTimeout(report, 0);
+    },
+    true
+  );
+})();
+
 let sticky = false;
 ipcRenderer.on('sticky-mode', (_e, on) => {
   sticky = Boolean(on);

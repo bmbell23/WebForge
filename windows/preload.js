@@ -40,6 +40,9 @@ contextBridge.exposeInMainWorld('webforge', {
   deleteCred: (id) => ipcRenderer.invoke('creds-delete', id),
   onPwPanel: (cb) => ipcRenderer.on('pw-panel', (_e, open) => cb(open)),
   onCredsUpdated: (cb) => ipcRenderer.on('creds-updated', (_e, list) => cb(list)),
+  // #145: main asks whether to save/update a login it saw submitted.
+  onLoginPrompt: (cb) => ipcRenderer.on('login-prompt', (_e, p) => cb(p)),
+  answerLoginPrompt: (a) => ipcRenderer.send('login-prompt-answer', a),
   // bookmark manager (#29)
   toggleBmManager: () => ipcRenderer.send('toggle-bm-manager'),
   onBmManager: (cb) => ipcRenderer.on('bm-manager', (_e, open) => cb(open)),
