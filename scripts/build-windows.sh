@@ -43,6 +43,18 @@ if [ ! -f "$EXE" ]; then
     exit 1
 fi
 
+# #149: the Android side shipped an update loop by advertising a version its
+# artifact didn't contain. That can't happen the same way here — electron-builder
+# writes latest.yml from the same build that produced the exe, with the version
+# injected via extraMetadata — but the cost of being sure is one grep, and the
+# consequence of being wrong is an auto-updater that loops on every launch.
+YML_VERSION=$(grep -m1 '^version:' dist/latest.yml | awk '{print $2}')
+if [ "$YML_VERSION" != "$VERSION" ]; then
+    echo "❌ refusing to stage: latest.yml says $YML_VERSION but version.txt says $VERSION"
+    exit 1
+fi
+echo "🔎 latest.yml reports $YML_VERSION — matches version.txt"
+
 mkdir -p "$REPO_ROOT/releases/windows"
 cp "$EXE" dist/latest.yml "$REPO_ROOT/releases/windows/"
 cp "dist/WebForge Setup $VERSION.exe.blockmap" "$REPO_ROOT/releases/windows/" 2>/dev/null || true
