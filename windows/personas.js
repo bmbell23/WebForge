@@ -20,7 +20,12 @@ function defaults() {
       { id: crypto.randomUUID(), name: 'Work', rules: [] },
     ],
     active: UNASSIGNED,
-    updatedAt: Date.now(),
+    // #151: NOT Date.now(). Stamping factory defaults with the current time made
+    // every fresh install look like the newest edit in the fleet, so it pushed
+    // three empty personas over the real rule set and every device pulled the
+    // wipe. A default set has never been edited by anyone; 0 says so, and keeps
+    // it on the losing side of every comparison until the user changes something.
+    updatedAt: 0,
   };
 }
 
@@ -30,7 +35,10 @@ function load() {
       cached = JSON.parse(fs.readFileSync(file(), 'utf8'));
     } catch {
       cached = defaults();
-      save();
+      // #151: persist WITHOUT save() — save() stamps updatedAt = Date.now(),
+      // which is precisely what turned a first run into the fleet's newest edit.
+      // Same reasoning as setActive below: write the file, don't claim an edit.
+      persist();
     }
     if (!Array.isArray(cached.personas) || !cached.personas.length) cached = defaults();
     // Unassigned must always exist and must always be first.
@@ -41,11 +49,16 @@ function load() {
   return cached;
 }
 
-function save() {
-  cached.updatedAt = Date.now();
+/** Write the file as-is. Does NOT claim an edit — see #151. */
+function persist() {
   try {
     fs.writeFileSync(file(), JSON.stringify(cached));
   } catch {}
+}
+
+function save() {
+  cached.updatedAt = Date.now(); // a real user edit: now it is the newest
+  persist();
 }
 
 const all = () => load().personas;
@@ -62,9 +75,7 @@ function setActive(id) {
   // #88: do NOT bump updatedAt — which Persona is showing is a per-device
   // choice, and stamping it would make every switch look like a definition
   // change and ping-pong against the phone.
-  try {
-    fs.writeFileSync(file(), JSON.stringify(cached));
-  } catch {}
+  persist();
   return true;
 }
 

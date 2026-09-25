@@ -1698,7 +1698,11 @@
   const bmPending = new Set();  // #80: folders created but not yet holding anything
   let bmParent = null;          // #80: folder selected as the parent for a new one
   let capture = null;  // {url, title} while waiting for a key press
-  const keyIdOf = (e) => (e.ctrlKey ? 'Ctrl+' : '') + (e.altKey ? 'Alt+' : '') + e.key;
+  // #150: was a second copy of the id format, which on macOS would have built
+  // ids from the wrong physical key and silently stopped matching main's.
+  // Both now come from windows/modifier.js via the preload bridge.
+  const modBits = (e) => ({ ctrlKey: e.ctrlKey, metaKey: e.metaKey, altKey: e.altKey });
+  const keyIdOf = (e) => webforge.keyId(modBits(e), e.key);
   const keyForUrl = (url) => Object.keys(hotkeysMap).find((k) => hotkeysMap[k].url === url);
   // #28: hold bind/unbind confirmations for a few seconds — the broadcast that
   // follows a binding change re-renders and would instantly clobber them.
@@ -1720,7 +1724,10 @@
         showFeedback(k ? `Unbound "${k}" ✓` : 'Nothing was bound');
         capture = null;
         return;
-      } else if (e.key.length === 1 && !e.metaKey) {
+        // #150: reject the OTHER platform's modifier (the Windows key on
+        // Windows, Control on macOS) — not `metaKey`, which IS ⌘ on a Mac and
+        // would have made every hotkey uncapturable there.
+      } else if (e.key.length === 1 && !webforge.isForeignModifier(modBits(e))) {
         // #28: confirm exactly what got captured — field diagnosis for the
         // "capitals won't bind" report (splits set-failure from fire-failure).
         const id = keyIdOf(e);

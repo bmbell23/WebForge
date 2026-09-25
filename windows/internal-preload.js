@@ -3,6 +3,21 @@
 // preload — web content keeps the unprivileged content-preload.
 const { contextBridge, ipcRenderer } = require('electron');
 
+// #150-modifier-copy-start
+// Which physical modifier means "WebForge": Ctrl on Windows/Linux, ⌘ on macOS —
+// where Control is a DIFFERENT key that must not fire our chords, and on Windows
+// the Meta (Windows) key must not either. A copy of modifier.js's isChordExact,
+// because a sandboxed preload cannot require a local file (proved in #150; the
+// same reason installGuardedKeys is duplicated). modifier.test.js pins all three
+// copies to the module and to each other — edit them together or it goes red.
+const appChord = (e) => {
+  const mac = process.platform === 'darwin';
+  const primary = mac ? e.metaKey : e.ctrlKey;
+  const foreign = mac ? e.ctrlKey : e.metaKey;
+  return !!primary && !foreign && !e.altKey && !e.shiftKey;
+};
+// #150-modifier-copy-end
+
 contextBridge.exposeInMainWorld('wf', {
   // settings
   getSettings: () => ipcRenderer.invoke('int:get-settings'),
@@ -98,7 +113,7 @@ function installGuardedKeys(handlers) {
   window.addEventListener(
     'keydown',
     (e) => {
-      if (!e.ctrlKey || e.shiftKey || e.altKey || e.metaKey) return;
+      if (!appChord(e)) return; // #150
       const handler = handlers[(e.key || '').toLowerCase()];
       if (!handler) return;
       // composedPath()[0] sees INTO shadow roots, where e.target is retargeted

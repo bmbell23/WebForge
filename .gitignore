@@ -17,3 +17,7 @@ releases/*
 
 # webforge_sync container store (root-owned, runtime data)
 /data/
+
+# python bytecode from the sync service
+__pycache__/
+*.pyc

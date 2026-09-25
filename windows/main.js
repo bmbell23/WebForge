@@ -34,6 +34,8 @@ const popuprule = require('./popuprule'); // #125 — ditto
 const useragent = require('./useragent'); // #134 — ditto
 const credmatch = require('./credmatch'); // #136 — ditto
 const credsave = require('./credsave'); // #145 — ditto
+const modifier = require('./modifier'); // #150 — ditto (Ctrl on Windows, ⌘ on macOS)
+const syncdecide = require('./syncdecide'); // #151 — ditto (nothing never overwrites something)
 const autofillInject = require('./autofill-inject'); // #136
 
 // #134: banks and other sites with a "supported browsers" allowlist refuse to
@@ -1258,14 +1260,14 @@ function wireLeaderShortcut() {
   const { globalShortcut } = require('electron');
   const register = () => {
     try {
-      if (!globalShortcut.isRegistered('Control+Space')) {
-        globalShortcut.register('Control+Space', armLeader);
+      if (!globalShortcut.isRegistered(modifier.LEADER_ACCELERATOR)) {
+        globalShortcut.register(modifier.LEADER_ACCELERATOR, armLeader);
       }
     } catch {}
   };
   const release = () => {
     try {
-      globalShortcut.unregister('Control+Space');
+      globalShortcut.unregister(modifier.LEADER_ACCELERATOR);
     } catch {}
   };
   win.on('focus', register);
@@ -1290,7 +1292,8 @@ function wireChords(wc) {
   wc.on('before-input-event', (event, input) => {
     if (input.type !== 'keyDown') return;
     const rawKey = input.key || '';
-    if (input.control && !input.alt && !input.meta && (rawKey === ' ' || rawKey.toLowerCase() === 'space')) {
+    // #150: the leader stays on Control on every platform — see modifier.js.
+    if (modifier.isLeaderChord(input) && (rawKey === ' ' || rawKey.toLowerCase() === 'space')) {
       event.preventDefault();
       armLeader(); // globalShortcut usually beats us here; harmless either way
       return;
@@ -1301,28 +1304,28 @@ function wireChords(wc) {
       leaderUntil = 0;
       if (rawKey.toLowerCase() === 'escape' || locked) return;
       // #25: bare digits switch Persona (reserved — see hotkeys.set).
-      if (/^[1-9]$/.test(rawKey) && !input.control && !input.alt) {
+      if (/^[1-9]$/.test(rawKey) && modifier.isBare(input)) {
         const list = orderedPersonas();
         const target = list[Number(rawKey) - 1];
         if (target) switchPersona(target.id);
         return;
       }
-      handleHotkeyPress((input.control ? 'Ctrl+' : '') + (input.alt ? 'Alt+' : '') + rawKey);
+      handleHotkeyPress(modifier.keyId(input, rawKey)); // #150: same id on every platform
       return;
     }
     // #32: F11 at the input level — the menu accelerator only fired reliably
     // on a maximized window.
-    if (rawKey.toLowerCase() === 'f11' && !input.control && !input.alt && !input.meta) {
+    if (rawKey.toLowerCase() === 'f11' && modifier.isBare(input)) {
       event.preventDefault();
       if (!locked) setFullscreenMode(!fullscreen);
       return;
     }
-    if (rawKey.toLowerCase() === 'escape' && !input.control && !input.alt && !input.meta) {
+    if (rawKey.toLowerCase() === 'escape' && modifier.isBare(input)) {
       if (!locked) handleEscape(); // #42 — don't preventDefault: pages use Esc too
       return;
     }
     // #38: Alt+Left/Right — the browser-standard back/forward I never wired.
-    if (input.alt && !input.control && !input.meta) {
+    if (modifier.isAltOnly(input)) {
       const k = rawKey.toLowerCase();
       // #68: Alt+F4 was being eaten before it reached Windows' close path.
       // Own it here so it always works; before-quit flushes the session.
@@ -1340,7 +1343,7 @@ function wireChords(wc) {
       }
       return;
     }
-    if (!input.control || input.alt || input.meta) return;
+    if (!modifier.isChord(input)) return; // #150: Ctrl on Windows, ⌘ on macOS
     const key = rawKey.toLowerCase();
     // #101: Ctrl+Shift+Left/Right is the standard word-wise text-selection
     // chord and used to be swallowed here for back/forward (#38). Stealing it
@@ -1571,11 +1574,20 @@ async function syncBookmarks() {
     const res = await fetch(SYNC_URL, { signal: AbortSignal.timeout(5000) });
     const remote = await res.json();
     const remoteAt = remote.updatedAt || 0;
-    if (remoteAt > local.updatedAt) {
+    // #151: an empty store never overwrites a populated one, in either
+    // direction. Bookmarks had NO emptiness guard on either side — 467
+    // bookmarks were one unlucky timestamp away from the Persona incident.
+    const { action } = syncdecide.decide({
+      localAt: local.updatedAt,
+      remoteAt,
+      localWeight: syncdecide.bookmarkWeight(bookmarks.all()),
+      remoteWeight: syncdecide.bookmarkWeight(remote.data),
+    });
+    if (action === 'pull') {
       bookmarks.replaceAll(remote.data, remoteAt);
       pushBookmarks();
       pushState();
-    } else if (local.updatedAt > remoteAt) {
+    } else if (action === 'push') {
       await fetch(SYNC_URL, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -1601,11 +1613,21 @@ async function syncPersonas() {
     const res = await fetch(PERSONA_SYNC_URL, { signal: AbortSignal.timeout(5000) });
     const remote = await res.json();
     const remoteAt = remote.updatedAt || 0;
-    if (remoteAt > localAt && Array.isArray(remote.data) && remote.data.length) {
+    // #151: this is where the 2026-09-23 wipe happened. The old code guarded
+    // the PULL against empty remote data but left the PUSH wide open, so a
+    // first run — whose defaults were stamped Date.now() — overwrote every
+    // Persona rule in the fleet. decide() applies the guard both ways.
+    const { action } = syncdecide.decide({
+      localAt,
+      remoteAt,
+      localWeight: syncdecide.personaWeight(personas.all()),
+      remoteWeight: syncdecide.personaWeight(remote.data),
+    });
+    if (action === 'pull') {
       personas.replaceAll(remote.data, remoteAt);
       rehomeAllTabs(); // #120
       pushState();
-    } else if (localAt > remoteAt) {
+    } else if (action === 'push') {
       await fetch(PERSONA_SYNC_URL, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },

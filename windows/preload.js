@@ -1,6 +1,40 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
+// #150-modifier-copy-start
+// Which physical modifier means "WebForge": Ctrl on Windows/Linux, ⌘ on macOS —
+// where Control is a DIFFERENT key that must not fire our chords, and on Windows
+// the Meta (Windows) key must not either. A copy of modifier.js's isChordExact,
+// because a sandboxed preload cannot require a local file (proved in #150; the
+// same reason installGuardedKeys is duplicated). modifier.test.js pins all three
+// copies to the module and to each other — edit them together or it goes red.
+const appChord = (e) => {
+  const mac = process.platform === 'darwin';
+  const primary = mac ? e.metaKey : e.ctrlKey;
+  const foreign = mac ? e.ctrlKey : e.metaKey;
+  return !!primary && !foreign && !e.altKey && !e.shiftKey;
+};
+// #150-modifier-copy-end
+
+// #150: the chrome UI (ui/index.html) is a plain page — it can neither require
+// modifier.js nor see `process`, and it needs to build hotkey ids when you bind
+// a key. So the id format lives here and crosses the bridge, keeping ONE copy
+// rather than a second one in the HTML that would drift on macOS and silently
+// stop matching main's. modifier.test.js pins these to the module too.
+//
+// "Ctrl+" is a storage format, not a physical key: these ids go to the vault and
+// reconcile against Android through sync, so a Mac must store "Ctrl+K" for ⌘K.
+const appKeyId = (e, key) => {
+  const primary = process.platform === 'darwin' ? e.metaKey : e.ctrlKey;
+  return (primary ? 'Ctrl+' : '') + (e.altKey ? 'Alt+' : '') + (key || '');
+};
+// The OTHER platform's modifier — the Windows key on Windows, Control on macOS.
+const appForeign = (e) => !!(process.platform === 'darwin' ? e.ctrlKey : e.metaKey);
+
 contextBridge.exposeInMainWorld('webforge', {
+  // A KeyboardEvent isn't serialisable across the bridge, so callers pass a
+  // plain {ctrlKey, metaKey, altKey} object.
+  keyId: (ev, key) => appKeyId(ev || {}, key),
+  isForeignModifier: (ev) => appForeign(ev || {}),
   navigate: (input) => ipcRenderer.send('navigate', input),
   goBack: () => ipcRenderer.send('go-back'),
   goForward: () => ipcRenderer.send('go-forward'),
@@ -105,7 +139,7 @@ function installGuardedKeys(handlers) {
   window.addEventListener(
     'keydown',
     (e) => {
-      if (!e.ctrlKey || e.shiftKey || e.altKey || e.metaKey) return;
+      if (!appChord(e)) return; // #150
       const handler = handlers[(e.key || '').toLowerCase()];
       if (!handler) return;
       // composedPath()[0] sees INTO shadow roots, where e.target is retargeted
