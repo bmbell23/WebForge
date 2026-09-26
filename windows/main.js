@@ -258,6 +258,46 @@ const activeWc = () => tabs.get(activeId)?.webContents;
 // on real Windows — I cannot test the on-screen effect from this host.
 const REPAINT_NUDGE = true;
 
+// #148 round 5: chrome was never in any of this.
+//
+// Every round so far has forced a repaint on the active TAB and nothing else.
+// But the report is "the screen is just white" and "full black" — the whole
+// window. If only the page view were blank, the sidebar and nav bar would still
+// be there, because chrome is a separate WebContentsView drawing its own
+// pixels. A window-wide blank means chrome is not painting either, and no fix
+// so far has even touched it.
+//
+// No visibility toggle here: chrome is always meant to be visible, and hiding
+// it is exactly the class of mistake that broke typing in 0.1.160. Invalidate
+// and a geometry nudge only.
+function forceRepaintChrome() {
+  if (!win || win.isDestroyed() || !chrome) return;
+  const wc = chrome.webContents;
+  if (!wc || wc.isDestroyed()) return;
+  try {
+    wc.invalidate();
+  } catch (err) {
+    errorlog.record('forceRepaintChrome.invalidate', err);
+  }
+  if (!REPAINT_NUDGE) return;
+  try {
+    const current = chrome.getBounds();
+    const nudged = repaint.nudgeBounds(current);
+    if (!repaint.isDistinct(current, nudged)) return;
+    chrome.setBounds(nudged);
+    setImmediate(() => {
+      if (!win || win.isDestroyed() || !chrome) return;
+      try {
+        chrome.setBounds(current);
+      } catch (err) {
+        errorlog.record('forceRepaintChrome.restore', err);
+      }
+    });
+  } catch (err) {
+    errorlog.record('forceRepaintChrome.nudge', err);
+  }
+}
+
 function forceRepaint(id, ctx, attempt = 0) {
   const view = tabs.get(id);
   if (!view || !win || win.isDestroyed()) return;
@@ -394,10 +434,21 @@ function diagnoseRepaint(id, attempt) {
         } catch (err) {
           painted = `bitmap-error:${err.message}`;
         }
+        // #148 round 5: report CHROME too. Until now the log would have said
+        // the page view was fine while the sidebar beside it was blank, and
+        // nothing would have pointed at the difference.
+        let chromeState = 'chrome=?';
+        try {
+          if (chrome && !chrome.webContents.isDestroyed()) {
+            chromeState = `chromeBounds=${JSON.stringify(chrome.getBounds())} chromeLoading=${chrome.webContents.isLoading()}`;
+          }
+        } catch {
+          chromeState = 'chrome=unreadable';
+        }
         errorlog.record(
           'repaint-state',
           new Error(
-            `tab=${id} attempt=${attempt} ${winState} bounds=${bounds} page=${pageState} frame=${painted}`
+            `tab=${id} attempt=${attempt} ${winState} bounds=${bounds} page=${pageState} frame=${painted} ${chromeState}`
           )
         );
       });
@@ -1720,6 +1771,9 @@ function createWindow() {
   // occlusion, which IS a compositor event. So the window returning must also
   // force a frame, not merely re-assert geometry.
   const onWindowReturn = () => {
+    // #148 round 5: chrome first, and unconditionally. It draws the sidebar and
+    // nav bar, and a window-wide blank means it is as stalled as the page is.
+    forceRepaintChrome();
     if (activeId === null || !tabs.has(activeId)) return layout();
     const moved = boundsChangedFor(activeId);
     forceRepaint(activeId, { windowReturned: true, boundsChanged: moved });
@@ -2728,6 +2782,11 @@ function whenWindowReady(fn) {
     if (ran || !win || win.isDestroyed()) return;
     ran = true;
     layout(); // geometry is real by now; re-sync every view before adding more
+    // #148 round 5: this is THE external-link path, and the window has just
+    // come up. Kick chrome before creating the tab — if chrome is the blank
+    // surface, forcing the new page view alone can never make the window look
+    // right, which is consistent with every round of this ticket so far.
+    forceRepaintChrome();
     fn();
   };
   if (win.isVisible() && !win.isMinimized()) return setImmediate(go);
