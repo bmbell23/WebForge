@@ -1,0 +1,58 @@
+# #152: the ONE set of URL-canonicalisation cases both platforms must agree on.
+#
+# Windows (windows/taburl.js) and Android (TabUrl.kt) both de-duplicate tabs by
+# comparing canonical keys. They reconcile against each other through the sync
+# service, so a disagreement does not stay theoretical — it produces duplicate
+# tabs on one device and not the other, which is exactly #152.
+#
+# Read by BOTH windows/taburl.test.js and TabUrlTest.kt. Add a case here and it
+# must pass on both or one of them goes red.
+#
+# Format:  <input url> TAB <expected canonical key>      ('' means empty string)
+# Plain text rather than JSON on purpose: the JVM unit-test classpath has only a
+# stubbed android.jar, so org.json throws there, and a dependency-free format
+# keeps the fixture readable from both sides.
+
+# --- the basics -------------------------------------------------------------
+https://example.com	example.com
+https://example.com/	example.com
+http://example.com	example.com
+https://www.example.com	example.com
+https://WWW.Example.COM	example.com
+https://example.com/docs	example.com/docs
+https://example.com/docs/	example.com/docs
+
+# --- scheme and default ports are not significant --------------------------
+http://example.com:80/x	example.com/x
+https://example.com:443/x	example.com/x
+https://example.com:8443/x	example.com:8443/x
+http://100.69.184.113:8012/windows	100.69.184.113:8012/windows
+
+# --- the query string IS significant: it is how apps identify pages ---------
+https://example.com/s?q=cats	example.com/s?q=cats
+https://example.com/s?q=dogs	example.com/s?q=dogs
+https://example.com/s?	example.com/s
+
+# --- fragments: a route counts, an anchor does not -------------------------
+https://example.com/docs#install	example.com/docs
+https://example.com/docs#intro	example.com/docs
+https://example.com/app#/dashboard	example.com/app#/dashboard
+https://example.com/app#/settings	example.com/app#/settings
+
+# --- the Charles Schwab case that opened #152 ------------------------------
+# An auth bounce changes the query string every time. These are DIFFERENT keys,
+# which is correct — canonicalisation alone does not fix Schwab. The adoption
+# guard must ALSO not treat every new URL as a new tab; see #152's cap and the
+# closedAt tombstone fix.
+https://client.schwab.com/app/trade	client.schwab.com/app/trade
+https://client.schwab.com/app/trade/	client.schwab.com/app/trade
+https://client.schwab.com/app/trade#summary	client.schwab.com/app/trade
+
+# --- non-http is returned untouched, so internal pages never merge ---------
+about:blank	about:blank
+file:///C:/x/ui/newtab.html	file:///C:/x/ui/newtab.html
+view-source:https://example.com/	view-source:https://example.com/
+
+# --- junk compares literally rather than being guessed at -----------------
+not a url	not a url
+	''

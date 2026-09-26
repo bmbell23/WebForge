@@ -155,4 +155,29 @@ test('junk input returns null instead of throwing', () => {
   }
 });
 
+// #152: the shared fixture set. Android's TabUrl.kt reads the SAME file, so a
+// case added here must pass on both platforms or one of the two suites fails.
+// This exists because Android had no canonicalisation at all and duplicated tabs
+// without limit — the two implementations agreeing is the whole point, and
+// "they look similar" is not a test.
+console.log('the cross-platform fixture set (shared/taburl-fixtures.tsv)');
+
+test('windows/taburl.js matches every shared fixture', () => {
+  const fs = require('fs');
+  const path = require('path');
+  const file = path.join(__dirname, '..', 'shared', 'taburl-fixtures.tsv');
+  const lines = fs.readFileSync(file, 'utf8').split('\n');
+  let checked = 0;
+  for (const line of lines) {
+    if (!line.trim() || line.startsWith('#')) continue;
+    const [input, expectedRaw] = line.split('\t');
+    const expected = expectedRaw === "''" ? '' : expectedRaw;
+    assert.strictEqual(canonical(input), expected, `fixture: ${JSON.stringify(input)}`);
+    checked++;
+  }
+  // Guard against the fixture file going missing or being emptied, which would
+  // turn this into a test that always passes.
+  assert.ok(checked >= 20, `only ${checked} fixtures read — is the file intact?`);
+});
+
 console.log(`\n${run} tests passed`);

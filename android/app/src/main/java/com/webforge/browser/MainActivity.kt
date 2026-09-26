@@ -56,6 +56,13 @@ class MainActivity : Activity() {
         // self-contained — the engine arrives as ?e= so it needs no JS bridge.
         private const val NEW_TAB_URL = "file:///android_asset/newtab.html"
 
+        // #152: a ceiling on tabs, so a de-duplication bug can never again fill
+        // the device. The phone reached 16 copies of one site because adoption
+        // compared URLs by exact string and every variant looked new; the
+        // canonical comparison fixes that, but a backstop costs nothing and the
+        // failure it guards against was invisible until it was extreme.
+        private const val MAX_TABS = 60
+
         /** True for our new-tab page, whatever query string it carries. */
         fun isNewTabUrl(u: String?) = u != null && u.startsWith(NEW_TAB_URL)
     }
@@ -303,7 +310,11 @@ class MainActivity : Activity() {
                 // Quick-launch tabs are sticky like Windows hotkey tabs: they
                 // only ever show their own site, links open elsewhere (#54).
                 if (tab.quick) {
-                    newTab(req.url.toString())
+                    // #152: focus an existing tab for this page rather than
+                    // opening another. Android had no openOrFocus at all, so a
+                    // sticky tab spawned a fresh duplicate every time you
+                    // clicked the same link.
+                    openOrFocus(req.url.toString())
                     return true
                 }
                 return false
@@ -522,13 +533,34 @@ class MainActivity : Activity() {
                 val (title, at, dev) = info
                 if (dev == me) continue                  // #95: our own echo
                 if (TabSync.closedAt(url) > at) continue // closed more recently anywhere
-                if (tabs.any { it.url == url }) continue // already have it
+                // #152: CANONICAL comparison. This line used to be
+                // `tabs.any { it.url == url }` — exact string equality — so the
+                // same page arriving with a trailing slash, a fragment or a
+                // rotated query param was adopted as a brand-new tab on every
+                // sync cycle. That produced 16 copies of Charles Schwab.
+                if (TabUrl.indexOf(tabs.map { it.url }, url) >= 0) continue
+                // #152: and a ceiling, because a bug that creates tabs faster
+                // than they expire should never again be able to consume the
+                // device. Oldest-first, never touching pinned or quick tabs.
+                if (tabs.size >= MAX_TABS) {
+                    val victim = tabs.indices
+                        .filter { it != activeIndex && !tabs[it].pinned && !tabs[it].quick }
+                        .minByOrNull { tabs[it].lastActiveAt }
+                    if (victim == null) continue // nothing evictable — stop adopting
+                    closeTab(victim, remote = true)
+                }
                 val t = newTab(url, background = true, lazy = true)
                 // #96: match locally first — don't trust the other device's
                 // persona id, which may not have converged yet.
                 val local = Personas.forUrl(this, url)
                 t.persona = if (local != Personas.UNASSIGNED) local else target
                 t.openedAt = at
+                // #152: inherit the remote age. Without this, lastActiveAt kept
+                // its construction default of "now", so an adopted tab was
+                // permanently zero seconds old and sweepStaleTabs could never
+                // reach it — the duplication defeated the expiry. openedAt was
+                // already carried; the field expiry actually reads was not.
+                t.lastActiveAt = at
                 t.pendingTitle = title
             }
         }
@@ -583,6 +615,21 @@ class MainActivity : Activity() {
         if (doomed.isEmpty() || doomed.size >= tabs.size) return
         // Remove from the end so earlier indices stay valid.
         for (i in doomed.sortedDescending()) closeTab(i)
+    }
+
+    /**
+     * #152: Android's openOrFocus — the equivalent of the Windows path (#31).
+     * If a tab already shows this page, go to it; otherwise open one. Compared
+     * canonically, so a trailing slash or a fragment does not count as a
+     * different page.
+     */
+    private fun openOrFocus(url: String, background: Boolean = false): Tab? {
+        val existing = TabUrl.indexOf(tabs.map { it.url }, url)
+        if (existing >= 0) {
+            if (!background) activateTab(existing)
+            return tabs[existing]
+        }
+        return newTab(url, background = background)
     }
 
     private fun navigate(url: String) {

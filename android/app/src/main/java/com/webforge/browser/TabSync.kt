@@ -41,8 +41,18 @@ object TabSync {
      * close entirely — a URL is a URL.
      */
     fun closedAt(url: String): Long {
-        var at = tombstones[url] ?: 0L
-        for (m in mergedClosed.values) m[url]?.let { if (it > at) at = it }
+        // #152: compare CANONICALLY, not by exact string. Closing a tab on
+        // Windows records a tombstone for the URL Windows held; the phone's copy
+        // is often a variant (trailing slash, fragment, http vs https), so an
+        // exact lookup never matched and the close was never honoured. That is
+        // why the phantom Schwab tabs outlived the Windows tabs they came from.
+        val key = TabUrl.canonical(url)
+        if (key.isEmpty()) return 0L
+        var at = 0L
+        for ((u, t) in tombstones) if (TabUrl.canonical(u) == key && t > at) at = t
+        for (m in mergedClosed.values) {
+            for ((u, t) in m) if (TabUrl.canonical(u) == key && t > at) at = t
+        }
         return at
     }
 
