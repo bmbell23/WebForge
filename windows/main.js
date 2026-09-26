@@ -36,6 +36,7 @@ const credmatch = require('./credmatch'); // #136 — ditto
 const credsave = require('./credsave'); // #145 — ditto
 const modifier = require('./modifier'); // #150 — ditto (Ctrl on Windows, ⌘ on macOS)
 const syncdecide = require('./syncdecide'); // #151 — ditto (nothing never overwrites something)
+const repaint = require('./repaint'); // #148 — ditto (when to force a frame)
 const autofillInject = require('./autofill-inject'); // #136
 
 // #134: banks and other sites with a "supported browsers" allowlist refuse to
@@ -144,6 +145,11 @@ const lazyTabs = new Map(); // tabId -> { url, title }
 // re-homes the tab but must not drag the active Persona along with it.
 const firstLoad = new Set();
 const lastActiveAt = new Map(); // #79: tabId -> ms, for inactivity expiry
+// #148: which views have actually produced a frame. A view created while the
+// window was hidden (external link into a minimised WebForge) never paints, and
+// showing it is not enough to make it — hence forceRepaint below.
+const everPainted = new Set(); // tabId
+const lastBounds = new Map(); // #148: tabId -> the bounds layout() last applied
 // #101: Ctrl+Shift+T — closed tabs, most recent last. Capped so a long session
 // can't grow it without bound; pinned tabs never reach here (closeTab refuses).
 const closedTabs = [];
@@ -243,6 +249,162 @@ function resolveInput(text) {
 
 const activeWc = () => tabs.get(activeId)?.webContents;
 
+// #148: make a view produce a frame when the compositor otherwise won't.
+//
+// `invalidate()` is the intended lever. The nudge is the fallback: a genuine
+// 1px geometry change, reverted next tick, which Chromium cannot elide the way
+// it elides a setBounds to identical bounds. AUTOFILL-style flag so the heavier
+// option can be turned on without another round trip if invalidate isn't enough
+// on real Windows — I cannot test the on-screen effect from this host.
+const REPAINT_NUDGE = true;
+
+function forceRepaint(id, ctx, attempt = 0) {
+  const view = tabs.get(id);
+  if (!view || !win || win.isDestroyed()) return;
+  const wc = view.webContents;
+  if (!wc || wc.isDestroyed()) return;
+
+  const full = { everPainted: everPainted.has(id), ...ctx };
+  const levers = repaint.leversFor(full, attempt);
+  if (!levers.length) return;
+  const { reason } = repaint.shouldForce(full);
+
+  for (const lever of levers) {
+    try {
+      if (lever === 'visibility') {
+        // THE ONE THAT MATTERS. A renderer started under a hidden window is
+        // already flagged visible in the bookkeeping, so nothing re-pushes the
+        // state when the window appears and it never produces a frame. Only a
+        // real transition re-pushes it — hence false, then true on a later tick
+        // so the two are not coalesced into nothing.
+        if (id === activeId) {
+          view.setVisible(false);
+          setImmediate(() => {
+            if (!win || win.isDestroyed() || !tabs.has(id) || id !== activeId) return;
+            try {
+              view.setVisible(true);
+              // Focus does NOT survive the view being hidden, and a focusless
+              // page swallows every key (#30). leversFor already keeps this
+              // lever away from activateTab, where focus() runs right after;
+              // this is the second line of defence for the paths that remain.
+              view.webContents.focus();
+            } catch (err) {
+              errorlog.record('forceRepaint.visible', err);
+            }
+          });
+        }
+      } else if (lever === 'invalidate') {
+        wc.invalidate();
+      } else if (lever === 'nudge' && REPAINT_NUDGE) {
+        const current = view.getBounds();
+        const nudged = repaint.nudgeBounds(current);
+        if (repaint.isDistinct(current, nudged)) {
+          view.setBounds(nudged);
+          setImmediate(() => {
+            if (!win || win.isDestroyed() || !tabs.has(id)) return;
+            try {
+              view.setBounds(current);
+            } catch (err) {
+              errorlog.record('forceRepaint.restore', err);
+            }
+          });
+        }
+      } else if (lever === 'capture') {
+        // capturePage cannot be satisfied without a frame, so asking for one
+        // obliges the renderer to produce it. Heaviest lever; result discarded.
+        wc.capturePage().catch(() => {});
+      }
+    } catch (err) {
+      errorlog.record(`forceRepaint.${lever}`, err);
+    }
+  }
+
+  errorlog.record(
+    'repaint',
+    new Error(`forced tab=${id} attempt=${attempt} reason=${reason} levers=${levers.join(',')}`)
+  ); // #148 diagnostics
+  diagnoseRepaint(id, attempt);
+  // Having been shown under a genuinely visible window and given the full
+  // treatment, it counts as painted. Deliberately NOT set while the window is
+  // hidden or minimised — that is exactly the state where showing a view paints
+  // nothing, and claiming otherwise would suppress the repaint it still needs.
+  if (win.isVisible() && !win.isMinimized()) everPainted.add(id);
+}
+
+// #148 round 4: I have now been wrong about this mechanism twice, and on this
+// display-less host I could not reproduce the fault at all — a probe showed the
+// renderer's visibilityState recovering correctly on win.show(), which argues
+// against the theory this round's fix is built on.
+//
+// So rather than guess a fourth time, make the app report what is actually
+// true at the moment a repaint is forced. Runs only on a forced repaint, never
+// on the hot path, and every part is guarded: a diagnostic must never be able
+// to break the thing it is diagnosing.
+//
+// Read it in Settings → errors.
+function diagnoseRepaint(id, attempt) {
+  const view = tabs.get(id);
+  if (!view || !win || win.isDestroyed()) return;
+  const wc = view.webContents;
+  if (!wc || wc.isDestroyed()) return;
+
+  const bounds = (() => {
+    try {
+      return JSON.stringify(view.getBounds());
+    } catch {
+      return '?';
+    }
+  })();
+  const winState = `visible=${win.isVisible()} minimised=${win.isMinimized()} focused=${win.isFocused()}`;
+
+  // What the RENDERER believes, which is the question the fix turns on.
+  // NOT with userGesture — round 4 passed `true` here, which fakes a user
+  // gesture into the page on every diagnostic run. Diagnostics must observe,
+  // never act.
+  wc.executeJavaScript('document.visibilityState + "|" + document.hasFocus()')
+    .then((pageState) => {
+      // And whether it can actually produce a frame: a capture that comes back
+      // uniform is a renderer drawing nothing, which distinguishes "no frame"
+      // from "frame arrived but something covers it".
+      return wc.capturePage().then((img) => {
+        let painted = 'capture-failed';
+        try {
+          const size = img.getSize();
+          const bmp = img.toBitmap();
+          if (!bmp || !bmp.length) painted = 'empty';
+          else {
+            // A FULL scan, capped once enough variety is found. A sparse stride
+            // was tried first and reported a page of text as uniform — it
+            // stepped straight over the glyphs. Verified against three fixtures:
+            // blank -> 1, a solid colour block -> 1, a text page -> >64.
+            const seen = new Set();
+            for (let i = 0; i + 4 <= bmp.length; i += 4) {
+              seen.add(bmp.readUInt32LE(i));
+              if (seen.size > 64) break;
+            }
+            // One colour does NOT by itself mean "nothing painted" — a solid
+            // page is legitimately uniform — so report the colour too. Uniform
+            // AND equal to our background is the blank case.
+            const first = bmp.subarray(0, 4).join(',');
+            painted =
+              seen.size > 64
+                ? `${size.width}x${size.height} colours=many`
+                : `${size.width}x${size.height} colours=${seen.size} rgba=${first}`;
+          }
+        } catch (err) {
+          painted = `bitmap-error:${err.message}`;
+        }
+        errorlog.record(
+          'repaint-state',
+          new Error(
+            `tab=${id} attempt=${attempt} ${winState} bounds=${bounds} page=${pageState} frame=${painted}`
+          )
+        );
+      });
+    })
+    .catch((err) => errorlog.record('repaint-state', new Error(`tab=${id} diagnose failed: ${err.message}`)));
+}
+
 function layout() {
   const { width, height } = win.getContentBounds();
   lockView?.setBounds({ x: 0, y: 0, width, height });
@@ -267,13 +429,28 @@ function layout() {
     // #119: the nav bar lives at the BOTTOM, so both it and the find bar come
     // off the bottom of the page view and the page starts at y = 0.
     const reserved = TOPBAR_H + (findOpen ? FIND_H : 0);
-    view.setBounds({
+    const next = {
       x: SIDEBAR_W,
       y: 0,
       width: width - SIDEBAR_W - (bmPanelOpen || pwPanelOpen ? BM_PANEL_W : 0),
       height: height - reserved,
-    });
+    };
+    // #148: remember what we applied. A setBounds to IDENTICAL geometry is a
+    // no-op in Chromium — it never reaches the compositor — so knowing whether
+    // the geometry actually moved is what tells forceRepaint whether a frame is
+    // already coming or whether it has to provoke one itself.
+    lastBounds.set(activeId, next);
+    view.setBounds(next);
   }
+}
+
+/** #148: did layout() actually move this view since last time? */
+function boundsChangedFor(id) {
+  const view = tabs.get(id);
+  if (!view) return false;
+  const before = lastBounds.get(id);
+  layout();
+  return repaint.isDistinct(before, lastBounds.get(id));
 }
 
 // --- #14: true fullscreen with hover-reveal edges ---
@@ -806,6 +983,15 @@ function createTab(url = null, background = false, personaId = null, opts = {}) 
         : path.join(__dirname, 'content-preload.js'),
     },
   });
+  // #148: an unpainted view defaults to black, which is what made the
+  // external-link bug look like a crash rather than a missing frame. This does
+  // not fix the missing frame — forceRepaint does — but a blank white page is a
+  // far less alarming failure than a black window if one ever slips through.
+  try {
+    view.setBackgroundColor('#ffffff');
+  } catch (err) {
+    errorlog.record('setBackgroundColor', err);
+  }
   tabs.set(id, view);
   tabOrder.push(id);
 
@@ -911,6 +1097,23 @@ function createTab(url = null, background = false, personaId = null, opts = {}) 
   ]) {
     wc.on(ev, pushState);
   }
+  // #148 round 5: the external-link force fires from activateTab, before
+  // loadURL has produced anything, so it kicks an empty renderer. Kick it once
+  // more when there IS something to draw.
+  //
+  // Round 4 ran this on EVERY did-stop-loading, which meant a bounds nudge, a
+  // capturePage, an executeJavaScript and a full-bitmap scan on every single
+  // page load. On a site that navigates constantly (Gerrit) that is relentless,
+  // and 0.1.160 broke typing app-wide. Whatever the precise mechanism — I could
+  // not reproduce it on this display-less host — touching the page on every
+  // navigation to chase a bug that only happens on FIRST paint was never
+  // justified. So: only a view that has never painted, and only once.
+  wc.on('did-stop-loading', () => {
+    if (id !== activeId || !win || win.isDestroyed()) return;
+    if (!win.isVisible() || win.isMinimized()) return;
+    if (everPainted.has(id)) return; // the ordinary case: leave the page alone
+    forceRepaint(id, { becameVisible: true, boundsChanged: false }, 1);
+  });
   wc.on('page-favicon-updated', (_e2, icons) => { // #45
     if (icons?.length) {
       faviconByTab.set(id, icons[0]);
@@ -1023,7 +1226,11 @@ function activateTab(id, opts = {}) {
   const chromeOnTop = fsRevealed || bmDialogOpen || settingsOpen || managerOpen || loginPromptOpen; // #145
   win.contentView.addChildView(view);
   if (chromeOnTop) win.contentView.addChildView(chrome);
-  layout();
+  // #148: boundsChangedFor runs layout() and reports whether the geometry moved.
+  // If it didn't, setBounds was a no-op and this view may show the last frame it
+  // had — or none at all — until something provokes the compositor.
+  const moved = boundsChangedFor(id);
+  forceRepaint(id, { becameVisible: true, boundsChanged: moved });
   // #30: keyboard focus MUST follow activation — if it stays on a hidden view
   // (or nothing), key events vanish and hotkey swapping "stops working".
   view.webContents.focus();
@@ -1085,6 +1292,8 @@ function closeTab(id, opts = {}) {
   personaByTab.delete(id);
   lazyTabs.delete(id);
   lastActiveAt.delete(id);
+  everPainted.delete(id); // #148
+  lastBounds.delete(id); // #148
   openedAt.delete(id);
   for (const [page, tid] of internalTabs) if (tid === id) internalTabs.delete(page);
   tabOrder = tabOrder.filter((t) => t !== id);
@@ -1500,13 +1709,24 @@ function createWindow() {
   win.on('resize', layout);
   win.on('maximize', layout);
   win.on('unmaximize', layout);
-  // #148: restore/show/focus were missing from this set. A view sized while the
-  // window was still minimised gets stale bounds from getContentBounds() and
-  // never paints — the "black page until I alt-tab" report. Alt-tabbing worked
-  // only because it happened to generate a resize.
-  win.on('restore', layout);
-  win.on('show', layout);
-  win.on('focus', layout);
+  // #148 round 1: restore/show/focus were missing from this set. A view sized
+  // while the window was still minimised gets stale bounds from
+  // getContentBounds(). Keeping these — they are necessary.
+  //
+  // #148 round 2: but NOT sufficient, which is why the bug survived. layout()'s
+  // only lever is setBounds, and setBounds to unchanged geometry is a no-op in
+  // Chromium — it never reaches the compositor. Coming back from minimise at the
+  // same size therefore provoked nothing at all. Alt-tab "fixed" it by changing
+  // occlusion, which IS a compositor event. So the window returning must also
+  // force a frame, not merely re-assert geometry.
+  const onWindowReturn = () => {
+    if (activeId === null || !tabs.has(activeId)) return layout();
+    const moved = boundsChangedFor(activeId);
+    forceRepaint(activeId, { windowReturned: true, boundsChanged: moved });
+  };
+  win.on('restore', onWindowReturn);
+  win.on('show', onWindowReturn);
+  win.on('focus', onWindowReturn);
 
   showLock(); // #15: nothing exists until the vault opens
 }
