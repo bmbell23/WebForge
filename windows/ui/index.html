@@ -102,6 +102,15 @@
     gap: 2px;
   }
   /* #36: no visible scrollbars anywhere in the chrome (wheel still scrolls) */
+  /* #131: a visible focus ring. Without one, keyboard navigation "works" while
+     giving the user no idea where they are, which is indistinguishable from
+     broken. :focus-visible so it only appears for keyboard focus, never on a
+     click. Inset so it cannot be clipped by the row's own overflow. */
+  .tab:focus-visible, .bm:focus-visible {
+    outline: none;
+    box-shadow: inset 0 0 0 2px #4a9eff;
+    border-radius: 4px;
+  }
   #tablist, #bmlist, #pwlist, #settings {
     scrollbar-width: none;
   }
@@ -901,6 +910,30 @@
   url.addEventListener('blur', () => { urlEditing = false; });
   webforge.onFocusUrl(() => { url.focus(); url.select(); });
 
+  // #131: Ctrl+L / Ctrl+B / Esc tell us which surface should take focus.
+  // 'page' means give it up — main has already focused the page view, and
+  // holding a focus ring here would claim keys we no longer receive.
+  webforge.onFocusSurface((surface) => {
+    if (surface === 'page') {
+      if (document.activeElement && document.activeElement !== document.body) {
+        document.activeElement.blur();
+      }
+      return;
+    }
+    if (surface === 'url') { url.focus(); url.select(); return; }
+    // Prefer the ACTIVE tab so focus lands where the user already is, rather than
+    // at the top of a long list they then have to Tab through.
+    const first = (sel) => document.querySelector(sel);
+    const target =
+      surface === 'tabs'
+        ? first('#tablist .tab.active') || first('#tablist .tab')
+        : first('#bmlist .bm');
+    // Nothing focusable (an empty bookmarks panel) must not silently swallow the
+    // key — fall back to the address bar, which always exists.
+    if (target) target.focus();
+    else { url.focus(); url.select(); }
+  });
+
   function makeTab(t) {
     const el = document.createElement('div');
     el.className = 'tab' + (t.active ? ' active' : '') + (t.pinned ? ' pinned' : '');
@@ -945,6 +978,22 @@
     el.appendChild(close);
 
     el.onclick = () => webforge.activateTab(t.id);
+    // #131: reachable by keyboard. There was no tabindex anywhere in this file,
+    // so the sidebar was mouse-only — Tab could not land on a tab row at all.
+    el.tabIndex = 0;
+    el.setAttribute('role', 'option');
+    el.onkeydown = (e) => {
+      // Enter/Space activate, matching every other list widget. Delete closes,
+      // because reaching a tab by keyboard and then needing the mouse to shut it
+      // would only half-solve the problem.
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        webforge.activateTab(t.id);
+      } else if (e.key === 'Delete') {
+        e.preventDefault();
+        webforge.closeTab(t.id);
+      }
+    };
     // #48: middle-click closes. mousedown is the reliable path (auxclick can
     // be swallowed, and preventDefault here also kills middle-click autoscroll).
     el.onmousedown = (e) => {
@@ -1904,6 +1953,17 @@
       renderBookmarks(lastBookmarks);
     };
     el.onauxclick = (e) => { if (e.button === 1) webforge.openBookmark(b.url, true); };
+    // #131: keyboard-reachable, same as the tab rows.
+    el.tabIndex = 0;
+    el.setAttribute('role', 'option');
+    el.onkeydown = (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        webforge.openBookmark(b.url, false);
+        bmExpanded.clear();
+        renderBookmarks(lastBookmarks);
+      }
+    };
     return el;
   }
 
