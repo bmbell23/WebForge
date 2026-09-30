@@ -995,6 +995,8 @@ function contextMenuFor(wc, params) {
     'nav.reload': () => wc.reload(),
     'page.viewSource': () => viewSource(),
     'page.inspect': () => wc.inspectElement(params.x, params.y),
+    'page.ytdlp': () => openYtdlpPicker(wc.getURL(), wc.getTitle()), // #156
+    'link.ytdlp': () => openYtdlpPicker(params.linkURL, String(params.linkText || '').trim()), // #156
   };
 
   const items = ctxmenu.build(params, {
@@ -1002,6 +1004,8 @@ function contextMenuFor(wc, params) {
     engineName: ENGINE_NAMES[searchEngine()] || 'the web',
     canGoBack: nav.canGoBack(),
     canGoForward: nav.canGoForward(),
+    pageYtdlp: ytdlp.downloadable(wc.getURL()), // #156
+    linkYtdlp: ytdlp.downloadable(params.linkURL || ''),
   });
 
   return items.map((item) =>
@@ -3118,9 +3122,13 @@ ipcMain.on('toggle-star', () => locked || starCurrent());
 // minutes), so nothing waits on it: you get a "sending" notice now and a
 // "saved"/"failed" one when it returns, and the tab stays yours meanwhile.
 ipcMain.on('ytdlp-open', () => {
-  if (locked) return;
   const wc = activeWc();
-  const url = wc?.getURL() || '';
+  openYtdlpPicker(wc?.getURL() || '', wc?.getTitle() || '');
+});
+
+// The ⤓ button sends the page; the context menu sends the page or a link.
+function openYtdlpPicker(url, title) {
+  if (locked) return;
   if (!ytdlp.downloadable(url)) {
     chrome?.webContents.send('ytdlp-status', { ok: false, message: 'Only web pages can be sent to yt-dlp.' });
     return;
@@ -3129,9 +3137,9 @@ ipcMain.on('ytdlp-open', () => {
   clearFsReveal();
   setChromeRaised(true);
   layout();
-  chrome?.webContents.send('ytdlp-picker', { url, title: wc.getTitle(), ...ytdlp.defaults(url) });
+  chrome?.webContents.send('ytdlp-picker', { url, title: title || url, ...ytdlp.defaults(url) });
   chrome.webContents.focus();
-});
+}
 
 ipcMain.on('ytdlp-answer', (_e, a) => {
   ytdlpOpen = false;

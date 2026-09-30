@@ -147,4 +147,25 @@ test('every non-separator item has an id and a label', () => {
   }
 });
 
+console.log('#156: Download content (yt-dlp)');
+
+test('a web page offers Download content, after Reload', () => {
+  const got = ids(build({}, { pageYtdlp: true }));
+  assert.deepStrictEqual(got, ['nav.back', 'nav.forward', 'nav.reload', 'page.ytdlp', 'page.viewSource', 'page.inspect']);
+  assert.strictEqual(find(build({}, { pageYtdlp: true }), 'page.ytdlp').label, 'Download content…');
+});
+
+test('the new-tab page and file: pages do not', () => {
+  assert.deepStrictEqual(ids(build({}, { pageYtdlp: false })), ALWAYS);
+});
+
+test('a web link offers Download content from link, after Download linked file', () => {
+  const got = ids(build({ linkURL: 'https://youtube.com/watch?v=a' }, { linkYtdlp: true }));
+  assert.deepStrictEqual(got.slice(0, 5), ['link.open', 'link.openBackground', 'link.copy', 'link.save', 'link.ytdlp']);
+});
+
+test('a mailto: link does not', () => {
+  assert.ok(!ids(build({ linkURL: 'mailto:a@b.c' }, { linkYtdlp: false })).includes('link.ytdlp'));
+});
+
 console.log(`\n${run} tests passed`);

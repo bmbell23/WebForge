@@ -42,6 +42,8 @@ function build(params = {}, ctx = {}) {
       { id: 'link.copy', label: 'Copy link' },
       { id: 'link.save', label: 'Download linked file' }
     );
+    // #156: the link's video/audio via the Dashboard's yt-dlp, not the raw file.
+    if (ctx.linkYtdlp) items.push({ id: 'link.ytdlp', label: 'Download content from link…' });
   }
 
   if (params.mediaType === 'image' && params.srcURL) {
@@ -88,6 +90,8 @@ function build(params = {}, ctx = {}) {
     { id: 'nav.forward', label: 'Forward', enabled: Boolean(ctx.canGoForward) },
     { id: 'nav.reload', label: 'Reload' },
     { type: 'separator' },
+    // #156: same picker as the ⤓ button. Only on real web pages.
+    ...(ctx.pageYtdlp ? [{ id: 'page.ytdlp', label: 'Download content…' }] : []),
     { id: 'page.viewSource', label: 'View page source' },
     { id: 'page.inspect', label: 'Inspect element' }
   );
