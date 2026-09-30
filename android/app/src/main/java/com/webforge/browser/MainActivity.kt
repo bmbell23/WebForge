@@ -41,6 +41,7 @@ class Tab(val id: Int, val webView: WebView) {
     var folder = ""      // #86: manual grouping, set in tab edit mode
     var persona = Personas.UNASSIGNED // #88
     var label: String? = null // #86: user-given name overriding the page title
+    var restoring = false // #155: reloading after an unload; drop the about:blank from history
     val title: String get() =
         label ?: pendingTitle
         ?: if (MainActivity.isNewTabUrl(pendingUrl ?: webView.url)) "New tab" else null
@@ -414,6 +415,8 @@ class MainActivity : Activity() {
             }
 
             override fun onPageFinished(view: WebView, url: String) {
+                // #155: an unloaded tab went via about:blank; don't let Back land there.
+                if (tab.restoring && url != "about:blank") { tab.restoring = false; view.clearHistory() }
                 if (tab === active) syncChrome()
             }
 
@@ -487,9 +490,43 @@ class MainActivity : Activity() {
         tabs.add(tab)
         // url == null means "hand this to a window transport" — WebView
         // requires such a view to have had NO content loaded yet (#60).
-        if (url != null) wv.loadUrl(url)
-        if (!background) activateTab(tabs.size - 1) else syncChrome()
+        // #155: `lazy` was accepted and IGNORED since #93, so every tab adopted
+        // from another device loaded at once in the background and stayed live.
+        // With the PC's tabs mirrored that was dozens of pages sharing the one
+        // WebView renderer with whatever you were typing into. Now a lazy tab
+        // is just its URL until you open it (activateTab loads pendingUrl),
+        // which is what Windows has always done (#78's lazyTabs).
+        if (url != null && lazy) tab.pendingUrl = url
+        else if (url != null) wv.loadUrl(url)
+        if (!background) activateTab(tabs.size - 1)
+        else {
+            if (!lazy && url != null) wv.onPause() // #155: loads, but doesn't run
+            trimLivePages()
+            syncChrome()
+        }
         return tab
+    }
+
+    // --- #155: keep few pages live ---
+    private fun isLive(t: Tab) = t.pendingUrl == null && (t.webView.url ?: "").let { it.isNotEmpty() && it != "about:blank" }
+
+    /**
+     * Unload all but the active tab and the most recent others (TabLive). An
+     * unloaded tab keeps its URL and title and reloads when opened, so what you
+     * lose is scroll position and unsaved form input on a tab you haven't looked
+     * at in a while; what you get is a renderer that isn't running 30 pages.
+     */
+    private fun trimLivePages() {
+        val victims = TabLive.toUnload(tabs.map { it.lastActiveAt }, tabs.map { isLive(it) }, activeIndex)
+        for (i in victims) {
+            val t = tabs[i]
+            val u = t.webView.url ?: continue
+            t.pendingTitle = t.webView.title?.takeIf { it.isNotBlank() }
+            t.pendingUrl = u
+            t.webView.stopLoading()
+            t.webView.onPause()
+            t.webView.loadUrl("about:blank")
+        }
     }
 
     private fun activateTab(index: Int) {
@@ -497,13 +534,18 @@ class MainActivity : Activity() {
         // #101: close the bar before activeIndex moves, so clearMatches lands on
         // the tab that was actually searched and its highlights don't linger.
         if (findOpen) closeFind()
+        // #155: the tab we're leaving stops running; the one we open resumes.
+        tabs.getOrNull(activeIndex)?.takeIf { activeIndex != index }?.webView?.onPause()
         activeIndex = index
+        tabs[index].webView.onResume()
         tabs[index].pendingUrl?.let { u -> // #93: adopted tab loads when opened
             tabs[index].pendingUrl = null
             tabs[index].pendingTitle = null
+            tabs[index].restoring = true
             tabs[index].webView.loadUrl(u)
         }
         tabs[index].lastActiveAt = System.currentTimeMillis() // #79
+        trimLivePages() // #155
         Personas.setActive(this, tabs[index].persona) // #88
         webContainer.removeAllViews()
         val wv = tabs[index].webView
@@ -1616,6 +1658,21 @@ class MainActivity : Activity() {
             UpdateManager(this).checkForUpdate()
         }
         action(about, "How WebForge is built", "Engines, dependencies, build process") { showAbout() }
+        // #155: evidence for "it's laggy". Stalls are UI-thread frame gaps.
+        header(col, "PERFORMANCE")
+        val perf = card(col)
+        action(perf, "Live pages: ${tabs.count { isLive(it) }} of ${tabs.size} tabs",
+            "Only the open tab and the ${TabLive.MAX_LIVE - 1} most recent stay loaded") { }
+        val stalls = StallLog.lines()
+        perf.addView(TextView(this).apply {
+            text = if (stalls.isEmpty()) "No UI stalls over 100 ms since the app came to the front"
+                else "UI stalls (newest first):\n" + stalls.joinToString("\n")
+            setTextColor(0xFFB0B0B8.toInt())
+            textSize = 11f
+            setPadding(dp(14), dp(12), dp(14), dp(12))
+            setTextIsSelectable(true)
+        })
+
         CrashLog.last(this)?.let { trace ->
             header(col, "LAST CRASH")
             val crash = card(col)
@@ -1862,6 +1919,9 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        // #155: pages run only while the app is in front.
+        active?.webView?.let { it.resumeTimers(); it.onResume() }
+        StallLog.start()
         UpdateManager(this).checkForUpdate()
         sweepStaleTabs() // #79: catch up after the app has been away
         // #84: the app only pulled at launch, so bookmarks edited on the PC
@@ -1882,5 +1942,7 @@ class MainActivity : Activity() {
     override fun onPause() {
         super.onPause()
         sweepHandler.removeCallbacksAndMessages(null)
+        StallLog.stop()
+        active?.webView?.let { it.onPause(); it.pauseTimers() } // pauseTimers is app-wide
     }
 }
