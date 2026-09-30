@@ -37,6 +37,7 @@ const credsave = require('./credsave'); // #145 — ditto
 const modifier = require('./modifier'); // #150 — ditto (Ctrl on Windows, ⌘ on macOS)
 const syncdecide = require('./syncdecide'); // #151 — ditto (nothing never overwrites something)
 const repaint = require('./repaint'); // #148 — ditto (when to force a frame)
+const focusring = require('./focusring'); // #131 — ditto (chrome surface vs page view)
 const autofillInject = require('./autofill-inject'); // #136
 
 // #134: banks and other sites with a "supported browsers" allowlist refuse to
@@ -663,6 +664,11 @@ function toggleBookmarksPanel() {
   chrome?.webContents.send('bookmarks-panel', bmPanelOpen);
   if (bmPanelOpen) pushBookmarks();
   layout();
+  // #131: opening the panel puts focus IN it, and closing it hands focus back to
+  // the page. Previously Ctrl+B only changed what was on screen — you still
+  // needed the mouse to use it, which is the whole complaint.
+  // setImmediate so the rows exist: pushBookmarks re-renders the list.
+  setImmediate(() => focusTheSurface(bmPanelOpen ? 'bookmarks' : focusring.PAGE));
 }
 
 // #26: passwords panel — same right-hand slot as bookmarks.
@@ -1536,8 +1542,34 @@ function wireLeaderShortcut() {
   if (win.isFocused()) register();
 }
 
+// #131: keyboard access to the chrome surfaces. Without this there is no way to
+// reach the tab sidebar or bookmarks panel at all unless you use the mouse.
+let focusSurface = focusring.PAGE;
+
+function focusTheSurface(surface) {
+  if (locked) return;
+  focusSurface = surface;
+  if (!focusring.isChromeSurface(surface)) {
+    // Back to the page. Clearing the chrome's own focus ring matters — a
+    // lingering ring on an unfocused sidebar is worse than none, because it
+    // says "your keys go here" when they do not.
+    chrome?.webContents.send('focus-surface', focusring.PAGE);
+    activeWc()?.focus();
+    return;
+  }
+  // The chrome view sits BEHIND the page view (activateTab raises the page), so
+  // it must be focused explicitly before the renderer can move focus within it.
+  // Verified in #103's probe: a covered view does take focus.
+  chrome?.webContents.focus();
+  chrome?.webContents.send('focus-surface', surface);
+}
+
 // #42: Esc closes the topmost open thing, from wherever focus happens to be.
 function handleEscape() {
+  // #131: if focus is parked in the chrome, Esc hands it back to the page before
+  // closing anything. Otherwise the keyboard can be trapped in the sidebar, and
+  // a navigation aid you cannot leave is worse than not having it.
+  if (focusring.isChromeSurface(focusSurface)) return focusTheSurface(focusring.escapeTarget());
   if (findOpen) return closeFind(); // #101: the find bar is the topmost thing
   if (bmDialogOpen) return closeBookmarkDialog();
   if (bmPanelOpen) return toggleBookmarksPanel();
@@ -1575,6 +1607,13 @@ function wireChords(wc) {
     }
     // #32: F11 at the input level — the menu accelerator only fired reliably
     // on a maximized window.
+    // #131 round 2: there is deliberately NO focus-cycling key.
+    //
+    // Round 1 added F6 because that is the browser convention. The user's answer
+    // was blunt and correct: a convention nobody reaches for is not a feature.
+    // Ctrl+L focuses the address bar and plain Tab walks the chrome from there —
+    // which works only because the rows now have tabindex, and needs no new
+    // binding at all. Esc returns to the page.
     if (rawKey.toLowerCase() === 'f11' && modifier.isBare(input)) {
       event.preventDefault();
       if (!locked) setFullscreenMode(!fullscreen);
@@ -1605,6 +1644,23 @@ function wireChords(wc) {
     }
     if (!modifier.isChord(input)) return; // #150: Ctrl on Windows, ⌘ on macOS
     const key = rawKey.toLowerCase();
+    // #131/#103/#109 diagnostics. Ctrl+S (link hints), Ctrl+L and Ctrl+B are all
+    // reported as unreliable, and the causes are mutually exclusive:
+    //   nothing logged            -> the chord never reached WebForge at all
+    //   logged with view=chrome   -> focus was in the sidebar/nav, so the PAGE's
+    //                               preload (which owns Ctrl+S) never saw it
+    //   logged with view=page     -> it reached the page and the preload dropped
+    //                               it: the not-while-typing guard, or focus
+    //                               inside an iframe, where the preload does not
+    //                               run
+    // One line distinguishes three different bugs. Cheaper than another guess.
+    if (key === 's' || key === 'l' || key === 'b') {
+      const which = wc === chrome?.webContents ? 'chrome' : 'page';
+      errorlog.record(
+        'chord',
+        new Error(`Ctrl+${input.shift ? 'Shift+' : ''}${key} view=${which} locked=${locked} surface=${focusSurface}`)
+      );
+    }
     // #101: Ctrl+Shift+Left/Right is the standard word-wise text-selection
     // chord and used to be swallowed here for back/forward (#38). Stealing it
     // meant selection could not work in WebForge at all. Alt+Left / Alt+Right
@@ -1617,6 +1673,20 @@ function wireChords(wc) {
       // "Previous tab" is deliberately gone — Ctrl+PageUp still walks backwards.
       if (input.shift) cycleTab(1);
       else flipTab();
+    } else if (key === 'l' && !input.shift) {
+      // #103: Ctrl+L did nothing. The menu item's code was correct — and a probe
+      // confirmed a covered view CAN take focus — so the fault was the
+      // accelerator never arriving: #23's warning that a BaseWindow's menu
+      // accelerators can silently not exist, plus any page that binds Ctrl+L
+      // itself gets it first. Owning it here fixes both, and preventDefault
+      // stops the page swallowing it.
+      //
+      // `!input.shift` is NOT optional: isChord deliberately permits shift (for
+      // Ctrl+Shift+Tab), so without it Ctrl+Shift+L — Lock WebForge — landed
+      // here instead and locking silently stopped working. Shipped that in
+      // 0.1.167.
+      event.preventDefault();
+      focusTheSurface('url');
     } else if (key === 'f4') {
       event.preventDefault();
       closeTab(activeId);

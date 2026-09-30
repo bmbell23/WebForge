@@ -60,6 +60,8 @@ contextBridge.exposeInMainWorld('webforge', {
   onRemoteTabs: (cb) => ipcRenderer.on('remote-tabs', (_e, l) => cb(l)), // #57
   onTabsUpdated: (cb) => ipcRenderer.on('tabs-updated', (_e, state) => cb(state)),
   onFocusUrl: (cb) => ipcRenderer.on('focus-url', () => cb()),
+  // #131: which chrome surface should take keyboard focus ('page' means release it).
+  onFocusSurface: (cb) => ipcRenderer.on('focus-surface', (_e, s) => cb(s)),
   // bookmarks (#11)
   toggleStar: () => ipcRenderer.send('toggle-star'),
   toggleBookmarksPanel: () => ipcRenderer.send('toggle-bookmarks-panel'),
