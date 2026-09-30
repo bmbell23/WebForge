@@ -66,6 +66,17 @@
                     android:selectAllOnFocus="true"
                     android:importantForAutofill="no" />
 
+                <!-- #156: send this page to the Dashboard's yt-dlp. -->
+                <TextView
+                    android:id="@+id/dlBtn"
+                    android:layout_width="38dp"
+                    android:layout_height="36dp"
+                    android:layout_marginStart="4dp"
+                    android:gravity="center"
+                    android:text="⤓"
+                    android:textColor="#E8E8EA"
+                    android:textSize="19sp" />
+
                 <TextView
                     android:id="@+id/bookmarksBtn"
                     android:layout_width="42dp"

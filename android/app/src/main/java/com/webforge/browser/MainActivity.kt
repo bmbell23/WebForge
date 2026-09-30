@@ -115,6 +115,7 @@ class MainActivity : Activity() {
         urlBar.setOnFocusChangeListener { _, has -> urlEditing = has } // #64
         tabsBtn.setOnClickListener { showTabSheet() }
         findViewById<TextView>(R.id.bookmarksBtn).setOnClickListener { showBookmarks() } // #87
+        findViewById<TextView>(R.id.dlBtn).setOnClickListener { showYtdlpPicker() } // #156
         wireFindBar() // #101
 
         newTab(newTabUrl())
@@ -122,6 +123,75 @@ class MainActivity : Activity() {
         Personas.sync(this) { runOnUiThread { rehomeTabs() } } // #88/#96
         syncTabsAcrossDevices() // #57 // warm the cache for the bookmarks panel
         UpdateManager(this).checkForUpdate()
+    }
+
+    // --- #156: send the page to the Dashboard's yt-dlp. Same choices and the
+    // same body as Windows (YtDlp.kt / windows/ytdlp.js, pinned by the shared
+    // fixtures): Video/Audio, Kids, and Adult/Short pre-set from the domain.
+    // The Dashboard answers only when yt-dlp has finished, so the request runs
+    // in the background and a toast reports the outcome; the ⤓ shows ⏳ meanwhile.
+    private var ytdlpPending = 0
+
+    private fun showYtdlpPicker() {
+        val url = active?.url ?: ""
+        if (!YtDlp.downloadable(url)) {
+            android.widget.Toast.makeText(this, "Only web pages can be sent to yt-dlp", android.widget.Toast.LENGTH_SHORT).show()
+            return
+        }
+        val sites = YtDlp.sites(this)
+        val (dAdult, dShort) = YtDlp.defaults(sites, url)
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(8), dp(20), 0)
+        }
+        val fmt = android.widget.RadioGroup(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val video = android.widget.RadioButton(this).apply { id = View.generateViewId(); text = "🎬 Video" }
+        val audio = android.widget.RadioButton(this).apply { id = View.generateViewId(); text = "🎵 Audio" }
+        fmt.addView(video); fmt.addView(audio); fmt.check(video.id)
+        val kids = android.widget.CheckBox(this).apply { text = "Kids" }
+        val adult = android.widget.CheckBox(this).apply { text = "Adult"; isChecked = dAdult }
+        val short = android.widget.CheckBox(this).apply { text = "Short clip"; isChecked = dShort }
+        // Kids and Adult exclude each other; audio has no adult folders.
+        fun sync() {
+            val noAdult = fmt.checkedRadioButtonId == audio.id || kids.isChecked
+            adult.isEnabled = !noAdult
+            short.isEnabled = !noAdult && adult.isChecked
+        }
+        kids.setOnCheckedChangeListener { _, on -> if (on) adult.isChecked = false; sync() }
+        adult.setOnCheckedChangeListener { _, on -> if (on) kids.isChecked = false; sync() }
+        fmt.setOnCheckedChangeListener { _, _ -> sync() }
+        sync()
+        listOf(fmt, kids, adult, short).forEach { box.addView(it) }
+
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Send to yt-dlp")
+            .setMessage(active?.title?.takeIf { it.isNotBlank() } ?: url)
+            .setView(box)
+            .setPositiveButton("Download") { _, _ ->
+                val body = YtDlp.body(
+                    sites, url,
+                    if (fmt.checkedRadioButtonId == audio.id) "audio" else "video",
+                    kids.isChecked, adult.isChecked, short.isChecked,
+                )
+                sendToYtdlp(sites.endpoint, body)
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun sendToYtdlp(endpoint: String, body: YtDlp.Body) {
+        val btn = findViewById<TextView>(R.id.dlBtn)
+        val label = body.format + if (body.kids) " (kids)" else if (body.adult) " (adult)" else ""
+        ytdlpPending++
+        btn.text = "⏳"
+        android.widget.Toast.makeText(this, "Sending $label to yt-dlp…", android.widget.Toast.LENGTH_SHORT).show()
+        YtDlp.send(endpoint, body) { ok, message ->
+            runOnUiThread {
+                ytdlpPending = maxOf(0, ytdlpPending - 1)
+                if (ytdlpPending == 0) btn.text = "⤓"
+                android.widget.Toast.makeText(this, message, android.widget.Toast.LENGTH_LONG).show()
+            }
+        }
     }
 
     // --- #101: find in page. The phone has no Ctrl+F, so this is opened from

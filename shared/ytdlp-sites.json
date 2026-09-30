@@ -1,0 +1,7 @@
+{
+  "_comment": "#156: where the download button sends a page, and which sites default to Adult/Short. Copied from the Dashboard's yt-dlp page (Dashboard/static/yt-dlp.html, its SITES list), which makes the same call by domain. Both apps read this one file.",
+  "endpoint": "http://100.69.184.113:8001/api/download/ytdlp",
+  "adult": ["pornhub.com", "xhamster.com", "xvideos.com", "youporn.com", "redtube.com", "tube8.com",
+            "xnxx.com", "spankbang.com", "eporner.com", "tnaflix.com", "redgifs.com"],
+  "short": ["streamable.com", "imgur.com", "gfycat.com", "redgifs.com"]
+}
