@@ -717,6 +717,28 @@
     cursor: pointer;
   }
   #loginprompt button.dismiss { background: var(--surface); color: var(--text); font-weight: 500; }
+  /* #156: the yt-dlp picker, styled as a sibling of #loginprompt. */
+  #ytdlp {
+    position: absolute; inset: 0; display: none; place-items: center;
+    background: rgba(0, 0, 0, 0.45); z-index: 35;
+  }
+  #ytdlp.open { display: grid; }
+  #ytdlp .card {
+    width: min(440px, 90vw); padding: 18px; border-radius: 12px;
+    background: var(--bg); box-shadow: 0 10px 40px rgba(0, 0, 0, 0.45);
+    display: flex; flex-direction: column; gap: 10px; font-size: 13px;
+  }
+  #ytdlp .msg { font-size: 15px; font-weight: 600; }
+  #ytdlp .dlurl { opacity: 0.7; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #ytdlp label { display: flex; gap: 8px; align-items: center; cursor: pointer; }
+  #ytdlp label.off { opacity: 0.4; }
+  #ytdlp .seg, #ytdlp .row { display: flex; gap: 8px; }
+  #ytdlp button {
+    flex: 1; height: 32px; border: none; border-radius: 8px;
+    background: var(--surface); color: var(--text); font-size: 13px; cursor: pointer;
+  }
+  #ytdlp .seg button.on, #ytdlp #ytdlpgo { background: var(--accent); color: #fff; font-weight: 600; }
+  #dlbtn.busy { opacity: 0.6; }
 </style>
 </head>
 <body>
@@ -738,6 +760,7 @@
          because any text is a valid search. Both are built from NAV_BOXES below
          so a third is one line. -->
     <span id="navboxes"></span>
+    <button id="dlbtn" title="Send this page to yt-dlp">⤓</button>
     <button id="star" title="Bookmark this page (Ctrl+D)">☆</button>
     <button id="settingsbtn" title="Settings (Ctrl+Shift+S)">⚙</button>
     <div id="progress"></div>
@@ -750,6 +773,25 @@
       <div class="row">
         <button id="lpok">Save</button>
         <button id="lpno" class="dismiss">Not now</button>
+      </div>
+    </div>
+  </div>
+  <!-- #156: send the page to the Dashboard's yt-dlp. Same centred-dialog
+       pattern as #loginprompt; main raises chrome for it. -->
+  <div id="ytdlp">
+    <div class="card">
+      <div class="msg">Send to yt-dlp</div>
+      <div class="dlurl" id="ytdlpurl"></div>
+      <div class="seg" id="ytdlpfmt">
+        <button data-fmt="video" class="on">🎬 Video</button>
+        <button data-fmt="audio">🎵 Audio</button>
+      </div>
+      <label><input type="checkbox" id="ytdlpkids"> Kids</label>
+      <label><input type="checkbox" id="ytdlpadult"> Adult</label>
+      <label id="ytdlpshortrow"><input type="checkbox" id="ytdlpshort"> Short clip</label>
+      <div class="row">
+        <button id="ytdlpgo">Download</button>
+        <button id="ytdlpno" class="dismiss">Cancel</button>
       </div>
     </div>
   </div>
@@ -1966,6 +2008,75 @@
     };
     return el;
   }
+
+  // --- #156: send the page to yt-dlp ---
+  // Video/Audio + Kids + Adult (+ Short). Adult/Short start from the site's
+  // domain (shared/ytdlp-sites.json); main builds the final body with ytdlp.js
+  // so it matches the phone. Kids and Adult exclude each other; audio has no
+  // adult folders, so Adult/Short grey out for it.
+  (() => {
+    const box = document.getElementById('ytdlp');
+    const btn = document.getElementById('dlbtn');
+    const kids = document.getElementById('ytdlpkids');
+    const adult = document.getElementById('ytdlpadult');
+    const short = document.getElementById('ytdlpshort');
+    const fmtBtns = [...document.querySelectorAll('#ytdlpfmt button')];
+    let current = null;
+    let format = 'video';
+    let pending = 0;
+
+    const sync = () => {
+      fmtBtns.forEach((b) => b.classList.toggle('on', b.dataset.fmt === format));
+      const noAdult = format === 'audio' || kids.checked;
+      adult.disabled = noAdult;
+      adult.parentElement.classList.toggle('off', noAdult);
+      short.disabled = noAdult || !adult.checked;
+      short.parentElement.classList.toggle('off', short.disabled);
+    };
+    const answer = (send) => {
+      if (!current) return;
+      webforge.ytdlpAnswer({
+        send, url: current.url,
+        choice: { format, kids: kids.checked, adult: adult.checked, short: short.checked },
+      });
+      current = null;
+      box.classList.remove('open');
+    };
+
+    btn.onclick = () => webforge.ytdlpOpen();
+    fmtBtns.forEach((b) => { b.onclick = () => { format = b.dataset.fmt; sync(); }; });
+    kids.onchange = () => { if (kids.checked) adult.checked = false; sync(); };
+    adult.onchange = () => { if (adult.checked) kids.checked = false; sync(); };
+    document.getElementById('ytdlpgo').onclick = () => answer(true);
+    document.getElementById('ytdlpno').onclick = () => answer(false);
+    document.addEventListener('keydown', (e) => {
+      if (!current) return;
+      if (e.key === 'Escape') answer(false);
+      else if (e.key === 'Enter') answer(true);
+    });
+
+    webforge.onYtdlpPicker((p) => {
+      current = p;
+      format = 'video';
+      kids.checked = false;
+      adult.checked = !!p.adult;
+      short.checked = !!p.short;
+      document.getElementById('ytdlpurl').textContent = p.title || p.url;
+      document.getElementById('ytdlpurl').title = p.url;
+      sync();
+      box.classList.add('open');
+      document.getElementById('ytdlpgo').focus();
+    });
+    // The button carries the in-flight state; main also raises a system
+    // notification for the outcome, which shows even when the bar is hidden.
+    webforge.onYtdlpStatus((s) => {
+      if (s.pending) pending++;
+      else if (pending > 0 && s.ok !== undefined && !/^Only web pages/.test(s.message)) pending--;
+      btn.classList.toggle('busy', pending > 0);
+      btn.textContent = pending > 0 ? '⏳' : '⤓';
+      btn.title = s.message || 'Send this page to yt-dlp';
+    });
+  })();
 
   // --- #145: offer to save or update a login ---
   // Nothing is stored unless the button is pressed; declining sends no answer,

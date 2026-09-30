@@ -22,7 +22,9 @@ mkdir -p "$ASSETS"
 cp "$REPO_ROOT/shared/about.json" "$ASSETS/about.json"
 # #121: the new-tab page is shared with the Windows app — one copy, in shared/.
 cp "$REPO_ROOT/shared/newtab.html" "$ASSETS/newtab.html"
-echo "📄 Staged shared/about.json + shared/newtab.html -> assets/"
+# #156: the yt-dlp site list, shared with windows/ytdlp.js.
+cp "$REPO_ROOT/shared/ytdlp-sites.json" "$ASSETS/ytdlp-sites.json"
+echo "📄 Staged shared/about.json + newtab.html + ytdlp-sites.json -> assets/"
 
 if [ "$1" = "--clean" ]; then
     ./gradlew clean

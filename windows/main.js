@@ -5,7 +5,7 @@
 // and added after it, so they cover chrome's dead area. Only the active tab's
 // view is visible. Full tab state is broadcast to the chrome UI on every
 // change; it re-renders from that.
-const { app, BaseWindow, BrowserWindow, WebContentsView, clipboard, ipcMain, dialog, Menu, nativeTheme, session } = require('electron');
+const { app, BaseWindow, BrowserWindow, WebContentsView, Notification, clipboard, ipcMain, dialog, Menu, nativeTheme, session } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto'); // #57: stable device id
@@ -38,6 +38,7 @@ const modifier = require('./modifier'); // #150 — ditto (Ctrl on Windows, ⌘ 
 const syncdecide = require('./syncdecide'); // #151 — ditto (nothing never overwrites something)
 const repaint = require('./repaint'); // #148 — ditto (when to force a frame)
 const focusring = require('./focusring'); // #131 — ditto (chrome surface vs page view)
+const ytdlp = require('./ytdlp'); // #156 — ditto (what the download button sends)
 const autofillInject = require('./autofill-inject'); // #136
 
 // #134: banks and other sites with a "supported browsers" allowlist refuse to
@@ -109,6 +110,7 @@ let bmPanelOpen = false;
 let pwPanelOpen = false; // #26 — shares the right-panel slot with bookmarks
 let findOpen = false; // #101
 let loginPromptOpen = false; // #145
+let ytdlpOpen = false; // #156: the download picker holds the window like the login prompt
 
 let win, chrome, lockView;
 const tabs = new Map(); // id -> WebContentsView
@@ -467,7 +469,7 @@ function layout() {
     // settings) is open — then chrome needs the full window to show it.
     view?.setBounds({ x: 0, y: 0, width, height });
     chrome.setBounds(
-      bmDialogOpen || settingsOpen || managerOpen || bmPanelOpen || pwPanelOpen || loginPromptOpen
+      bmDialogOpen || settingsOpen || managerOpen || bmPanelOpen || pwPanelOpen || loginPromptOpen || ytdlpOpen
         ? { x: 0, y: 0, width, height }
         : fsRegionBounds()
     );
@@ -767,7 +769,7 @@ function openBookmarkDialog(prefill) {
 function closeBookmarkDialog() {
   if (!bmDialogOpen) return;
   bmDialogOpen = false;
-  if (!settingsOpen && !managerOpen) setChromeRaised(false);
+  if (!settingsOpen && !managerOpen && !ytdlpOpen) setChromeRaised(false);
   chrome.webContents.send('bm-edit', null);
   layout(); // #32: re-collapse chrome if we're fullscreen
   activeWc()?.focus();
@@ -993,6 +995,8 @@ function contextMenuFor(wc, params) {
     'nav.reload': () => wc.reload(),
     'page.viewSource': () => viewSource(),
     'page.inspect': () => wc.inspectElement(params.x, params.y),
+    'page.ytdlp': () => openYtdlpPicker(wc.getURL(), wc.getTitle()), // #156
+    'link.ytdlp': () => openYtdlpPicker(params.linkURL, String(params.linkText || '').trim()), // #156
   };
 
   const items = ctxmenu.build(params, {
@@ -1000,6 +1004,8 @@ function contextMenuFor(wc, params) {
     engineName: ENGINE_NAMES[searchEngine()] || 'the web',
     canGoBack: nav.canGoBack(),
     canGoForward: nav.canGoForward(),
+    pageYtdlp: ytdlp.downloadable(wc.getURL()), // #156
+    linkYtdlp: ytdlp.downloadable(params.linkURL || ''),
   });
 
   return items.map((item) =>
@@ -1280,7 +1286,7 @@ function activateTab(id, opts = {}) {
   // z-order. Now the active view is always raised above the other PAGE views,
   // and chrome is put back on top afterwards when it is meant to be showing —
   // which preserves #32's fix rather than trading one for the other.
-  const chromeOnTop = fsRevealed || bmDialogOpen || settingsOpen || managerOpen || loginPromptOpen; // #145
+  const chromeOnTop = fsRevealed || bmDialogOpen || settingsOpen || managerOpen || loginPromptOpen || ytdlpOpen; // #145/#156
   win.contentView.addChildView(view);
   if (chromeOnTop) win.contentView.addChildView(chrome);
   // #148: boundsChangedFor runs layout() and reports whether the geometry moved.
@@ -2360,7 +2366,7 @@ function offerToSave(id, held) {
 ipcMain.on('login-prompt-answer', (_e, answer) => {
   // Put the window back the way it was first, whatever the answer is.
   loginPromptOpen = false;
-  if (!bmDialogOpen && !settingsOpen && !managerOpen) setChromeRaised(false);
+  if (!bmDialogOpen && !settingsOpen && !managerOpen && !ytdlpOpen) setChromeRaised(false);
   layout();
   activeWc()?.focus();
   if (locked || !answer || !answer.accepted) return;
@@ -2428,6 +2434,7 @@ function showLock() {
   // password, and its reserved strip would otherwise be stuck on screen.
   pendingLogin.clear();
   loginPromptOpen = false;
+  ytdlpOpen = false; // #156
   vault.lock();
   // Tear the whole session down — nothing sensitive stays rendered or mapped.
   for (const id of [...tabOrder]) {
@@ -3107,6 +3114,66 @@ ipcMain.on('remove-hotkey', (_e, keyId) => {
 // #11: bookmarks IPC.
 ipcMain.on('toggle-bookmarks-panel', () => toggleBookmarksPanel());
 ipcMain.on('toggle-star', () => locked || starCurrent());
+
+// --- #156: send the current page to the Dashboard's yt-dlp ---
+// The button opens a picker in the chrome (a centred dialog, raised exactly as
+// the login prompt is); the answer comes back here and the download runs in the
+// background. The Dashboard answers only when yt-dlp has FINISHED (up to 10
+// minutes), so nothing waits on it: you get a "sending" notice now and a
+// "saved"/"failed" one when it returns, and the tab stays yours meanwhile.
+ipcMain.on('ytdlp-open', () => {
+  const wc = activeWc();
+  openYtdlpPicker(wc?.getURL() || '', wc?.getTitle() || '');
+});
+
+// The ⤓ button sends the page; the context menu sends the page or a link.
+function openYtdlpPicker(url, title) {
+  if (locked) return;
+  if (!ytdlp.downloadable(url)) {
+    chrome?.webContents.send('ytdlp-status', { ok: false, message: 'Only web pages can be sent to yt-dlp.' });
+    return;
+  }
+  ytdlpOpen = true;
+  clearFsReveal();
+  setChromeRaised(true);
+  layout();
+  chrome?.webContents.send('ytdlp-picker', { url, title: title || url, ...ytdlp.defaults(url) });
+  chrome.webContents.focus();
+}
+
+ipcMain.on('ytdlp-answer', (_e, a) => {
+  ytdlpOpen = false;
+  if (!bmDialogOpen && !settingsOpen && !managerOpen && !loginPromptOpen) setChromeRaised(false);
+  layout();
+  activeWc()?.focus();
+  if (locked || !a || !a.send || !ytdlp.downloadable(a.url)) return;
+  const body = ytdlp.body(a.url, a.choice);
+  const label = `${body.format === 'audio' ? 'audio' : 'video'}${body.kids ? ' (kids)' : body.adult ? ' (adult)' : ''}`;
+  errorlog.record('ytdlp', `sending ${label}: ${body.url}`);
+  chrome?.webContents.send('ytdlp-status', { ok: true, pending: true, message: `Sending ${label} to yt-dlp…` });
+  fetch(ytdlp.ENDPOINT, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(11 * 60 * 1000), // the server gives up at 10
+  })
+    .then(async (r) => {
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || !j.success) throw new Error(j.error || `HTTP ${r.status}`);
+      return j.message || 'Download complete';
+    })
+    .then((message) => {
+      errorlog.record('ytdlp', `done: ${message}`);
+      chrome?.webContents.send('ytdlp-status', { ok: true, message });
+      if (Notification.isSupported()) new Notification({ title: 'yt-dlp', body: message }).show();
+    })
+    .catch((err) => {
+      const message = `yt-dlp failed: ${String(err.message || err).slice(0, 300)}`;
+      errorlog.record('ytdlp', message);
+      chrome?.webContents.send('ytdlp-status', { ok: false, message });
+      if (Notification.isSupported()) new Notification({ title: 'yt-dlp', body: message }).show();
+    });
+});
 
 // #29: bookmark edit dialog IPC.
 ipcMain.on('bm-edit-request', (_e, id) => {
