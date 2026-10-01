@@ -24,6 +24,7 @@ const credentials = require('./credentials');
 const hotkeys = require('./hotkeys');
 const personas = require('./personas'); // #25
 const errorlog = require('./errorlog'); // #75
+const { ensurePreloadRegistration } = require('./preloadshim'); // #21
 const tabnav = require('./tabnav'); // #113/#114 — unit-tested, Electron-free
 const textrules = require('./textrules'); // #100 — ditto
 const taburl = require('./taburl'); // #107 — ditto
@@ -1899,11 +1900,13 @@ async function setupAdblock() {
         newCosmeticFilters: extra.cosmeticFilters,
       });
     } catch (e) {
-      console.error('webforge: fandom extras failed to load', e);
+      errorlog.record('adblock: fandom extras failed to load', e);
     }
+    ensurePreloadRegistration(session.defaultSession); // #21: Electron 34 lacks the API Ghostery 2.x calls
     blocker.enableBlockingInSession(session.defaultSession);
   } catch (e) {
-    console.error('webforge: adblock disabled this run', e);
+    // #21: this used to console.error, which is invisible in a packaged build.
+    errorlog.record('adblock: disabled this run', e);
   }
 }
 
