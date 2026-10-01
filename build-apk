@@ -1,0 +1,33 @@
+#!/bin/bash
+# #161: the agent-bus reconciler's APK hook (agent-bus threads/017). It runs
+# from the main clone after a merge, over ssh with no login shell.
+#   exit 0  -> built; last stdout line is "<versionName> <link>"
+#   exit 75 -> nothing to rebuild
+# Writes nothing tracked: releases/*, the staged assets and android/app/build
+# are all gitignored. The real work (and the #149 version gate) is
+# scripts/build-apk.sh; its log goes to stderr so stdout stays clean.
+set -euo pipefail
+cd "$(dirname "$0")"
+export ANDROID_HOME="${ANDROID_HOME:-$HOME/android-sdk}"
+
+LINK=http://100.69.184.113:8012/webforge.apk
+WANT=$(cat version.txt)
+HAVE=$(cat releases/version.txt 2>/dev/null || echo none)
+
+# Already published at this version.
+if [ "$WANT" = "$HAVE" ]; then
+    echo "APK already at $HAVE"
+    exit 75
+fi
+
+# The app didn't change since the published APK's tag (ship-pr tags every
+# merge), e.g. a Windows-only merge. Skipping is safe: the endpoint keeps
+# advertising exactly what the APK contains, so phones don't update-loop.
+if [ "$HAVE" != none ] && git rev-parse -q --verify "v$HAVE^{commit}" >/dev/null \
+   && git diff --quiet "v$HAVE" HEAD -- android shared scripts/build-apk.sh; then
+    echo "no app changes since v$HAVE"
+    exit 75
+fi
+
+./scripts/build-apk.sh >&2
+echo "$(cat releases/version.txt) $LINK"
