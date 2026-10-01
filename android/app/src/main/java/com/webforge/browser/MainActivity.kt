@@ -44,7 +44,7 @@ class Tab(val id: Int, val webView: WebView) {
     var restoring = false // #155: reloading after an unload; drop the about:blank from history
     val title: String get() =
         label ?: pendingTitle
-        ?: if (MainActivity.isNewTabUrl(pendingUrl ?: webView.url)) "New tab" else null
+        ?: if (MainActivity.isNewTabUrl(pendingUrl ?: webView.url)) "Home" else null
         ?: webView.title?.takeIf { it.isNotBlank() } ?: url
     val url: String get() = pendingUrl ?: webView.url ?: "about:blank"
 }
@@ -65,7 +65,12 @@ class MainActivity : Activity() {
         private const val MAX_TABS = 60
 
         /** True for our new-tab page, whatever query string it carries. */
-        fun isNewTabUrl(u: String?) = u != null && u.startsWith(NEW_TAB_URL)
+        // #159: the phone's home page is the Dashboard. Its root counts as the
+        // new-tab page everywhere isNewTabUrl is asked: not synced (#121), an
+        // empty address bar to search from, titled "Home".
+        private const val HOME_URL = "http://100.69.184.113:8001/"
+        fun isNewTabUrl(u: String?) = u != null &&
+            (u.startsWith(NEW_TAB_URL) || u.trimEnd('/') == HOME_URL.trimEnd('/'))
     }
 
     private lateinit var webContainer: FrameLayout
@@ -90,7 +95,9 @@ class MainActivity : Activity() {
     private val active: Tab? get() = tabs.getOrNull(activeIndex)
 
     /** #121: the new-tab page, told which engine to search with (?e=...). */
-    private fun newTabUrl() = "$NEW_TAB_URL?e=${Prefs.engineKey(this)}"
+    // #159: new tabs open the Dashboard. (newtab.html stays in the APK: Windows
+    // still uses it, and old tabs restored on it keep working.)
+    private fun newTabUrl() = HOME_URL
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
