@@ -41,6 +41,7 @@ class Tab(val id: Int, val webView: WebView) {
     var folder = ""      // #86: manual grouping, set in tab edit mode
     var persona = Personas.UNASSIGNED // #88
     var label: String? = null // #86: user-given name overriding the page title
+    var openerId: Int? = null // #163: the tab whose link opened this one; Back returns there
     var restoring = false // #155: reloading after an unload; drop the about:blank from history
     val title: String get() =
         label ?: pendingTitle
@@ -487,6 +488,7 @@ class MainActivity : Activity() {
                 resultMsg: Message
             ): Boolean {
                 val opened = newTab(null) // must be unloaded for the transport
+                opened.openerId = tab.id // #163
                 val transport = resultMsg.obj as WebView.WebViewTransport
                 transport.webView = opened.webView
                 resultMsg.sendToTarget()
@@ -1919,7 +1921,18 @@ class MainActivity : Activity() {
             findOpen -> closeFind() // #101: the find bar is the topmost thing
             overlay.visibility == View.VISIBLE -> closePanel()
             active?.webView?.canGoBack() == true -> active?.webView?.goBack()
-            tabs.size > 1 -> closeTab(activeIndex)
+            tabs.size > 1 -> {
+                // #163: a tab a link opened (the Dashboard's cards are all
+                // target=_blank) goes back to the tab that opened it, not to
+                // whichever neighbour closeTab picks. Like Chrome on Android.
+                val openerId = active?.openerId
+                val before = tabs.size
+                closeTab(activeIndex)
+                if (openerId != null && tabs.size < before) {
+                    val i = tabs.indexOfFirst { it.id == openerId }
+                    if (i >= 0) activateTab(i)
+                }
+            }
             else -> super.onBackPressed()
         }
     }
