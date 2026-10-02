@@ -14,7 +14,7 @@ cd "$REPO_ROOT/windows"
 VERSION="$(cat "$REPO_ROOT/version.txt")"
 echo "🔨 Building WebForge Windows installer (version: $VERSION)"
 
-npm install
+npm ci  # #166: never rewrite the tracked lockfile (a dirty clone stalls the reconciler)
 # version.txt is the single source of truth. It's injected into the build with
 # electron-builder's extraMetadata rather than by rewriting package.json —
 # `npm version` left the repo permanently dirty after every build, and that

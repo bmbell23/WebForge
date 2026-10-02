@@ -1,0 +1,34 @@
+#!/bin/bash
+# #166: the deploy reconciler's Windows hook, the twin of ./build-apk (#161,
+# agent-bus thread 017). It runs from the main clone after a merge.
+#   exit 0  -> built; last stdout line is "<version> <installer URL>"
+#   exit 75 -> nothing to rebuild
+# Writes nothing tracked: releases/* and windows/dist are gitignored, and
+# build-windows.sh uses `npm ci` so package-lock.json stays untouched. The
+# real work (and the latest.yml version gate) is scripts/build-windows.sh;
+# its log goes to stderr so stdout stays clean.
+set -euo pipefail
+cd "$(dirname "$0")"
+
+WANT=$(cat version.txt)
+HAVE=$(grep -m1 '^version:' releases/windows/latest.yml 2>/dev/null | awk '{print $2}')
+HAVE=${HAVE:-none}
+
+# Already published at this version.
+if [ "$WANT" = "$HAVE" ]; then
+    echo "installer already at $HAVE"
+    exit 75
+fi
+
+# The app didn't change since the published installer's tag, e.g. an
+# Android-only merge. Skipping is safe: latest.yml keeps advertising exactly
+# the installer it names, so the auto-updater doesn't loop.
+if [ "$HAVE" != none ] && git rev-parse -q --verify "v$HAVE^{commit}" >/dev/null \
+   && git diff --quiet "v$HAVE" HEAD -- windows shared scripts/build-windows.sh; then
+    echo "no app changes since v$HAVE"
+    exit 75
+fi
+
+./scripts/build-windows.sh >&2
+V=$(grep -m1 '^version:' releases/windows/latest.yml | awk '{print $2}')
+echo "$V http://100.69.184.113:8012/windows/WebForge%20Setup%20$V.exe"
