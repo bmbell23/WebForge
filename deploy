@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# #168: bring WebForge's two containers up to this checkout, then wait until both answer.
+# Run from the main clone by bin/ship-pr and the deploy reconciler (agent-bus #128, thread 016).
+# Migrations: none. webforge_sync is a flat JSON LWW store in ./data, read as-is at startup.
+# APK and installer builds are NOT done here: those are the ./build-apk and ./build-windows hooks.
+set -euo pipefail
+cd "$(dirname "$0")"
+
+# webforge_releases is stock nginx over the ./releases bind mount: nothing to rebuild.
+docker compose up -d webforge_releases
+
+# webforge_sync runs ./server from a live mount without reload, so new sync.py only loads in a
+# fresh process. Its PID 1 ignores SIGTERM, so -t 3 lets the daemon SIGKILL it after 3 s.
+OLD=$(docker inspect webforge_sync --format '{{.Id}}' 2>/dev/null || echo none)
+docker compose up -d --force-recreate -t 3 webforge_sync
+NEW=$(docker inspect webforge_sync --format '{{.Id}}')
+if [ "$OLD" = "$NEW" ]; then
+    echo "deploy: webforge_sync was not recreated (still ${NEW:0:12})" >&2
+    exit 1
+fi
+
+check() {  # check <url> <container>
+    for _ in $(seq 1 30); do
+        if [ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 "$1")" = 200 ]; then
+            return 0
+        fi
+        sleep 2
+    done
+    echo "deploy: $1 did not answer 200 within 60 s" >&2
+    docker logs --tail 20 "$2" >&2 || true
+    return 1
+}
+
+check localhost:8012/version.txt webforge_releases
+check localhost:8013/health webforge_sync
+echo "deploy: webforge up on :8012 and :8013 ($(cat version.txt 2>/dev/null || echo 'no version'))"
