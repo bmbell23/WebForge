@@ -37,13 +37,19 @@ function hostOf(url) {
 // Subdomains count (de.pornhub.com, i.imgur.com); look-alikes don't.
 const onList = (host, list) => !!host && list.some((d) => host === d || host.endsWith('.' + d));
 
+// #183: the list alone missed pornpics.com. A host label containing one of the
+// adult words counts too (pornpics, youporn, 91porn, xxxbunker).
+const adultHost = (host) =>
+  onList(host, SITES.adult) ||
+  (!!host && host.split('.').some((label) => (SITES.adultWords || []).some((w) => label.includes(w))));
+
 /** Only real web pages can be sent; the new-tab page, file: and friends can't. */
 const downloadable = (url) => hostOf(url) !== '';
 
 /** What the picker starts with for this page. */
 function defaults(url) {
   const host = hostOf(url);
-  return { adult: onList(host, SITES.adult), short: onList(host, SITES.short) };
+  return { adult: adultHost(host), short: onList(host, SITES.short) };
 }
 
 /**
@@ -64,6 +70,6 @@ function body(url, choice = {}) {
 
 // #176: an adult tab closes the moment you leave it, and never syncs or
 // restores. Same list and matching as the picker's Adult default.
-const isAdult = (url) => onList(hostOf(url), SITES.adult);
+const isAdult = (url) => adultHost(hostOf(url));
 
 module.exports = { ENDPOINT, downloadable, defaults, body, hostOf, isAdult };
