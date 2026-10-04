@@ -990,6 +990,9 @@
   let urlEditing = false;
   url.addEventListener('focus', () => { urlEditing = true; url.select(); });
   url.addEventListener('blur', () => { urlEditing = false; });
+  // #193: adult tabs just closed; whatever the box held goes, and the state
+  // push that follows fills in the tab you are on now.
+  webforge.onUrlReset(() => { urlEditing = false; url.blur(); });
   webforge.onFocusUrl(() => { url.focus(); url.select(); });
 
   // #131: Ctrl+L / Ctrl+B / Esc tell us which surface should take focus.

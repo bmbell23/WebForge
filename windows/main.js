@@ -3111,6 +3111,10 @@ function closeAdultTabs(exceptId = null, why = 'switched tab') {
   }
   // Adult closes show up as a count, not URLs.
   errorlog.record('adult-close', `${doomed.length} tab(s) closed: ${why}`);
+  // #193: a focused, edited URL box keeps its text unless the tab changed, so an
+  // adult address could outlive its tab there. Make the box let go, then resend.
+  chrome?.webContents.send('url-reset');
+  pushState();
 }
 
 // #82: a new tab is scratch space — it exists only while you're on it. Any

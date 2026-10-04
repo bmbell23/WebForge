@@ -87,6 +87,7 @@ contextBridge.exposeInMainWorld('webforge', {
   onOutfitPrompt: (cb) => ipcRenderer.on('outfit-prompt', (_e, p) => cb(p)), // #179
   outfitAnswer: (a) => ipcRenderer.send('outfit-answer', a),
   onYtdlpStatus: (cb) => ipcRenderer.on('ytdlp-status', (_e, s) => cb(s)),
+  onUrlReset: (cb) => ipcRenderer.on('url-reset', () => cb()), // #193
   // bookmark manager (#29)
   toggleBmManager: () => ipcRenderer.send('toggle-bm-manager'),
   onBmManager: (cb) => ipcRenderer.on('bm-manager', (_e, open) => cb(open)),
