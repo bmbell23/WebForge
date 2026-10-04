@@ -31,4 +31,20 @@ function outfitUrl(src, name, text) {
   return `${OUTFIT_PAGE}?${q.toString()}`;
 }
 
-module.exports = { OUTFIT_PAGE, canSend, outfitUrl };
+/**
+ * #191: the Studio's from-image form redirects to /approvals#fig-outfit-<name>
+ * once the outfit is queued. Reaching it in the Create Outfit tab means "done":
+ * WebForge takes you back to the page you came from. Pinned by
+ * shared/outfit-done-fixtures.tsv, which the Android test reads too.
+ */
+function isDone(url) {
+  try {
+    const u = new URL(String(url || ''));
+    const page = new URL(OUTFIT_PAGE);
+    return u.origin === page.origin && (u.pathname === '/approvals' || u.pathname.startsWith('/approvals/'));
+  } catch {
+    return false;
+  }
+}
+
+module.exports = { OUTFIT_PAGE, canSend, outfitUrl, isDone };

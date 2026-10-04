@@ -30,3 +30,11 @@ https://www.essex.gov.uk/	0
 https://www.adultswim.com/	0
 https://www.middlesex.edu/	0
 https://www.pornographyresearch.example/	1
+# #191: MuseForge's Studio is adult by host AND port; the rest of dockerhost is not.
+http://100.69.184.113:8005/library/outfit/from-image?src=https%3A%2F%2Fx.com%2Fa.jpg	1
+http://100.69.184.113:8005/approvals#fig-outfit-moto	1
+http://dockerhost.tailb8b575.ts.net:8005/	1
+http://10.0.0.160:8005/	1
+http://100.69.184.113:8001/	0
+http://100.69.184.113:8013/logs	0
+http://100.69.184.113/	0

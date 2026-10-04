@@ -116,6 +116,7 @@ let findOpen = false; // #101
 let loginPromptOpen = false; // #145
 let ytdlpOpen = false; // #156: the download picker holds the window like the login prompt
 let outfitOpen = false; // #179: the MuseForge outfit dialog, same pattern
+let outfitReturn = null; // #191: { tabId, openerId } while a Create Outfit tab is open
 
 let win, chrome, lockView;
 const tabs = new Map(); // id -> WebContentsView
@@ -1198,6 +1199,7 @@ function createTab(url = null, background = false, personaId = null, opts = {}) 
     }
   });
   wc.on('did-navigate', (_e2, navUrl) => {
+    if (outfitReturn && outfitReturn.tabId === id && museforge.isDone(navUrl)) finishOutfit(); // #191
     settleLogin(id, wc, navUrl); // #145: did a submitted login just succeed?
     // Re-home the tab if it navigated into another persona's territory (#25).
     const claimed = personas.forUrl(navUrl);
@@ -1357,6 +1359,7 @@ function closeTab(id, opts = {}) {
   const view = tabs.get(id);
   if (!view) return;
   if (pinnedIds.has(id) && !opts.adult) return; // #9: pinned tabs don't close — unpin first (#176: adult ones do)
+  if (outfitReturn && (id === outfitReturn.tabId || id === outfitReturn.openerId)) outfitReturn = null; // #191
   pinnedIds.delete(id);
   // #57: a close is a fact other devices must learn about — unless we're only
   // applying someone else's close, which must not echo back.
@@ -3092,8 +3095,12 @@ function closeAdultTabs(exceptId = null, why = 'switched tab') {
   if (locked || sweepingAdult) return;
   // The active tab goes LAST: by then every other adult tab is gone, so the
   // neighbour it hands off to can't be a lazy adult tab that loads only to die.
+  // #191: opening or returning to the Create Outfit tab spares the page it came
+  // from (often adult itself), so the Studio can send you back there. Any other
+  // way of leaving still closes both.
+  const spared = outfitReturn && exceptId === outfitReturn.tabId ? outfitReturn.openerId : null;
   const doomed = tabOrder
-    .filter((id) => id !== exceptId && isAdultTab(id))
+    .filter((id) => id !== exceptId && id !== spared && isAdultTab(id))
     .sort((a, b) => (a === activeId) - (b === activeId));
   if (!doomed.length) return;
   sweepingAdult = true; // closing the active tab activates a neighbour, which sweeps again
@@ -3230,8 +3237,28 @@ ipcMain.on('outfit-answer', (_e, a) => {
   activeWc()?.focus();
   if (locked || !a || !a.go) return;
   const url = museforge.outfitUrl(a.src, a.name, a.text);
-  if (url) createTab(url, false);
+  if (!url) return;
+  // #191: remember where you came from. Set BEFORE createTab, because opening
+  // the tab activates it and runs the adult sweep, which must already spare the
+  // opener; createTab takes nextTabId as the new tab's id.
+  outfitReturn = { tabId: nextTabId, openerId: activeId };
+  if (createTab(url, false) !== outfitReturn?.tabId) outfitReturn = null;
 });
+
+// #191: the Create Outfit tab reached the Studio's "queued" page: back to the
+// page you came from. Switching there closes the Studio tab (it is adult); the
+// explicit close is a belt-and-braces for a non-adult Studio address. (If the
+// opener closed first, closeTab already cleared outfitReturn and you stay put.)
+function finishOutfit() {
+  const r = outfitReturn;
+  outfitReturn = null;
+  if (!r) return;
+  setTimeout(() => {
+    if (locked) return;
+    if (tabs.has(r.openerId)) activateTab(r.openerId);
+    if (tabs.has(r.tabId)) closeTab(r.tabId, { adult: true });
+  }, 0);
+}
 
 // The ⤓ button sends the page; the context menu sends the page or a link.
 // #177: for the page you are on, the picker also offers 🖼 Gallery when the

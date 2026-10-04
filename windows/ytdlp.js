@@ -43,13 +43,24 @@ const adultHost = (host) =>
   onList(host, SITES.adult) ||
   (!!host && host.split('.').some((label) => (SITES.adultWords || []).some((w) => label.includes(w))));
 
+// #191: MuseForge's Studio shares 100.69.184.113 with every other app, so it
+// is named by host AND port. A missing port is the scheme's default.
+function originOf(url) {
+  try {
+    const u = new URL(url);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return '';
+    return `${u.hostname.toLowerCase()}:${u.port || (u.protocol === 'https:' ? '443' : '80')}`;
+  } catch { return ''; }
+}
+const adultOrigin = (url) => (SITES.adultOrigins || []).includes(originOf(url));
+
 /** Only real web pages can be sent; the new-tab page, file: and friends can't. */
 const downloadable = (url) => hostOf(url) !== '';
 
 /** What the picker starts with for this page. */
 function defaults(url) {
   const host = hostOf(url);
-  return { adult: adultHost(host), short: onList(host, SITES.short) };
+  return { adult: adultHost(host) || adultOrigin(url), short: onList(host, SITES.short) }; // #191: same rule as isAdult
 }
 
 /**
@@ -70,6 +81,6 @@ function body(url, choice = {}) {
 
 // #176: an adult tab closes the moment you leave it, and never syncs or
 // restores. Same list and matching as the picker's Adult default.
-const isAdult = (url) => adultHost(hostOf(url));
+const isAdult = (url) => adultHost(hostOf(url)) || adultOrigin(url);
 
 module.exports = { ENDPOINT, downloadable, defaults, body, hostOf, isAdult };

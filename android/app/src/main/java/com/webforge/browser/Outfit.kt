@@ -22,6 +22,15 @@ object Outfit {
         s == "http" || s == "https"
     }
 
+    /** #191: the Studio's post-"Make outfit" page, /approvals[/...] on the Studio's own origin. */
+    fun isDone(url: String): Boolean = try {
+        val u = URI(url.trim())
+        val p = URI(PAGE)
+        fun port(x: URI) = if (x.port >= 0) x.port else if (x.scheme?.lowercase() == "https") 443 else 80
+        u.scheme?.lowercase() == p.scheme && u.host?.lowercase() == p.host && port(u) == port(p) &&
+            (u.rawPath == "/approvals" || (u.rawPath ?: "").startsWith("/approvals/"))
+    } catch (e: Exception) { false }
+
     private fun enc(v: String) = URLEncoder.encode(v, "UTF-8")
 
     fun url(src: String?, name: String?, text: String?): String? {
