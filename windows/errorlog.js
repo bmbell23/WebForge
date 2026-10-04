@@ -9,6 +9,13 @@ const { app } = require('electron');
 const file = () => path.join(app.getPath('userData'), 'errors.log');
 const MAX = 40_000; // keep the tail; this is a diagnostic aid, not an archive
 
+// #171: main hands us the server shipper once it exists; until then entries
+// only go to the local file.
+let ship = null;
+function onRecord(fn) {
+  ship = fn;
+}
+
 function record(where, err) {
   const stamp = new Date().toISOString();
   const body = err && err.stack ? err.stack : String(err);
@@ -22,6 +29,11 @@ function record(where, err) {
     fs.writeFileSync(file(), combined);
   } catch {
     // never let logging throw
+  }
+  try {
+    if (ship) ship({ at: stamp, where, body });
+  } catch {
+    // nor let shipping throw
   }
   try {
     console.error(where, err);
@@ -54,4 +66,4 @@ function clear() {
   } catch {}
 }
 
-module.exports = { record, guard, read, clear };
+module.exports = { record, guard, read, clear, onRecord };

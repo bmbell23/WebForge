@@ -24,6 +24,7 @@ const credentials = require('./credentials');
 const hotkeys = require('./hotkeys');
 const personas = require('./personas'); // #25
 const errorlog = require('./errorlog'); // #75
+const logship = require('./logship'); // #171 — Electron-free, ships errorlog to :8013
 const { ensurePreloadRegistration } = require('./preloadshim'); // #21
 const tabnav = require('./tabnav'); // #113/#114 — unit-tested, Electron-free
 const textrules = require('./textrules'); // #100 — ditto
@@ -3722,6 +3723,7 @@ if (!isPrimaryInstance) {
 
 app.whenReady().then(() => {
   if (!isPrimaryInstance) return; // losing the lock means this process is a no-op
+  setupLogShipping(); // #171: first, so startup errors reach the server too
   applyTheme(getSettings().theme); // #24: before any view paints
   // #73: park any pre-Persona hotkeys in the first real Persona, deterministically.
   const firstReal = personas.all().find((p) => p.id !== personas.UNASSIGNED);
@@ -3752,8 +3754,40 @@ app.on('before-quit', () => {
   clearTimeout(saveSessionTimer);
   clearTimeout(syncTimer);
   saveSessionNow(); // flush any pending debounce
+  clearTimeout(shipTimer);
+  shipper?.flush(); // #171: best effort; whatever doesn't make it is in errors.log
 });
 app.on('window-all-closed', () => app.quit());
+
+// --- #171: errors.log also goes to the sync server ---
+// It used to live only on the PC, so every Windows bug meant reading Settings →
+// Diagnostics back to us. Now each entry lands in data/logs/<device>.log on
+// dockerhost. Sends are debounced, retried on the next flush when they fail,
+// and capped in memory (logship.js); the local file is still written first.
+const LOGS_URL = 'http://100.69.184.113:8013/logs/';
+let shipper = null;
+let shipTimer = null;
+
+function setupLogShipping() {
+  const os = require('os');
+  shipper = logship.create({
+    url: LOGS_URL + logship.deviceName(os.hostname()),
+    version: app.getVersion(),
+    fetch: (...a) => fetch(...a),
+  });
+  errorlog.onRecord((entry) => {
+    shipper.push(entry);
+    clearTimeout(shipTimer);
+    shipTimer = setTimeout(() => shipper.flush(), 2000);
+  });
+  setInterval(() => shipper.flush(), 60 * 1000); // retries what failed
+  const { screen } = require('electron');
+  errorlog.record(
+    'session',
+    `start v${app.getVersion()} electron=${process.versions.electron} ` +
+      `os=${os.release()} displays=${screen.getAllDisplays().length}`
+  );
+}
 
 // #20: a stray throw must never brick the browser in a modal-dialog storm —
 // log it and keep running instead of Electron's default uncaught dialog.
