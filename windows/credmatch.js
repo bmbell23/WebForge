@@ -126,4 +126,29 @@ function bestMatch(entries, url) {
   return top ? top.entry : null;
 }
 
-module.exports = { matchFor, bestMatch, baseDomain, isIpLiteral, TIER, MULTI_SUFFIXES };
+/**
+ * #141: may a login form inside an iframe at `frameUrl` be filled while the
+ * user is looking at `topUrl`?
+ *
+ * Banks and hosted SSO put the whole login form in an iframe (Schwab serves it
+ * from sws-gateway-nr.schwab.com inside client.schwab.com), so autofill has to
+ * reach into frames. But a credential is chosen from the FRAME's own URL, and
+ * the matcher does not care who embeds the frame: evil.com could embed the
+ * real bank login and we would fill it, ready to be clickjacked. So a frame
+ * fills only when it belongs to the same registrable domain as the page the
+ * user actually navigated to.
+ *
+ * Known cost, accepted on purpose: a federated login served from a different
+ * registrable domain (a site embedding login.microsoftonline.com) stays
+ * unfilled. That is the safe direction to be wrong in.
+ */
+function mayFillFrame(topUrl, frameUrl) {
+  const top = parts(topUrl);
+  const frame = parts(frameUrl);
+  if (!top || !frame) return false; // about:blank, data:, junk
+  if (top.host === frame.host) return true; // also covers the top frame itself
+  const topBase = baseDomain(top.host);
+  return !!topBase && topBase === baseDomain(frame.host);
+}
+
+module.exports = { matchFor, bestMatch, baseDomain, isIpLiteral, mayFillFrame, TIER, MULTI_SUFFIXES };

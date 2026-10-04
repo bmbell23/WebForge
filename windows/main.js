@@ -41,7 +41,7 @@ const syncdecide = require('./syncdecide'); // #151 — ditto (nothing never ove
 const repaint = require('./repaint'); // #148 — ditto (when to force a frame)
 const focusring = require('./focusring'); // #131 — ditto (chrome surface vs page view)
 const ytdlp = require('./ytdlp'); // #156 — ditto (what the download button sends)
-const autofillInject = require('./autofill-inject'); // #136
+const autofillFrames = require('./autofillframes'); // #141
 
 // #134: banks and other sites with a "supported browsers" allowlist refuse to
 // let you sign in when the UA says Electron, even though the engine below is
@@ -2390,16 +2390,19 @@ async function tryAutofill(wc, mayFillUsername = true) {
   // #136: was an exact-string origin match, so a login saved for
   // https://www.chase.com could never fill on chase.com or secure.chase.com.
   // credmatch ranks origin > host > registrable domain and refuses unsafe folds.
-  const match = credmatch.bestMatch(credentials.list(), wc.getURL());
-  if (!match) return false;
+  // #141: wc.executeJavaScript only reached the top document, and banks and
+  // hosted SSO (Schwab) put the whole login form in an iframe. autofillframes
+  // runs the filler in each frame with the credential for THAT frame's URL,
+  // and only in frames on the same site as the page you navigated to.
   // The injected filler lives in autofill-inject.js so the DOM harness in
   // scripts/autofill-dom-check.js can run exactly what ships.
-  return wc
-    .executeJavaScript(
-      autofillInject.fillScript(match.username, match.password, mayFillUsername),
-      true
-    )
-    .catch(() => false);
+  let mainFrame;
+  try {
+    mainFrame = wc.mainFrame;
+  } catch {
+    return false;
+  }
+  return autofillFrames.fillFrames(mainFrame, credentials.list(), mayFillUsername).catch(() => false);
 }
 
 async function importPasswordsCsv() {

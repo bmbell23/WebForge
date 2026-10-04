@@ -10,8 +10,15 @@
 // It imports windows/autofill-inject.js directly, so it exercises exactly the
 // code that ships rather than a copy that can drift out of sync.
 const { app, BaseWindow, WebContentsView } = require('electron');
+const http = require('http');
 const path = require('path');
 const { fillScript } = require(path.join(__dirname, '..', 'windows', 'autofill-inject'));
+const { fillFrames } = require(path.join(__dirname, '..', 'windows', 'autofillframes'));
+
+// #141: iframe cases need real, distinct hostnames so the frames are genuinely
+// cross-origin and the same-site rule sees real registrable domains. Every
+// name resolves to a local server; the path picks the page.
+app.commandLine.appendSwitch('host-resolver-rules', 'MAP * 127.0.0.1');
 
 const USER = 'me@example.com';
 // Deliberately hostile: quotes, backslash, backtick and a template-literal
@@ -245,6 +252,72 @@ const CASES = [
   },
 ];
 
+// #141: pages served by the local server below, keyed by path. {PORT} is
+// replaced at serve time. Each case loads `top` and runs fillFrames — the
+// exact frame walk main.js uses — with credentials saved for `saved`.
+const LOGIN = '<form><input type="text" id="u"><input type="password" id="p"></form>';
+const PAGES = {
+  '/login': LOGIN,
+  '/frame-same': `<iframe id="f" src="http://login.bank.test:{PORT}/login"></iframe>`,
+  '/frame-nested': `<iframe src="http://app.bank.test:{PORT}/frame-inner"></iframe>`,
+  '/frame-inner': `<iframe src="http://login.bank.test:{PORT}/login"></iframe>`,
+  '/frame-via-ad': `<iframe src="http://ads.evil.test:{PORT}/frame-inner"></iframe>`,
+  '/plain': LOGIN,
+};
+// Read the password field of whichever frame has the login form.
+const readFrames = (wc) =>
+  wc.mainFrame.framesInSubtree
+    .map((f) => f.executeJavaScript(`(document.getElementById('p') || {}).value || ''`))
+    .reduce(async (acc, p) => (await acc) + (await p), Promise.resolve(''));
+const FRAME_CASES = [
+  {
+    name: '#141: a login form in a same-site cross-origin iframe fills (Schwab)',
+    top: 'http://www.bank.test:{PORT}/frame-same',
+    saved: 'http://www.bank.test',
+    expect: 'filled',
+    password: PASS,
+  },
+  {
+    name: '#141: a login nested two same-site iframes deep fills',
+    top: 'http://www.bank.test:{PORT}/frame-nested',
+    saved: 'http://login.bank.test',
+    expect: 'filled',
+    password: PASS,
+  },
+  {
+    name: '#141: a third-party page embedding the bank login does NOT fill',
+    top: 'http://evil.test:{PORT}/frame-same',
+    saved: 'http://www.bank.test',
+    expect: false,
+    password: '',
+  },
+  {
+    name: '#141: a bank login nested under a third-party ad frame does NOT fill',
+    top: 'http://www.bank.test:{PORT}/frame-via-ad',
+    saved: 'http://www.bank.test',
+    expect: false,
+    password: '',
+  },
+  {
+    name: '#141: a top-level login still fills through the frame walk',
+    top: 'http://www.bank.test:{PORT}/plain',
+    saved: 'http://www.bank.test',
+    expect: 'filled',
+    password: PASS,
+  },
+];
+
+function serve() {
+  return new Promise((resolve) => {
+    const server = http.createServer((req, res) => {
+      const body = PAGES[req.url.split('?')[0]];
+      res.writeHead(body ? 200 : 404, { 'content-type': 'text/html; charset=utf-8' });
+      res.end(body ? `<!doctype html><body>${body.replace(/\{PORT\}/g, server.address().port)}` : '');
+    });
+    server.listen(0, '127.0.0.1', () => resolve(server));
+  });
+}
+
 app.on('window-all-closed', () => app.quit());
 
 app.whenReady().then(async () => {
@@ -275,6 +348,27 @@ app.whenReady().then(async () => {
       console.log(`  FAIL  ${c.name}\n        ${detail}`);
     }
   }
+  const server = await serve();
+  const port = server.address().port;
+  for (const c of FRAME_CASES) {
+    await wc.loadURL(c.top.replace('{PORT}', port));
+    // did-finish-load on the top page waits for its iframes, but give nested
+    // frames a beat to attach their documents.
+    await new Promise((r) => setTimeout(r, 300));
+    const store = [{ origin: c.saved, username: USER, password: PASS, id: 'x' }];
+    const got = await fillFrames(wc.mainFrame, store, false);
+    const seen = await readFrames(wc);
+    const ok = got === c.expect && seen === c.password;
+    if (ok) {
+      pass++;
+      console.log(`  ok  ${c.name}`);
+    } else {
+      fail++;
+      console.log(`  FAIL  ${c.name}\n        returned ${JSON.stringify(got)}, password ${JSON.stringify(seen)}`);
+    }
+  }
+  server.close();
+
   console.log(`\n${pass} passed, ${fail} failed`);
   win.destroy();
   app.exit(fail ? 1 : 0);

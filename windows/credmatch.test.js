@@ -1,6 +1,6 @@
 // #136 tests:  node windows/credmatch.test.js
 const assert = require('assert');
-const { matchFor, bestMatch, baseDomain } = require('./credmatch');
+const { matchFor, bestMatch, baseDomain, mayFillFrame } = require('./credmatch');
 
 let run = 0;
 const test = (name, fn) => {
@@ -137,6 +137,44 @@ test('a non-web page URL matches nothing', () => {
 test('a missing or non-array store does not throw', () => {
   for (const store of [null, undefined, {}, 'nope']) {
     assert.deepStrictEqual(matchFor(store, 'https://example.com/'), []);
+  }
+});
+
+console.log('#141: which iframes may be filled');
+
+test('Schwab: a schwab.com login frame inside client.schwab.com may fill', () => {
+  assert.strictEqual(
+    mayFillFrame(
+      'https://client.schwab.com/Areas/Access/Login',
+      'https://sws-gateway-nr.schwab.com/ui/host/?clientid=schwab-secondary'
+    ),
+    true
+  );
+});
+
+test('the top frame itself always may fill', () => {
+  assert.strictEqual(mayFillFrame('https://example.com/login', 'https://example.com/login'), true);
+  assert.strictEqual(mayFillFrame('http://intranet/login', 'http://intranet/other'), true); // single-label host
+});
+
+test('a third-party page embedding a bank login frame may NOT fill it', () => {
+  assert.strictEqual(mayFillFrame('https://evil.com/', 'https://sws-gateway-nr.schwab.com/ui/host/'), false);
+  assert.strictEqual(mayFillFrame('https://schwab.com.evil.tld/', 'https://login.schwab.com/'), false);
+});
+
+test('two sites under a shared suffix do not count as the same site', () => {
+  assert.strictEqual(mayFillFrame('https://hsbc.co.uk/', 'https://login.barclays.co.uk/'), false);
+  assert.strictEqual(mayFillFrame('https://www.barclays.co.uk/', 'https://login.barclays.co.uk/'), true);
+});
+
+test('IP-literal and single-label tops only allow the exact same host', () => {
+  assert.strictEqual(mayFillFrame('http://10.0.0.5/', 'http://10.0.0.6/login'), false);
+  assert.strictEqual(mayFillFrame('http://localhost:3000/', 'http://localhost:4000/login'), true);
+});
+
+test('about:blank, data: and missing frame URLs never fill', () => {
+  for (const url of ['about:blank', 'data:text/html,<input type=password>', '', null, undefined]) {
+    assert.strictEqual(mayFillFrame('https://example.com/', url), false, String(url));
   }
 });
 
