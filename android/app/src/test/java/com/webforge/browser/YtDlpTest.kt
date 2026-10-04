@@ -33,6 +33,18 @@ class YtDlpTest {
     }
 
     @Test
+    fun adult_tabs_match_the_shared_fixture() { // #176
+        var rows = 0
+        for (line in shared("adult-fixtures.tsv").readLines()) {
+            if (line.isBlank() || line.startsWith("#")) continue
+            val p = line.split("\t")
+            assertEquals("fixture: $line", p[1] == "1", YtDlp.isAdult(sites, p[0]))
+            rows++
+        }
+        assertTrue("only $rows fixtures read", rows >= 12)
+    }
+
+    @Test
     fun reads_the_shared_site_list() {
         assertEquals("http://100.69.184.113:8001/api/download/ytdlp", sites.endpoint)
         assertTrue(sites.adult.contains("youporn.com"))

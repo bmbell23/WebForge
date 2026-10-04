@@ -1,0 +1,17 @@
+# #176: which URLs are adult tabs (close when you leave them, never sync or restore).
+# Read by windows/ytdlp.test.js AND android YtDlpTest.kt, so the platforms cannot drift.
+# url	adult (1/0)
+https://www.youporn.com/watch/123/x/	1
+https://youporn.com/	1
+https://de.pornhub.com/view_video.php?viewkey=1	1
+https://www.redtube.com/123	1
+https://www.hqgals.com/gallery/abc	1
+https://hqgals.com/	1
+https://www.redgifs.com/watch/abc	1
+https://www.youtube.com/watch?v=abc	0
+https://notpornhub.com/	0
+https://pornhub.com.evil.example/	0
+http://100.69.184.113:8001/	0
+file:///C:/WebForge/shared/newtab.html	0
+about:blank	0
+	0

@@ -44,10 +44,12 @@ object YtDlp {
 
     /** Staged into assets from shared/ by the APK build, like newtab.html. */
     fun sites(ctx: Context): Sites = cached ?: try {
-        parse(ctx.assets.open("ytdlp-sites.json").bufferedReader().use { it.readText() })
+        parse(ctx.assets.open("ytdlp-sites.json").bufferedReader().use { it.readText() }).also { cached = it }
     } catch (e: Exception) {
+        // #176: not cached, so one failed read can't switch adult-tab closing
+        // off for the rest of the process.
         Sites("", emptyList(), emptyList())
-    }.also { cached = it }
+    }
 
     fun hostOf(url: String): String = try {
         val u = URI(url.trim())
@@ -60,6 +62,9 @@ object YtDlp {
         host.isNotEmpty() && list.any { host == it || host.endsWith(".$it") }
 
     fun downloadable(url: String) = hostOf(url).isNotEmpty()
+
+    /** #176: an adult tab closes the moment you leave it, and never syncs or restores. */
+    fun isAdult(sites: Sites, url: String) = onList(hostOf(url), sites.adult)
 
     /** What the picker starts with: (adult, short). */
     fun defaults(sites: Sites, url: String): Pair<Boolean, Boolean> {
