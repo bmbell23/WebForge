@@ -2985,6 +2985,13 @@ ipcMain.on('navigate', (_e, input) => {
 ipcMain.on('go-back', () => activeWc()?.navigationHistory.goBack());
 ipcMain.on('go-forward', () => activeWc()?.navigationHistory.goForward());
 ipcMain.on('reload', () => activeWc()?.reload());
+// #174: home takes the CURRENT tab to the home page, so Back returns you to
+// where you were. Windows home is the new-tab page; Android's is the Dashboard.
+ipcMain.on('go-home', () => {
+  const wc = activeWc();
+  if (wc) wc.loadURL(newTabUrl());
+  else openNewTab();
+});
 // #101: find bar — the UI lives in the chrome renderer, the search runs here.
 ipcMain.on('find-run', (_e, { text, forward, again }) => runFind(String(text || ''), { forward, again }));
 ipcMain.on('find-close', () => closeFind());
