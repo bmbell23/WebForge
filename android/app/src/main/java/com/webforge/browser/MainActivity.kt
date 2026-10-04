@@ -408,19 +408,12 @@ class MainActivity : Activity() {
             // updates System WebView underneath us.
             userAgentString = UserAgent.clean(userAgentString)
         }
-        // #181: long-press an image → Create Outfit (plus open / copy). A bare
-        // <img> carries its src in the hit result; one inside a link needs
-        // requestFocusNodeHref, whose "src" is the image rather than the href.
-        // Anything else returns false and keeps the WebView's own behavior.
+        // #181/#186: the image menu opens from pageSwipe's onLongPress, which
+        // pages can't cancel. Here we only keep the WebView from starting a
+        // text selection on an image; anything else keeps its own behavior.
         wv.setOnLongClickListener {
-            val r = wv.hitTestResult
-            when (r.type) {
-                WebView.HitTestResult.IMAGE_TYPE -> { showImageMenu(r.extra); true }
-                WebView.HitTestResult.SRC_IMAGE_ANCHOR_TYPE -> {
-                    val h = android.os.Handler(mainLooper) { m -> showImageMenu(m.data.getString("src")); true }
-                    wv.requestFocusNodeHref(h.obtainMessage())
-                    true
-                }
+            when (wv.hitTestResult.type) {
+                WebView.HitTestResult.IMAGE_TYPE, WebView.HitTestResult.SRC_IMAGE_ANCHOR_TYPE -> true
                 else -> false
             }
         }
@@ -792,6 +785,19 @@ class MainActivity : Activity() {
                     return true
                 }
                 return false
+            }
+
+            // #186: long-press an image → Create Outfit / open / copy. Seen here,
+            // before the page, so a site that cancels `contextmenu` can't hide it.
+            override fun onLongPress(e: android.view.MotionEvent) {
+                val wv = active?.webView ?: return
+                val at = IntArray(2).also { wv.getLocationOnScreen(it) }
+                val x = e.rawX - at[0]
+                val y = e.rawY - at[1]
+                if (x < 0 || y < 0 || x > wv.width || y > wv.height) return // top bar, not the page
+                wv.evaluateJavascript(ImageAt.script(x, y)) { json ->
+                    ImageAt.parse(json)?.let { if (Outfit.canSend(it)) showImageMenu(it) }
+                }
             }
         })
     }
