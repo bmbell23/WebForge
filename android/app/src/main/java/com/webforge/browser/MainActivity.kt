@@ -766,6 +766,21 @@ class MainActivity : Activity() {
         } finally {
             sweepingAdult = false
         }
+        dropAdultAddress() // #193
+    }
+
+    // #193: an adult address must not outlive its tab in the bar. syncChrome
+    // leaves the bar alone while it has focus, so a tapped or typed adult
+    // address stayed after the tab closed; drop focus and re-sync instead.
+    private fun dropAdultAddress() {
+        val typed = urlBar.text.toString().trim()
+        if (YtDlp.isAdult(YtDlp.sites(this), if ("://" in typed) typed else "https://$typed")) {
+            urlBar.clearFocus()
+            urlEditing = false
+            hideKeyboard()
+            urlBar.setText("")
+        }
+        syncChrome()
     }
 
     private fun closeTab(index: Int, remote: Boolean = false, adult: Boolean = false) {
@@ -2158,6 +2173,7 @@ class MainActivity : Activity() {
         // #155: pages run only while the app is in front.
         active?.webView?.let { it.resumeTimers(); it.onResume() }
         StallLog.start()
+        dropAdultAddress() // #193: whatever the bar held when we left, it shows the tab you are on now
         UpdateManager(this).checkForUpdate()
         sweepStaleTabs() // #79: catch up after the app has been away
         // #84: the app only pulled at launch, so bookmarks edited on the PC
