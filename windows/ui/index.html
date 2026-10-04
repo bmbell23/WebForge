@@ -739,6 +739,29 @@
   }
   #ytdlp .seg button.on, #ytdlp #ytdlpgo { background: var(--accent); color: #fff; font-weight: 600; }
   #dlbtn.busy { opacity: 0.6; }
+  /* #179: "Create outfit in MuseForge…", another sibling of #loginprompt. */
+  #outfit {
+    position: absolute; inset: 0; display: none; place-items: center;
+    background: rgba(0, 0, 0, 0.45); z-index: 35;
+  }
+  #outfit.open { display: grid; }
+  #outfit .card {
+    width: min(440px, 90vw); padding: 18px; border-radius: 12px;
+    background: var(--bg); box-shadow: 0 10px 40px rgba(0, 0, 0, 0.45);
+    display: flex; flex-direction: column; gap: 10px; font-size: 13px;
+  }
+  #outfit .msg { font-size: 15px; font-weight: 600; }
+  #outfit img { max-height: 160px; max-width: 100%; align-self: center; border-radius: 8px; }
+  #outfit input {
+    height: 32px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--surface);
+    background: var(--surface); color: var(--text); font-size: 13px;
+  }
+  #outfit .row { display: flex; gap: 8px; }
+  #outfit button {
+    flex: 1; height: 32px; border: none; border-radius: 8px;
+    background: var(--surface); color: var(--text); font-size: 13px; cursor: pointer;
+  }
+  #outfit #outfitgo { background: var(--accent); color: #fff; font-weight: 600; }
 </style>
 </head>
 <body>
@@ -793,6 +816,20 @@
       <div class="row">
         <button id="ytdlpgo">Download</button>
         <button id="ytdlpno" class="dismiss">Cancel</button>
+      </div>
+    </div>
+  </div>
+  <!-- #179: name + description for MuseForge's outfit-from-image page. Both
+       optional; the Studio page lets you fix them and confirms before spending. -->
+  <div id="outfit">
+    <div class="card">
+      <div class="msg">Create outfit in MuseForge</div>
+      <img id="outfitimg" alt="">
+      <input id="outfitname" type="text" placeholder="Name (e.g. moto jacket)" spellcheck="false">
+      <input id="outfittext" type="text" placeholder="Description (e.g. black leather moto jacket over a white crop top)">
+      <div class="row">
+        <button id="outfitgo">Open in Studio</button>
+        <button id="outfitno" class="dismiss">Cancel</button>
       </div>
     </div>
   </div>
@@ -2077,6 +2114,39 @@
       btn.classList.toggle('busy', pending > 0);
       btn.textContent = pending > 0 ? '⏳' : '⤓';
       btn.title = s.message || 'Send this page to yt-dlp';
+    });
+  })();
+
+  // --- #179: Create outfit in MuseForge ---
+  // Enter opens the Studio page, Esc cancels. Always answers, so main lowers
+  // chrome again whichever way the dialog closes.
+  (() => {
+    const box = document.getElementById('outfit');
+    const img = document.getElementById('outfitimg');
+    const name = document.getElementById('outfitname');
+    const text = document.getElementById('outfittext');
+    let current = null;
+    const answer = (go) => {
+      if (!current) return;
+      webforge.outfitAnswer({ go, src: current.src, name: name.value, text: text.value });
+      current = null;
+      box.classList.remove('open');
+      img.removeAttribute('src');
+    };
+    document.getElementById('outfitgo').onclick = () => answer(true);
+    document.getElementById('outfitno').onclick = () => answer(false);
+    document.addEventListener('keydown', (e) => {
+      if (!current) return;
+      if (e.key === 'Escape') answer(false);
+      else if (e.key === 'Enter') answer(true);
+    });
+    webforge.onOutfitPrompt((p) => {
+      current = p;
+      name.value = '';
+      text.value = '';
+      img.src = p.src;
+      box.classList.add('open');
+      name.focus();
     });
   })();
 
