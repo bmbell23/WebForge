@@ -125,6 +125,7 @@ class MainActivity : Activity() {
         tabsBtn.setOnClickListener { showTabSheet() }
         findViewById<TextView>(R.id.bookmarksBtn).setOnClickListener { showBookmarks() } // #87
         findViewById<TextView>(R.id.dlBtn).setOnClickListener { showYtdlpPicker() } // #156
+        findViewById<TextView>(R.id.homeBtn).setOnClickListener { navigate(newTabUrl()) } // #174
         wireFindBar() // #101
 
         newTab(newTabUrl())

@@ -753,6 +753,7 @@
     <button id="back" title="Back">←</button>
     <button id="forward" title="Forward">→</button>
     <button id="reloadstop" title="Reload">⟳</button>
+    <button id="home" title="Home">⌂</button>
     <input id="url" type="text" spellcheck="false"
            placeholder="Search or enter address">
     <!-- #126/#127: quick boxes. The Jira one resolves through the shared text
@@ -940,6 +941,7 @@
   back.onclick = () => webforge.goBack();
   forward.onclick = () => webforge.goForward();
   reloadstop.onclick = () => (activeLoading ? webforge.stop() : webforge.reload());
+  document.getElementById('home').onclick = () => webforge.goHome(); // #174
   url.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') { urlEditing = false; webforge.navigate(url.value); url.blur(); }
   });
