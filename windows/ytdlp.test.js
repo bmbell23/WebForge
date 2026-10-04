@@ -36,6 +36,16 @@ ok(!y.downloadable('file:///C:/x/newtab.html'), 'not the new-tab page');
 ok(!y.downloadable('about:blank'), 'not about:blank');
 ok(!y.downloadable(''), 'not nothing');
 
+console.log('#176: adult tabs (shared fixture)');
+let adultRows = 0;
+for (const line of fs.readFileSync(path.join(__dirname, '..', 'shared', 'adult-fixtures.tsv'), 'utf8').split('\n')) {
+  if (!line.trim() || line.startsWith('#')) continue;
+  const [url, want] = line.split('\t');
+  ok(y.isAdult(url) === (want === '1'), `isAdult(${JSON.stringify(url)}) should be ${want === '1'}`);
+  adultRows++;
+}
+ok(adultRows >= 12, `only ${adultRows} adult fixtures read`);
+
 console.log('the endpoint is the Dashboard');
 ok(y.ENDPOINT === 'http://100.69.184.113:8001/api/download/ytdlp', `endpoint ${y.ENDPOINT}`);
 

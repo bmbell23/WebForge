@@ -568,12 +568,39 @@ class MainActivity : Activity() {
             )
         )
         syncChrome()
+        closeAdultTabs(tabs[index], "switched tab") // #176: leaving an adult tab closes it
     }
 
-    private fun closeTab(index: Int, remote: Boolean = false) {
+    // --- #176: adult tabs close the moment you leave them ---
+    // Brandon: "We can never leave an adult tab open when navigating away from it."
+    // Leaving = activating any other tab (tab sheet, new tab, Back to the opener)
+    // or the app pausing (home, recents, screen off, another app). Downloads run
+    // on the Dashboard, so closing the tab never stops one. Same list and
+    // matching as Windows (YtDlp.isAdult, pinned by shared/adult-fixtures.tsv).
+    private var sweepingAdult = false
+
+    private fun isAdultTab(t: Tab) = YtDlp.isAdult(YtDlp.sites(this), t.url)
+
+    private fun closeAdultTabs(except: Tab?, @Suppress("UNUSED_PARAMETER") why: String) {
+        if (sweepingAdult) return
+        // The active tab goes LAST: by then every other adult tab is gone, so the
+        // neighbour it hands off to can't be an unloaded adult tab that loads only to die.
+        val current = active
+        val doomed = tabs.filter { it !== except && isAdultTab(it) }.sortedBy { it === current }
+        if (doomed.isEmpty()) return
+        sweepingAdult = true // closing the active tab activates a neighbour, which sweeps again
+        try {
+            for (t in doomed) tabs.indexOf(t).takeIf { it >= 0 }?.let { closeTab(it, adult = true) }
+        } finally {
+            sweepingAdult = false
+        }
+    }
+
+    private fun closeTab(index: Int, remote: Boolean = false, adult: Boolean = false) {
         val tab = tabs.getOrNull(index) ?: return
-        if (tab.pinned) return
-        if (!remote) TabSync.recordClose(tab.url) // #57: tell the other devices
+        if (tab.pinned && !adult) return // #176: adult tabs close even when pinned
+        // #57: tell the other devices. #176: adult tabs were never shared, so no tombstone.
+        if (!remote && !adult) TabSync.recordClose(tab.url)
         // #79: only follow the close if it was the tab you were ON. This
         // unconditionally re-activated, so closing a background tab (or the
         // idle sweep closing several) yanked you to a different page.
@@ -602,6 +629,7 @@ class MainActivity : Activity() {
         for (t in tabs) {
             val u = t.url
             if (u.isBlank() || u == "about:blank" || isNewTabUrl(u)) continue // #121
+            if (isAdultTab(t)) continue // #176: adult tabs never reach the other device
             local.getOrPut(t.persona) { mutableListOf() }.add(Triple(u, t.title, t.openedAt))
         }
         TabSync.sync(this, local) {
@@ -654,6 +682,7 @@ class MainActivity : Activity() {
             for ((url, info) in open) {
                 val (title, at, dev) = info
                 if (dev == me) continue                  // #95: our own echo
+                if (YtDlp.isAdult(YtDlp.sites(this), url)) continue // #176: an older build may still send one
                 if (TabSync.closedAt(url) > at) continue // closed more recently anywhere
                 // #152: CANONICAL comparison. This line used to be
                 // `tabs.any { it.url == url }` — exact string equality — so the
@@ -1962,6 +1991,7 @@ class MainActivity : Activity() {
 
     override fun onPause() {
         super.onPause()
+        closeAdultTabs(null, "app paused") // #176: before `active` is paused below
         sweepHandler.removeCallbacksAndMessages(null)
         StallLog.stop()
         active?.webView?.let { it.onPause(); it.pauseTimers() } // pauseTimers is app-wide

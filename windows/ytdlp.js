@@ -62,4 +62,8 @@ function body(url, choice = {}) {
   return { url, format, adult, short, kids };
 }
 
-module.exports = { ENDPOINT, downloadable, defaults, body, hostOf };
+// #176: an adult tab closes the moment you leave it, and never syncs or
+// restores. Same list and matching as the picker's Adult default.
+const isAdult = (url) => onList(hostOf(url), SITES.adult);
+
+module.exports = { ENDPOINT, downloadable, defaults, body, hostOf, isAdult };

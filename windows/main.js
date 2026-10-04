@@ -202,8 +202,10 @@ function sortTabOrder() {
 // below, then deleted).
 let saveSessionTimer = null;
 function sessionSnapshot() {
+  // #176: adult tabs are never written to the session, so a restart can't bring one back.
+  const kept = tabOrder.filter((id) => !isAdultTab(id));
   return {
-    tabs: tabOrder
+    tabs: kept
       .map((id) => ({
         url: lazyTabs.get(id)?.url || tabs.get(id).webContents.getURL(),
         title: lazyTabs.get(id)?.title || tabs.get(id).webContents.getTitle(), // #78
@@ -214,7 +216,7 @@ function sessionSnapshot() {
         lastActiveAt: lastActiveAt.get(id) || Date.now(), // #79
       }))
       .filter((t) => t.url),
-    active: Math.max(0, tabOrder.indexOf(activeId)),
+    active: Math.max(0, kept.indexOf(activeId)),
   };
 }
 function saveSessionSoon() {
@@ -1220,7 +1222,13 @@ function createTab(url = null, background = false, personaId = null, opts = {}) 
   // #133: a full context menu, assembled from what was actually right-clicked.
   wc.on('context-menu', (_e2, params) => {
     if (locked) return;
-    Menu.buildFromTemplate(contextMenuFor(wc, params)).popup({ window: win });
+    contextMenuOpen = true; // #176: a right-click menu isn't leaving the tab
+    Menu.buildFromTemplate(contextMenuFor(wc, params)).popup({
+      window: win,
+      callback: () => {
+        contextMenuOpen = false;
+      },
+    });
   });
   wireLoadFailures(wc); // #108 — also applied to popups by #111
   // #12, reworked in #136. One shot at did-finish-load filled almost nothing in
@@ -1311,6 +1319,10 @@ function activateTab(id, opts = {}) {
   if (!opts.cycling && leaving !== null && leaving !== id && tabs.has(leaving) && isUnusedNewTab(leaving)) {
     closeTab(leaving);
   }
+  // #176: and any adult tab other than the one now in front, cycling or not.
+  // nextInOrder/mostRecent resolve from activeId, so the shorter list can't
+  // throw the next Ctrl+Tab off the way #114's index walk did.
+  closeAdultTabs(id);
   pushState();
   // #118: the flicker signature is two activations in quick succession — the
   // view genuinely bouncing between tabs rather than merely repainting. Log only
@@ -1338,7 +1350,8 @@ function activateTab(id, opts = {}) {
 function closeTab(id, opts = {}) {
   const view = tabs.get(id);
   if (!view) return;
-  if (pinnedIds.has(id)) return; // #9: pinned tabs don't close — unpin first
+  if (pinnedIds.has(id) && !opts.adult) return; // #9: pinned tabs don't close — unpin first (#176: adult ones do)
+  pinnedIds.delete(id);
   // #57: a close is a fact other devices must learn about — unless we're only
   // applying someone else's close, which must not echo back.
   if (!opts.remote) {
@@ -1828,6 +1841,17 @@ function createWindow() {
   });
   wireLeaderShortcut(); // #41
   win.on('blur', () => closeStrayNewTabs()); // #82: Alt+Tab away disposes of it
+  // #176: leaving the window closes every adult tab — alt-tab, clicking another
+  // app, minimize, hide. Blur is re-checked after a beat so a focus hop that
+  // never really left the window (a native menu, a dialog of ours) doesn't count.
+  win.on('blur', () => {
+    clearTimeout(adultBlurTimer);
+    adultBlurTimer = setTimeout(() => {
+      if (win && !win.isDestroyed() && !win.isFocused() && !contextMenuOpen) closeAdultTabs(null, 'window blur');
+    }, 250);
+  });
+  win.on('minimize', () => closeAdultTabs(null, 'minimize'));
+  win.on('hide', () => closeAdultTabs(null, 'hide'));
 
   chrome = new WebContentsView({
     webPreferences: { preload: path.join(__dirname, 'preload.js') },
@@ -2030,7 +2054,9 @@ function tabUrlOf(id) {
 }
 
 function shareable(url) {
-  return Boolean(url) && !isNewTabUrl(url) && !isInternalUrl(url);
+  // #176: adult tabs never reach the other device, the close tombstones, or
+  // Ctrl+Shift+T — every path that remembers a tab goes through here.
+  return Boolean(url) && !isNewTabUrl(url) && !isInternalUrl(url) && !ytdlp.isAdult(url);
 }
 
 function localTabPayload() {
@@ -2104,6 +2130,7 @@ function applyRemoteTabState(merged) {
     for (const [url, info] of Object.entries(block.open || {})) {
       if ((closedAnywhere.get(url) || 0) > info.at) continue;
       if (info.dev === deviceId()) continue; // our own echo
+      if (ytdlp.isAdult(url)) continue; // #176: an older build on the other device may still send one
       if (findTabByUrl(url) !== null) continue;
       // #96: our own URL rules decide where it lands; the publisher's Persona
       // id is only the fallback, and only if we recognize it at all.
@@ -3042,6 +3069,37 @@ ipcMain.handle('int:delete-persona', (_e, id) => {
   pushState();
   return ok;
 });
+// --- #176: adult tabs close the moment you leave them ---
+// Brandon: "We can never leave an adult tab open when navigating away from it."
+// Leaving = activating any other tab (click, Ctrl+Tab, hotkey, Persona, new
+// tab) or the window losing focus, minimizing or hiding. Downloads are sent to
+// the Dashboard and run there, so closing the tab never stops one.
+let contextMenuOpen = false;
+let adultBlurTimer = null;
+let sweepingAdult = false;
+
+function isAdultTab(id) {
+  return ytdlp.isAdult(tabUrlOf(id));
+}
+
+function closeAdultTabs(exceptId = null, why = 'switched tab') {
+  if (locked || sweepingAdult) return;
+  // The active tab goes LAST: by then every other adult tab is gone, so the
+  // neighbour it hands off to can't be a lazy adult tab that loads only to die.
+  const doomed = tabOrder
+    .filter((id) => id !== exceptId && isAdultTab(id))
+    .sort((a, b) => (a === activeId) - (b === activeId));
+  if (!doomed.length) return;
+  sweepingAdult = true; // closing the active tab activates a neighbour, which sweeps again
+  try {
+    for (const id of doomed) if (tabs.has(id)) closeTab(id, { adult: true });
+  } finally {
+    sweepingAdult = false;
+  }
+  // Adult closes show up as a count, not URLs.
+  errorlog.record('adult-close', `${doomed.length} tab(s) closed: ${why}`);
+}
+
 // #82: a new tab is scratch space — it exists only while you're on it. Any
 // tab still showing the new-tab page hasn't been used (typing a URL navigates
 // it, so it stops qualifying), and leaving it means you didn't want it.
