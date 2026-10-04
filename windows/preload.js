@@ -84,6 +84,8 @@ contextBridge.exposeInMainWorld('webforge', {
   ytdlpOpen: () => ipcRenderer.send('ytdlp-open'),
   ytdlpAnswer: (a) => ipcRenderer.send('ytdlp-answer', a),
   onYtdlpPicker: (cb) => ipcRenderer.on('ytdlp-picker', (_e, p) => cb(p)),
+  onOutfitPrompt: (cb) => ipcRenderer.on('outfit-prompt', (_e, p) => cb(p)), // #179
+  outfitAnswer: (a) => ipcRenderer.send('outfit-answer', a),
   onYtdlpStatus: (cb) => ipcRenderer.on('ytdlp-status', (_e, s) => cb(s)),
   // bookmark manager (#29)
   toggleBmManager: () => ipcRenderer.send('toggle-bm-manager'),

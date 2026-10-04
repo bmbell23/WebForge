@@ -40,6 +40,7 @@ const modifier = require('./modifier'); // #150 — ditto (Ctrl on Windows, ⌘ 
 const syncdecide = require('./syncdecide'); // #151 — ditto (nothing never overwrites something)
 const repaint = require('./repaint'); // #148 — ditto (when to force a frame)
 const focusring = require('./focusring'); // #131 — ditto (chrome surface vs page view)
+const museforge = require('./museforge'); // #179 — Electron-free (the Studio's outfit-from-image address)
 const ytdlp = require('./ytdlp'); // #156 — ditto (what the download button sends)
 const autofillFrames = require('./autofillframes'); // #141
 
@@ -113,6 +114,7 @@ let pwPanelOpen = false; // #26 — shares the right-panel slot with bookmarks
 let findOpen = false; // #101
 let loginPromptOpen = false; // #145
 let ytdlpOpen = false; // #156: the download picker holds the window like the login prompt
+let outfitOpen = false; // #179: the MuseForge outfit dialog, same pattern
 
 let win, chrome, lockView;
 const tabs = new Map(); // id -> WebContentsView
@@ -471,7 +473,7 @@ function layout() {
     // settings) is open — then chrome needs the full window to show it.
     view?.setBounds({ x: 0, y: 0, width, height });
     chrome.setBounds(
-      bmDialogOpen || settingsOpen || managerOpen || bmPanelOpen || pwPanelOpen || loginPromptOpen || ytdlpOpen
+      bmDialogOpen || settingsOpen || managerOpen || bmPanelOpen || pwPanelOpen || loginPromptOpen || ytdlpOpen || outfitOpen
         ? { x: 0, y: 0, width, height }
         : fsRegionBounds()
     );
@@ -771,7 +773,7 @@ function openBookmarkDialog(prefill) {
 function closeBookmarkDialog() {
   if (!bmDialogOpen) return;
   bmDialogOpen = false;
-  if (!settingsOpen && !managerOpen && !ytdlpOpen) setChromeRaised(false);
+  if (!settingsOpen && !managerOpen && !ytdlpOpen && !outfitOpen) setChromeRaised(false);
   chrome.webContents.send('bm-edit', null);
   layout(); // #32: re-collapse chrome if we're fullscreen
   activeWc()?.focus();
@@ -999,6 +1001,7 @@ function contextMenuFor(wc, params) {
     'page.inspect': () => wc.inspectElement(params.x, params.y),
     'page.ytdlp': () => openYtdlpPicker(wc.getURL(), wc.getTitle()), // #156
     'link.ytdlp': () => openYtdlpPicker(params.linkURL, String(params.linkText || '').trim()), // #156
+    'image.outfit': () => openOutfitDialog(params.srcURL), // #179
   };
 
   const items = ctxmenu.build(params, {
@@ -1008,6 +1011,7 @@ function contextMenuFor(wc, params) {
     canGoForward: nav.canGoForward(),
     pageYtdlp: ytdlp.downloadable(wc.getURL()), // #156
     linkYtdlp: ytdlp.downloadable(params.linkURL || ''),
+    imageOutfit: museforge.canSend(params.srcURL), // #179
   });
 
   return items.map((item) =>
@@ -1288,7 +1292,7 @@ function activateTab(id, opts = {}) {
   // z-order. Now the active view is always raised above the other PAGE views,
   // and chrome is put back on top afterwards when it is meant to be showing —
   // which preserves #32's fix rather than trading one for the other.
-  const chromeOnTop = fsRevealed || bmDialogOpen || settingsOpen || managerOpen || loginPromptOpen || ytdlpOpen; // #145/#156
+  const chromeOnTop = fsRevealed || bmDialogOpen || settingsOpen || managerOpen || loginPromptOpen || ytdlpOpen || outfitOpen; // #145/#156/#179
   win.contentView.addChildView(view);
   if (chromeOnTop) win.contentView.addChildView(chrome);
   // #148: boundsChangedFor runs layout() and reports whether the geometry moved.
@@ -2370,7 +2374,7 @@ function offerToSave(id, held) {
 ipcMain.on('login-prompt-answer', (_e, answer) => {
   // Put the window back the way it was first, whatever the answer is.
   loginPromptOpen = false;
-  if (!bmDialogOpen && !settingsOpen && !managerOpen && !ytdlpOpen) setChromeRaised(false);
+  if (!bmDialogOpen && !settingsOpen && !managerOpen && !ytdlpOpen && !outfitOpen) setChromeRaised(false);
   layout();
   activeWc()?.focus();
   if (locked || !answer || !answer.accepted) return;
@@ -2442,6 +2446,7 @@ function showLock() {
   pendingLogin.clear();
   loginPromptOpen = false;
   ytdlpOpen = false; // #156
+  outfitOpen = false; // #179
   vault.lock();
   // Tear the whole session down — nothing sensitive stays rendered or mapped.
   for (const id of [...tabOrder]) {
@@ -3140,6 +3145,30 @@ ipcMain.on('ytdlp-open', () => {
   openYtdlpPicker(wc?.getURL() || '', wc?.getTitle() || '');
 });
 
+// --- #179: "Create outfit in MuseForge…" ---
+// Asks for an optional name and description in the chrome UI (Electron has no
+// prompt()), then opens the Studio's from-image page in a new tab. The Studio
+// confirms and spends; we only build the address.
+function openOutfitDialog(src) {
+  if (locked || !museforge.canSend(src)) return;
+  outfitOpen = true;
+  clearFsReveal();
+  setChromeRaised(true);
+  layout();
+  chrome?.webContents.send('outfit-prompt', { src });
+  chrome.webContents.focus();
+}
+
+ipcMain.on('outfit-answer', (_e, a) => {
+  outfitOpen = false;
+  if (!bmDialogOpen && !settingsOpen && !managerOpen && !loginPromptOpen && !ytdlpOpen) setChromeRaised(false);
+  layout();
+  activeWc()?.focus();
+  if (locked || !a || !a.go) return;
+  const url = museforge.outfitUrl(a.src, a.name, a.text);
+  if (url) createTab(url, false);
+});
+
 // The ⤓ button sends the page; the context menu sends the page or a link.
 function openYtdlpPicker(url, title) {
   if (locked) return;
@@ -3157,7 +3186,7 @@ function openYtdlpPicker(url, title) {
 
 ipcMain.on('ytdlp-answer', (_e, a) => {
   ytdlpOpen = false;
-  if (!bmDialogOpen && !settingsOpen && !managerOpen && !loginPromptOpen) setChromeRaised(false);
+  if (!bmDialogOpen && !settingsOpen && !managerOpen && !loginPromptOpen && !outfitOpen) setChromeRaised(false);
   layout();
   activeWc()?.focus();
   if (locked || !a || !a.send || !ytdlp.downloadable(a.url)) return;
