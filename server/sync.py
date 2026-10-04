@@ -7,13 +7,19 @@ Stdlib only — no pip, runs straight on the python:alpine image.
                               keeps whatever it's given; clients decide by
                               comparing updatedAt before pushing/pulling)
 
+    POST /logs/<device>    <- {"version": str, "entries": [{"at", "where", "body"}]}
+                              (#171: appended as JSON lines to logs/<device>.log)
+    GET  /logs/<device>?tail=N -> {"lines": [<entry>, ...]}  (last N, default 200)
+
 Exposed only over Tailscale like everything else on dockerhost. v1 syncs
 bookmarks, personas and tabs; credentials would need end-to-end encryption
 first (see ticket).
 """
 import json
 import os
+import re
 import time
+from urllib.parse import parse_qs, urlsplit
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
@@ -64,6 +70,65 @@ def _keep_history(key, dest):
         print(f"history snapshot failed for {key}: {exc}")
 
 
+# #171: the Windows app's errors.log, shipped here so a bug can be read on the
+# server instead of off Brandon's screen. Append-only, one JSON line per entry,
+# and each device's file rotates to .1 past LOG_ROTATE so it cannot fill the disk.
+LOG_DIR = os.path.join(DATA_DIR, "logs")
+LOG_MAX_BODY = 1_000_000
+LOG_ROTATE = 5_000_000
+DEVICE_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+
+def _log_device(path):
+    parts = urlsplit(path).path.strip("/").split("/")
+    if len(parts) == 2 and parts[0] == "logs":
+        return parts[1] if DEVICE_RE.match(parts[1]) else ""
+    return None
+
+
+def append_log(device, body):
+    """Append a batch to logs/<device>.log. Returns the number written."""
+    entries = body.get("entries") if isinstance(body, dict) else None
+    if not isinstance(entries, list):
+        raise ValueError("entries must be a list")
+    version = str(body.get("version") or "")[:40]
+    received = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    os.makedirs(LOG_DIR, exist_ok=True)
+    dest = os.path.join(LOG_DIR, f"{device}.log")
+    if os.path.exists(dest) and os.path.getsize(dest) > LOG_ROTATE:
+        os.replace(dest, dest + ".1")
+    written = 0
+    with open(dest, "a") as fh:
+        for e in entries:
+            if not isinstance(e, dict):
+                continue
+            line = {
+                "at": str(e.get("at") or "")[:40],
+                "received": received,
+                "version": version,
+                "where": str(e.get("where") or "")[:200],
+                "body": str(e.get("body") or ""),
+            }
+            fh.write(json.dumps(line) + "\n")
+            written += 1
+    return written
+
+
+def tail_log(device, n):
+    dest = os.path.join(LOG_DIR, f"{device}.log")
+    if not os.path.exists(dest):
+        return []
+    with open(dest) as fh:
+        lines = fh.readlines()[-n:]
+    out = []
+    for raw in lines:
+        try:
+            out.append(json.loads(raw))
+        except ValueError:
+            pass
+    return out
+
+
 class Handler(BaseHTTPRequestHandler):
     def _key(self):
         parts = self.path.strip("/").split("/")
@@ -82,6 +147,16 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/health":
             return self._send(200, {"status": "ok"})
+        device = _log_device(self.path)
+        if device is not None:
+            if not device:
+                return self._send(400, {"error": "bad device"})
+            q = parse_qs(urlsplit(self.path).query)
+            try:
+                n = max(1, min(int((q.get("tail") or ["200"])[0]), 5000))
+            except ValueError:
+                n = 200
+            return self._send(200, {"lines": tail_log(device, n)})
         key = self._key()
         if not key:
             return self._send(404, {"error": "not found"})
@@ -93,6 +168,22 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, json.load(fh))
         except Exception:
             return self._send(500, {"error": "corrupt store"})
+
+    def do_POST(self):
+        device = _log_device(self.path)
+        if device is None:
+            return self._send(404, {"error": "not found"})
+        if not device:
+            return self._send(400, {"error": "bad device"})
+        length = int(self.headers.get("Content-Length") or 0)
+        if length <= 0 or length > LOG_MAX_BODY:
+            return self._send(413, {"error": "bad size"})
+        try:
+            body = json.loads(self.rfile.read(length))
+            written = append_log(device, body)
+        except ValueError:
+            return self._send(400, {"error": "bad json"})
+        return self._send(200, {"written": written})
 
     def do_PUT(self):
         key = self._key()
