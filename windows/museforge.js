@@ -47,4 +47,36 @@ function isDone(url) {
   }
 }
 
-module.exports = { OUTFIT_PAGE, canSend, outfitUrl, isDone };
+// --- #195: Create straight from the dialog, no tab ---
+// The Studio's form POSTs to the same address: src (it fetches the picture
+// itself), name, text. Its only guard is the login cookie, which WebForge
+// already holds from browsing the Studio. 2 figures × $0.035 (the Studio's
+// SHEET_CANDIDATES × PRICE).
+const PRICE_LABEL = '~$0.07';
+
+/** The form body, or null for a picture the Studio can't fetch. */
+function createForm(src, name, text) {
+  if (!canSend(src)) return null;
+  return new URLSearchParams({
+    src: String(src),
+    name: String(name || '').trim(),
+    text: String(text || '').trim(),
+  }).toString();
+}
+
+/**
+ * What the Studio's answer means. It redirects (303) to /approvals#fig-outfit-<name>
+ * once the jobs are queued, and to /login?next=… when this device isn't logged
+ * in. Anything else is an error. Pinned by shared/outfit-create-fixtures.tsv.
+ */
+function createResult(status, location) {
+  let path = '';
+  try { path = new URL(String(location || ''), OUTFIT_PAGE).pathname; } catch { /* no usable Location */ }
+  if (status >= 300 && status < 400) {
+    if (path === '/approvals' || path.startsWith('/approvals/')) return 'queued';
+    if (path === '/login') return 'login';
+  }
+  return 'error';
+}
+
+module.exports = { OUTFIT_PAGE, PRICE_LABEL, canSend, outfitUrl, isDone, createForm, createResult };

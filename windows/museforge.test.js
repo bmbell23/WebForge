@@ -1,6 +1,6 @@
 // #179 tests:  node windows/museforge.test.js
 const assert = require('assert');
-const { canSend, outfitUrl, isDone, OUTFIT_PAGE } = require('./museforge');
+const { canSend, outfitUrl, isDone, createForm, createResult, PRICE_LABEL, OUTFIT_PAGE } = require('./museforge');
 
 let n = 0;
 const ok = (cond, msg) => { assert.ok(cond, msg); n++; };
@@ -46,5 +46,21 @@ for (const line of fs.readFileSync(path.join(__dirname, '..', 'shared', 'outfit-
 }
 ok(done >= 8, `only ${done} done fixtures read`);
 ok(!isDone('') && !isDone('not a url'), 'nothing is not done');
+
+console.log('#195: Create in the background');
+const form = new URLSearchParams(createForm('https://ex.com/p.jpg?w=1&h=2', ' moto jacket ', 'leather & denim'));
+ok(form.get('src') === 'https://ex.com/p.jpg?w=1&h=2', 'src survives its own query');
+ok(form.get('name') === 'moto jacket' && form.get('text') === 'leather & denim', 'trimmed, & encoded');
+ok(new URLSearchParams(createForm('https://ex.com/p.jpg', '', '')).get('name') === '', 'an empty name lets the Studio pick one');
+ok(createForm('data:image/png;base64,AA', 'x', 'y') === null, 'unsendable picture → no form');
+ok(PRICE_LABEL === '~$0.07', 'price on the button');
+let created = 0;
+for (const line of fs.readFileSync(path.join(__dirname, '..', 'shared', 'outfit-create-fixtures.tsv'), 'utf8').split('\n')) {
+  if (!line.trim() || line.startsWith('#')) continue;
+  const [status, loc, want] = line.split('\t');
+  ok(createResult(Number(status), loc) === want, `createResult(${status}, ${loc}) should be ${want}`);
+  created++;
+}
+ok(created >= 10, `only ${created} create fixtures read`);
 
 console.log(`ok, ${n} checks`);

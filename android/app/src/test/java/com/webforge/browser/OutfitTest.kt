@@ -24,6 +24,29 @@ class OutfitTest {
         assertTrue("only $rows fixtures read", rows >= 7)
     }
 
+    // #195: the same rows windows/museforge.test.js reads.
+    @Test
+    fun create_result_matches_every_shared_fixture() {
+        var rows = 0
+        for (line in shared("outfit-create-fixtures.tsv").readLines()) {
+            if (line.isBlank() || line.startsWith("#")) continue
+            val p = line.split("\t")
+            assertEquals("fixture: $line", p[2], Outfit.createResult(p[0].toInt(), p[1].ifEmpty { null }))
+            rows++
+        }
+        assertTrue("only $rows fixtures read", rows >= 10)
+    }
+
+    @Test
+    fun create_form_keeps_src_query_and_encodes_text() {
+        assertEquals(
+            "src=https%3A%2F%2Fx.com%2Fa.jpg%3Fw%3D1%26h%3D2&name=jacket&text=a+%26+b",
+            Outfit.createForm("https://x.com/a.jpg?w=1&h=2", " jacket ", "a & b "),
+        )
+        assertEquals("src=http%3A%2F%2Fx.com%2Fa.jpg&name=&text=", Outfit.createForm("http://x.com/a.jpg", null, null))
+        assertEquals(null, Outfit.createForm("data:image/png;base64,AAAA", "n", "t"))
+    }
+
     // #191: the same rows windows/museforge.test.js reads.
     @Test
     fun done_page_matches_every_shared_fixture() {
