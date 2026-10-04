@@ -181,4 +181,23 @@ test('a mailto: link does not', () => {
   assert.ok(!ids(build({ linkURL: 'mailto:a@b.c' }, { linkYtdlp: false })).includes('link.ytdlp'));
 });
 
+console.log('#177: Add to Stash');
+
+test('an http(s) image offers Add to Stash after Create Outfit', () => {
+  const got = ids(build({ mediaType: 'image', srcURL: 'https://x.com/i.png' }, { imageOutfit: true, mediaStash: true }));
+  assert.strictEqual(got[got.indexOf('image.outfit') + 1], 'media.stash');
+});
+
+test('a <video> with a file behind it offers Add video to Stash', () => {
+  const items = build({ mediaType: 'video', srcURL: 'https://x.com/v.mp4' }, { mediaStash: true });
+  assert.strictEqual(find(items, 'media.stash').label, 'Add video to Stash');
+  assert.ok(!ids(build({ mediaType: 'video', srcURL: 'blob:https://x.com/1' }, { mediaStash: false })).includes('media.stash'));
+});
+
+test('a web page offers video and all-images, after Download content', () => {
+  const got = ids(build({}, { pageYtdlp: true, pageStash: true }));
+  assert.deepStrictEqual(got, ['nav.back', 'nav.forward', 'nav.reload', 'page.ytdlp', 'page.stashVideo', 'page.stashGallery', 'page.viewSource', 'page.inspect']);
+  assert.deepStrictEqual(ids(build({}, { pageStash: false })), ALWAYS);
+});
+
 console.log(`\n${run} tests passed`);

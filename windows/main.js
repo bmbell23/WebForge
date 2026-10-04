@@ -42,6 +42,7 @@ const repaint = require('./repaint'); // #148 — ditto (when to force a frame)
 const focusring = require('./focusring'); // #131 — ditto (chrome surface vs page view)
 const museforge = require('./museforge'); // #179 — Electron-free (the Studio's outfit-from-image address)
 const ytdlp = require('./ytdlp'); // #156 — ditto (what the download button sends)
+const stash = require('./stash'); // #177 — ditto (Add to Stash body + job wording)
 const autofillFrames = require('./autofillframes'); // #141
 
 // #134: banks and other sites with a "supported browsers" allowlist refuse to
@@ -1004,6 +1005,9 @@ function contextMenuFor(wc, params) {
     'page.ytdlp': () => openYtdlpPicker(wc.getURL(), wc.getTitle()), // #156
     'link.ytdlp': () => openYtdlpPicker(params.linkURL, String(params.linkText || '').trim()), // #156
     'image.outfit': () => openOutfitDialog(params.srcURL), // #179
+    'media.stash': () => sendToStash('media', params.srcURL, wc), // #177
+    'page.stashVideo': () => sendToStash('video', wc.getURL(), wc),
+    'page.stashGallery': () => sendToStash('gallery', wc.getURL(), wc),
   };
 
   const items = ctxmenu.build(params, {
@@ -1014,6 +1018,8 @@ function contextMenuFor(wc, params) {
     pageYtdlp: ytdlp.downloadable(wc.getURL()), // #156
     linkYtdlp: ytdlp.downloadable(params.linkURL || ''),
     imageOutfit: museforge.canSend(params.srcURL), // #179
+    mediaStash: stash.canSend(params.srcURL), // #177
+    pageStash: stash.canSend(wc.getURL()),
   });
 
   return items.map((item) =>
@@ -3228,18 +3234,106 @@ ipcMain.on('outfit-answer', (_e, a) => {
 });
 
 // The ⤓ button sends the page; the context menu sends the page or a link.
-function openYtdlpPicker(url, title) {
-  if (locked) return;
+// #177: for the page you are on, the picker also offers 🖼 Gallery when the
+// page links a few full-size images; what the reader found is kept for the send.
+let pickerMeta = null; // { url, meta }
+let pickerReading = false;
+async function openYtdlpPicker(url, title) {
+  if (locked || ytdlpOpen || pickerReading) return; // a double-click must not open two
   if (!ytdlp.downloadable(url)) {
     chrome?.webContents.send('ytdlp-status', { ok: false, message: 'Only web pages can be sent to yt-dlp.' });
     return;
   }
+  const wc = activeWc();
+  let meta = null;
+  if (wc && wc.getURL() === url) {
+    pickerReading = true;
+    try { meta = await readStashMeta(wc); } finally { pickerReading = false; }
+    if (locked || activeWc() !== wc) return; // locked or moved on while the page was read
+  }
+  pickerMeta = meta ? { url, meta } : null;
   ytdlpOpen = true;
   clearFsReveal();
   setChromeRaised(true);
   layout();
-  chrome?.webContents.send('ytdlp-picker', { url, title: title || url, ...ytdlp.defaults(url) });
+  const gallery = meta && stash.isGallery(meta) ? meta.image_urls.length : 0;
+  chrome?.webContents.send('ytdlp-picker', { url, title: title || url, gallery, ...ytdlp.defaults(url) });
   chrome.webContents.focus();
+}
+
+// --- #177: Add to Stash ---
+// shared/stash-page.js reads the page (the phone runs the same file); the
+// Dashboard downloads, scans and tags, and answers with a job we poll. The
+// ⤓ button shows ⏳ meanwhile. Closing the tab never stops it: the job is on
+// the server, and the poll holds only the job id.
+async function readStashMeta(wc) {
+  const src = stash.readerSource();
+  if (!src || !wc || wc.isDestroyed()) return {};
+  let timer;
+  try {
+    const run = wc.executeJavaScript(src, true);
+    const timeout = new Promise((resolve) => {
+      timer = setTimeout(() => { errorlog.record('stash', 'page reader timed out; sending without page details'); resolve({}); }, 2000);
+    });
+    return (await Promise.race([run, timeout])) || {};
+  } catch (err) {
+    errorlog.record('stash', `page reader failed: ${String(err.message || err).slice(0, 200)}`);
+    return {};
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function sendToStash(kind, url, wc, meta = null) {
+  if (locked) return;
+  const pageUrl = wc && !wc.isDestroyed() ? wc.getURL() : url;
+  const body = stash.body(kind, url, pageUrl, meta || (await readStashMeta(wc)));
+  if (!body) {
+    chrome?.webContents.send('ytdlp-status', { ok: false, message: 'Only web pages and files can be sent to Stash.' });
+    return;
+  }
+  const note = (message, ok) => {
+    chrome?.webContents.send('ytdlp-status', ok === undefined ? { message } : { ok, message });
+    if (ok !== undefined && Notification.isSupported()) new Notification({ title: 'Stash', body: message }).show();
+  };
+  errorlog.record('stash', `sending ${kind}: ${url} (${body.meta.performers.length} performers, ${(body.meta.image_urls || []).length} images)`);
+  chrome?.webContents.send('ytdlp-status', { ok: true, pending: true, message: `Sending ${kind} to Stash…` });
+  try {
+    const r = await fetch(stash.ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(30000),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || !j.ok || !j.job) throw new Error(j.error || `HTTP ${r.status}`);
+    const deadline = Date.now() + 60 * 60 * 1000;
+    let last = '';
+    for (;;) {
+      await new Promise((res) => setTimeout(res, 3000));
+      let s = null;
+      try {
+        const g = await fetch(`${stash.ENDPOINT}/${encodeURIComponent(j.job)}`, { signal: AbortSignal.timeout(15000) });
+        s = await g.json().catch(() => null);
+        if (g.status === 404) throw new Error('the Dashboard forgot the job (restarted?); the file may still have saved');
+      } catch (err) {
+        if (/forgot the job/.test(err.message)) throw err;
+        // A blip: keep polling until the deadline.
+      }
+      const message = stash.statusText(kind, s);
+      if (stash.finished(s)) {
+        errorlog.record('stash', `${s.state}: ${message}`);
+        note(message, s.state === 'done');
+        return;
+      }
+      if (message !== last) { note(message); last = message; }
+      if (Date.now() > deadline) throw new Error('still running after an hour; check the Dashboard');
+    }
+  } catch (err) {
+    const message = `Stash ${kind} failed: ${String(err.message || err).slice(0, 300)}`;
+    errorlog.record('stash', message);
+    note(message, false);
+  }
 }
 
 ipcMain.on('ytdlp-answer', (_e, a) => {
@@ -3248,6 +3342,12 @@ ipcMain.on('ytdlp-answer', (_e, a) => {
   layout();
   activeWc()?.focus();
   if (locked || !a || !a.send || !ytdlp.downloadable(a.url)) return;
+  if (a.choice && a.choice.format === 'gallery') { // #177
+    const wc = activeWc();
+    const meta = pickerMeta && pickerMeta.url === a.url ? pickerMeta.meta : null;
+    sendToStash('gallery', a.url, wc && wc.getURL() === a.url ? wc : null, meta);
+    return;
+  }
   const body = ytdlp.body(a.url, a.choice);
   const label = `${body.format === 'audio' ? 'audio' : 'video'}${body.kids ? ' (kids)' : body.adult ? ' (adult)' : ''}`;
   errorlog.record('ytdlp', `sending ${label}: ${body.url}`);

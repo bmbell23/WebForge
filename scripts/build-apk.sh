@@ -24,7 +24,9 @@ cp "$REPO_ROOT/shared/about.json" "$ASSETS/about.json"
 cp "$REPO_ROOT/shared/newtab.html" "$ASSETS/newtab.html"
 # #156: the yt-dlp site list, shared with windows/ytdlp.js.
 cp "$REPO_ROOT/shared/ytdlp-sites.json" "$ASSETS/ytdlp-sites.json"
-echo "📄 Staged shared/about.json + newtab.html + ytdlp-sites.json -> assets/"
+# #177: the Add to Stash page reader, shared with windows/stash.js.
+cp "$REPO_ROOT/shared/stash-page.js" "$ASSETS/stash-page.js"
+echo "📄 Staged shared/about.json + newtab.html + ytdlp-sites.json + stash-page.js -> assets/"
 
 if [ "$1" = "--clean" ]; then
     ./gradlew clean

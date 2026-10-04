@@ -59,6 +59,14 @@ function build(params = {}, ctx = {}) {
     // #179: hand the picture to the Studio to make an outfit from it.
     // #181: the label names the action, not the product.
     if (ctx.imageOutfit) items.push({ id: 'image.outfit', label: 'Create Outfit…' });
+    // #177: the original file into Pictures/Downloads, tagged in Stash.
+    if (ctx.mediaStash) items.push({ id: 'media.stash', label: 'Add to Stash' });
+  }
+
+  // #177: a right-clicked <video> with a real file behind it.
+  if (params.mediaType === 'video' && params.srcURL && ctx.mediaStash) {
+    sep();
+    items.push({ id: 'media.stash', label: 'Add video to Stash' });
   }
 
   // A selection inside a text box belongs to the editing section below, not here.
@@ -95,6 +103,11 @@ function build(params = {}, ctx = {}) {
     { type: 'separator' },
     // #156: same picker as the ⤓ button. Only on real web pages.
     ...(ctx.pageYtdlp ? [{ id: 'page.ytdlp', label: 'Download content…' }] : []),
+    // #177: the page's video (yt-dlp) or every linked full-size image, into Stash.
+    ...(ctx.pageStash ? [
+      { id: 'page.stashVideo', label: 'Add video to Stash' },
+      { id: 'page.stashGallery', label: 'Add all images to Stash' },
+    ] : []),
     { id: 'page.viewSource', label: 'View page source' },
     { id: 'page.inspect', label: 'Inspect element' }
   );
