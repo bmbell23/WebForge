@@ -1,6 +1,8 @@
 package com.webforge.browser
 
+import java.net.HttpURLConnection
 import java.net.URI
+import java.net.URL
 import java.net.URLEncoder
 
 /**
@@ -39,5 +41,54 @@ object Outfit {
         name?.trim()?.takeIf { it.isNotEmpty() }?.let { q.append("&name=").append(enc(it)) }
         text?.trim()?.takeIf { it.isNotEmpty() }?.let { q.append("&text=").append(enc(it)) }
         return "$PAGE?$q"
+    }
+
+    // #195: background Create. Same rules as createForm/createResult in windows/museforge.js,
+    // pinned by shared/outfit-create-fixtures.tsv.
+    const val PRICE_LABEL = "~\$0.07"
+
+    /** Form body for the from-image POST: all three keys, name/text trimmed (may be empty). */
+    fun createForm(src: String?, name: String?, text: String?): String? {
+        if (!canSend(src)) return null
+        return "src=${enc(src!!)}&name=${enc(name.orEmpty().trim())}&text=${enc(text.orEmpty().trim())}"
+    }
+
+    /** What the Studio's answer means: "queued", "login" or "error". Redirects are not followed. */
+    fun createResult(status: Int, location: String?): String {
+        val path = try { URI(PAGE).resolve(location.orEmpty().trim()).rawPath ?: "" } catch (e: Exception) { "" }
+        if (status in 300..399) {
+            if (path == "/approvals" || path.startsWith("/approvals/")) return "queued"
+            if (path == "/login") return "login"
+        }
+        return "error"
+    }
+
+    /** #195: POST in the background; [done] runs on this thread with (result, detail for an error). */
+    fun create(form: String, cookie: String?, done: (result: String, detail: String) -> Unit) {
+        Thread {
+            try {
+                val conn = URL(PAGE).openConnection() as HttpURLConnection
+                conn.instanceFollowRedirects = false
+                conn.requestMethod = "POST"
+                conn.connectTimeout = 10_000
+                conn.readTimeout = 30_000
+                conn.doOutput = true
+                conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
+                if (cookie != null) conn.setRequestProperty("Cookie", cookie)
+                conn.outputStream.use { it.write(form.toByteArray(Charsets.UTF_8)) }
+                val code = conn.responseCode
+                val result = createResult(code, conn.getHeaderField("Location"))
+                var detail = "HTTP $code"
+                if (result == "error") {
+                    val body = (if (code in 200..399) conn.inputStream else conn.errorStream)
+                        ?.bufferedReader()?.use { it.readText() }.orEmpty().trim().take(200)
+                    if (body.isNotEmpty()) detail += ": $body"
+                }
+                conn.disconnect()
+                done(result, detail)
+            } catch (e: Exception) {
+                done("error", e.message ?: e.javaClass.simpleName)
+            }
+        }.start()
     }
 }

@@ -3222,6 +3222,7 @@ ipcMain.on('ytdlp-open', () => {
 // confirms and spends; we only build the address.
 function openOutfitDialog(src) {
   if (locked || !museforge.canSend(src)) return;
+  if (outfitOpen || bmDialogOpen || ytdlpOpen || loginPromptOpen) return; // #195: one dialog answers Enter at a time
   outfitOpen = true;
   clearFsReveal();
   setChromeRaised(true);
@@ -3231,19 +3232,64 @@ function openOutfitDialog(src) {
 }
 
 ipcMain.on('outfit-answer', (_e, a) => {
+  const wasOpen = outfitOpen; // #195: an answer with no dialog showing spends nothing
   outfitOpen = false;
   if (!bmDialogOpen && !settingsOpen && !managerOpen && !loginPromptOpen && !ytdlpOpen) setChromeRaised(false);
   layout();
   activeWc()?.focus();
-  if (locked || !a || !a.go) return;
-  const url = museforge.outfitUrl(a.src, a.name, a.text);
-  if (!url) return;
+  if (locked || !wasOpen || !a || !a.go) return;
+  if (a.go === 'create') { createOutfitInBackground(a.src, a.name, a.text); return; } // #195
+  openOutfitTab(a.src, a.name, a.text);
+});
+
+// #179/#191: the Studio's prefilled page in a tab, with the way back remembered.
+function openOutfitTab(src, name, text, openerId = activeId) {
+  const url = museforge.outfitUrl(src, name, text);
+  if (!url || locked) return;
   // #191: remember where you came from. Set BEFORE createTab, because opening
   // the tab activates it and runs the adult sweep, which must already spare the
   // opener; createTab takes nextTabId as the new tab's id.
-  outfitReturn = { tabId: nextTabId, openerId: activeId };
+  outfitReturn = { tabId: nextTabId, openerId };
   if (createTab(url, false) !== outfitReturn?.tabId) outfitReturn = null;
-});
+}
+
+// #195: Create without leaving the page. The Studio's form takes the picture's
+// address and fetches it itself; the tabs' session already holds its login
+// cookie. Logged out on this PC → the prefilled page opens instead, so you can
+// log in and land on it.
+const outfitCreating = new Set(); // #195: pictures with a Create in flight; each press costs money
+async function createOutfitInBackground(src, name, text) {
+  const body = museforge.createForm(src, name, text);
+  if (!body) return;
+  const openerId = activeId; // the login fallback returns here, even if you moved on meanwhile
+  const say = (message) => {
+    errorlog.record('outfit', message);
+    if (Notification.isSupported()) new Notification({ title: 'Create Outfit', body: message }).show();
+  };
+  if (outfitCreating.has(src)) { say('Already creating an outfit from this picture'); return; }
+  outfitCreating.add(src);
+  try {
+    const jar = await session.defaultSession.cookies.get({ url: museforge.OUTFIT_PAGE });
+    const r = await fetch(museforge.OUTFIT_PAGE, {
+      method: 'POST',
+      redirect: 'manual',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        ...(jar.length ? { Cookie: jar.map((c) => `${c.name}=${c.value}`).join('; ') } : {}),
+      },
+      body,
+      signal: AbortSignal.timeout(60000), // the Studio fetches the picture before answering
+    });
+    const result = museforge.createResult(r.status, r.headers.get('location'));
+    if (result === 'queued') say('Outfit queued: 2 figures in Approvals');
+    else if (result === 'login') { say('Log in to the Studio first'); openOutfitTab(src, name, text, openerId); }
+    else say(`Create Outfit failed: HTTP ${r.status} ${(await r.text().catch(() => '')).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200)}`);
+  } catch (err) {
+    say(`Create Outfit failed: ${String(err.message || err).slice(0, 200)}`);
+  } finally {
+    outfitCreating.delete(src);
+  }
+}
 
 // #191: the Create Outfit tab reached the Studio's "queued" page: back to the
 // page you came from. Switching there closes the Studio tab (it is adult); the

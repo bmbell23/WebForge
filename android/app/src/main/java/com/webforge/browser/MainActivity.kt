@@ -271,17 +271,39 @@ class MainActivity : Activity() {
         android.app.AlertDialog.Builder(this)
             .setTitle("Create Outfit")
             .setView(box)
-            .setPositiveButton("Open") { _, _ ->
-                Outfit.url(src, name.text.toString(), text.text.toString())?.let {
-                    // #191: remember where you came from; newTab's own activation sweeps
-                    // adult tabs, so the opener must already be exempt (outfitOpening).
-                    outfitOpener = active
-                    outfitOpening = true
-                    try { outfitTab = newTab(it) } finally { outfitOpening = false }
+            .setPositiveButton("Create · ${Outfit.PRICE_LABEL}") { _, _ ->
+                // #195: queue it from here; the Studio answers with a redirect, not a page.
+                val form = Outfit.createForm(src, name.text.toString(), text.text.toString())
+                if (form != null) {
+                    val prefilled = Outfit.url(src, name.text.toString(), text.text.toString())
+                    val cookie = android.webkit.CookieManager.getInstance().getCookie(Outfit.PAGE)
+                    Outfit.create(form, cookie) { result, detail ->
+                        runOnUiThread {
+                            when (result) {
+                                "queued" -> android.widget.Toast.makeText(this, "Outfit queued: 2 figures in Approvals", android.widget.Toast.LENGTH_LONG).show()
+                                "login" -> {
+                                    android.widget.Toast.makeText(this, "Log in to the Studio first", android.widget.Toast.LENGTH_LONG).show()
+                                    prefilled?.let { openOutfitInStudio(it) }
+                                }
+                                else -> android.widget.Toast.makeText(this, "Create Outfit failed: $detail", android.widget.Toast.LENGTH_LONG).show()
+                            }
+                        }
+                    }
                 }
+            }
+            .setNeutralButton("Open in Studio") { _, _ ->
+                Outfit.url(src, name.text.toString(), text.text.toString())?.let { openOutfitInStudio(it) }
             }
             .setNegativeButton("Cancel", null)
             .show()
+    }
+
+    private fun openOutfitInStudio(url: String) {
+        // #191: remember where you came from; newTab's own activation sweeps
+        // adult tabs, so the opener must already be exempt (outfitOpening).
+        outfitOpener = active
+        outfitOpening = true
+        try { outfitTab = newTab(url) } finally { outfitOpening = false }
     }
 
     private fun sendToYtdlp(endpoint: String, body: YtDlp.Body) {

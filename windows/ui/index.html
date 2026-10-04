@@ -829,7 +829,8 @@
       <input id="outfitname" type="text" placeholder="Name (e.g. moto jacket)" spellcheck="false">
       <input id="outfittext" type="text" placeholder="Description (e.g. black leather moto jacket over a white crop top)">
       <div class="row">
-        <button id="outfitgo">Open in Studio</button>
+        <button id="outfitcreate">Create · ~$0.07</button>
+        <button id="outfitgo" class="dismiss">Open in Studio</button>
         <button id="outfitno" class="dismiss">Cancel</button>
       </div>
     </div>
@@ -2128,7 +2129,8 @@
   })();
 
   // --- #179: Create outfit in MuseForge ---
-  // Enter opens the Studio page, Esc cancels. Always answers, so main lowers
+  // #195: Enter (or Create) sends it to the Studio in the background; Open in
+  // Studio shows the page first; Esc cancels. Always answers, so main lowers
   // chrome again whichever way the dialog closes.
   (() => {
     const box = document.getElementById('outfit');
@@ -2143,12 +2145,18 @@
       box.classList.remove('open');
       img.removeAttribute('src');
     };
+    document.getElementById('outfitcreate').onclick = () => answer('create');
     document.getElementById('outfitgo').onclick = () => answer(true);
     document.getElementById('outfitno').onclick = () => answer(false);
     document.addEventListener('keydown', (e) => {
       if (!current) return;
       if (e.key === 'Escape') answer(false);
-      else if (e.key === 'Enter') answer(true);
+      // #195: Enter spends money, so only from the text fields, once per press;
+      // Enter on a focused button is that button's own click.
+      else if (e.key === 'Enter' && !e.repeat && !e.isComposing && !e.target.closest('button')) {
+        e.preventDefault();
+        answer('create');
+      }
     });
     webforge.onOutfitPrompt((p) => {
       current = p;

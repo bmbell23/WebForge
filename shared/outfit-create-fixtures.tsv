@@ -1,0 +1,14 @@
+# #195: what the Studio's answer to Create means. Its from-image POST redirects
+# to /approvals#fig-outfit-<name> when queued and to /login?next=... when logged out.
+# Read by windows/museforge.test.js AND android OutfitTest.kt.
+# status	location	result (queued/login/error)
+303	/approvals#fig-outfit-moto-jacket	queued
+303	http://100.69.184.113:8005/approvals#fig-outfit-x	queued
+302	/approvals	queued
+303	/login?next=%2Flibrary%2Foutfit%2Ffrom-image	login
+307	/login	login
+200		error
+400		error
+500		error
+303	/library/outfits	error
+303	/approvalsx	error
