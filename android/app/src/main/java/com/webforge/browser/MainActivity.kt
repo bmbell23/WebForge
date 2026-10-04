@@ -128,7 +128,7 @@ class MainActivity : Activity() {
         findViewById<TextView>(R.id.homeBtn).setOnClickListener { navigate(newTabUrl()) } // #174
         wireFindBar() // #101
 
-        newTab(newTabUrl())
+        newTab(linkFrom(intent) ?: newTabUrl()) // #188: opened as the default browser
         BookmarkStore.sync(this) { }
         Personas.sync(this) { runOnUiThread { rehomeTabs() } } // #88/#96
         syncTabsAcrossDevices() // #57 // warm the cache for the bookmarks panel
@@ -378,6 +378,25 @@ class MainActivity : Activity() {
         if (overlay.visibility == View.VISIBLE) panelSwipe.onTouchEvent(ev)
         else pageSwipe.onTouchEvent(ev) // #92: pull-to-reload on the page
         return super.dispatchTouchEvent(ev)
+    }
+
+    // #188: a link from another app while we're running (singleTask): its tab
+    // if one is already open, else a new one.
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        linkFrom(intent)?.let {
+            closePanel()
+            openOrFocus(it)
+        }
+    }
+
+    /** #188: the http(s) address another app handed us, if any. */
+    private fun linkFrom(intent: android.content.Intent?): String? {
+        if (intent?.action != android.content.Intent.ACTION_VIEW) return null
+        val u = intent.dataString ?: return null
+        val s = intent.data?.scheme?.lowercase()
+        return if (s == "http" || s == "https") u else null
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
