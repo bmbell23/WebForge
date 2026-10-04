@@ -3,6 +3,8 @@
   "endpoint": "http://100.69.184.113:8001/api/download/ytdlp",
   "adult": ["pornhub.com", "xhamster.com", "xvideos.com", "youporn.com", "redtube.com", "tube8.com",
             "xnxx.com", "spankbang.com", "eporner.com", "tnaflix.com", "redgifs.com",
-            "hqgals.com"],
+            "hqgals.com", "pornpics.com"],
+  "_adultWords": "#183: a host label CONTAINING one of these is adult too, so sites nobody listed still count. Words that also live in ordinary names (sex: sussex/essex, adult: adultswim) are deliberately absent.",
+  "adultWords": ["porn", "xxx", "hentai", "xvideo", "xhamster", "nsfw"],
   "short": ["streamable.com", "imgur.com", "gfycat.com", "redgifs.com"]
 }

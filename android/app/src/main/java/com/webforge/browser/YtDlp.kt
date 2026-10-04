@@ -14,7 +14,10 @@ import java.net.URL
  * `shared/ytdlp-fixtures.tsv` (see YtDlpTest).
  */
 object YtDlp {
-    class Sites(val endpoint: String, val adult: List<String>, val short: List<String>)
+    class Sites(
+        val endpoint: String, val adult: List<String>, val short: List<String>,
+        val adultWords: List<String> = emptyList(), // #183
+    )
 
     data class Body(
         val url: String, val format: String,
@@ -37,7 +40,7 @@ object YtDlp {
             val body = Regex("\"$key\"\\s*:\\s*\\[([^\\]]*)\\]").find(json)?.groupValues?.get(1) ?: return emptyList()
             return Regex("\"([^\"]+)\"").findAll(body).map { it.groupValues[1].lowercase() }.toList()
         }
-        return Sites(str("endpoint"), list("adult"), list("short"))
+        return Sites(str("endpoint"), list("adult"), list("short"), list("adultWords"))
     }
 
     @Volatile private var cached: Sites? = null
@@ -61,15 +64,21 @@ object YtDlp {
     private fun onList(host: String, list: List<String>) =
         host.isNotEmpty() && list.any { host == it || host.endsWith(".$it") }
 
+    // #183: the list alone missed pornpics.com. A host label containing one of
+    // the adult words counts too (pornpics, youporn, 91porn, xxxbunker).
+    private fun adultHost(host: String, sites: Sites) =
+        onList(host, sites.adult) ||
+            (host.isNotEmpty() && host.split('.').any { label -> sites.adultWords.any { label.contains(it) } })
+
     fun downloadable(url: String) = hostOf(url).isNotEmpty()
 
     /** #176: an adult tab closes the moment you leave it, and never syncs or restores. */
-    fun isAdult(sites: Sites, url: String) = onList(hostOf(url), sites.adult)
+    fun isAdult(sites: Sites, url: String) = adultHost(hostOf(url), sites)
 
     /** What the picker starts with: (adult, short). */
     fun defaults(sites: Sites, url: String): Pair<Boolean, Boolean> {
         val h = hostOf(url)
-        return onList(h, sites.adult) to onList(h, sites.short)
+        return adultHost(h, sites) to onList(h, sites.short)
     }
 
     /**

@@ -9,9 +9,24 @@ https://www.hqgals.com/gallery/abc	1
 https://hqgals.com/	1
 https://www.redgifs.com/watch/abc	1
 https://www.youtube.com/watch?v=abc	0
-https://notpornhub.com/	0
-https://pornhub.com.evil.example/	0
+# #183: these used to be look-alike negatives; with the word rule a host saying "porn" is adult, the safe side for closing.
+https://notpornhub.com/	1
+https://pornhub.com.evil.example/	1
+# look-alikes of a listed site with no adult word still don't match
+https://notredgifs.com/	0
+https://redgifs.com.evil.example/	0
 http://100.69.184.113:8001/	0
 file:///C:/WebForge/shared/newtab.html	0
 about:blank	0
 	0
+https://www.pornpics.com/galleries/abc/	1
+https://pornpics.com/	1
+https://www.xxxbunker.com/	1
+https://91porn.com/	1
+https://cdn.nsfw-site.net/x	1
+https://hentaihaven.xxx/	1
+https://www.sussex.ac.uk/	0
+https://www.essex.gov.uk/	0
+https://www.adultswim.com/	0
+https://www.middlesex.edu/	0
+https://www.pornographyresearch.example/	1

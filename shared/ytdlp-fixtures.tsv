@@ -13,6 +13,8 @@ https://streamable.com/abc	video	0	0	1	0
 https://i.imgur.com/abc.mp4	video	0	0	1	0
 https://www.youporn.com/watch/123/x/	audio	0	0	0	0
 https://www.youporn.com/watch/123/x/	video	1	0	0	1
-https://notyouporn.com/x	video	0	0	0	0
-https://youporn.com.evil.example/x	video	0	0	0	0
+https://notyouporn.com/x	video	0	1	0	0
+https://youporn.com.evil.example/x	video	0	1	0	0
+https://notstreamable.com/x	video	0	0	0	0
+https://streamable.com.evil.example/x	video	0	0	0	0
 HTTPS://WWW.XVIDEOS.COM/video1/x	video	0	1	0	0
