@@ -28,6 +28,27 @@ object UpdateCheck {
         return false
     }
 
+    /**
+     * #197: should this check put the "Update available" dialog up?
+     *
+     * Handing the APK to the system installer pauses us, and Android resumes us
+     * again seconds later, while the installer's own "Do you want to update
+     * this app?" screen is still on its way. That resume ran checkForUpdate,
+     * which offered the same version again: a second download, a second
+     * installer screen, over and over. A version already handed to the
+     * installer is never offered again by an automatic check in this process.
+     * A real install kills the process, so the next launch starts clean; if
+     * the install was cancelled, the next cold start or a tap on Settings ›
+     * Version offers it again.
+     *
+     * @param manual the user tapped "check for updates" (ignores Later and the hand-off)
+     */
+    fun shouldOffer(remote: String?, local: String, dismissed: String?, handedOff: String?, manual: Boolean): Boolean {
+        if (remote == null || !isNewer(remote, local)) return false
+        if (manual) return true
+        return remote != dismissed && remote != handedOff
+    }
+
     sealed class Verdict {
         /** Safe to hand to the package installer. */
         object Install : Verdict()
