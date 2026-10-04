@@ -17,6 +17,7 @@ object YtDlp {
     class Sites(
         val endpoint: String, val adult: List<String>, val short: List<String>,
         val adultWords: List<String> = emptyList(), // #183
+        val adultOrigins: List<String> = emptyList(), // #191: host:port services (MuseForge Studio)
     )
 
     data class Body(
@@ -40,7 +41,7 @@ object YtDlp {
             val body = Regex("\"$key\"\\s*:\\s*\\[([^\\]]*)\\]").find(json)?.groupValues?.get(1) ?: return emptyList()
             return Regex("\"([^\"]+)\"").findAll(body).map { it.groupValues[1].lowercase() }.toList()
         }
-        return Sites(str("endpoint"), list("adult"), list("short"), list("adultWords"))
+        return Sites(str("endpoint"), list("adult"), list("short"), list("adultWords"), list("adultOrigins"))
     }
 
     @Volatile private var cached: Sites? = null
@@ -73,12 +74,24 @@ object YtDlp {
     fun downloadable(url: String) = hostOf(url).isNotEmpty()
 
     /** #176: an adult tab closes the moment you leave it, and never syncs or restores. */
-    fun isAdult(sites: Sites, url: String) = adultHost(hostOf(url), sites)
+    fun isAdult(sites: Sites, url: String) = adultHost(hostOf(url), sites) || adultOrigin(sites, url)
+
+    // #191: host:port match (explicit port, else 80/443), for services that share a host with non-adult ones.
+    private fun adultOrigin(sites: Sites, url: String): Boolean = try {
+        val u = URI(url.trim())
+        val scheme = u.scheme?.lowercase()
+        val host = (u.host ?: "").lowercase()
+        if ((scheme != "http" && scheme != "https") || host.isEmpty()) false
+        else {
+            val port = if (u.port >= 0) u.port else if (scheme == "https") 443 else 80
+            "$host:$port" in sites.adultOrigins
+        }
+    } catch (e: Exception) { false }
 
     /** What the picker starts with: (adult, short). */
     fun defaults(sites: Sites, url: String): Pair<Boolean, Boolean> {
         val h = hostOf(url)
-        return adultHost(h, sites) to onList(h, sites.short)
+        return isAdult(sites, url) to onList(h, sites.short) // #191: same rule as isAdult
     }
 
     /**

@@ -23,4 +23,17 @@ class OutfitTest {
         }
         assertTrue("only $rows fixtures read", rows >= 7)
     }
+
+    // #191: the same rows windows/museforge.test.js reads.
+    @Test
+    fun done_page_matches_every_shared_fixture() {
+        var rows = 0
+        for (line in shared("outfit-done-fixtures.tsv").readLines()) {
+            if (line.isBlank() || line.startsWith("#")) continue
+            val p = line.split("\t")
+            assertEquals("fixture: $line", p[1] == "1", Outfit.isDone(p[0]))
+            rows++
+        }
+        assertTrue("only $rows fixtures read", rows >= 8)
+    }
 }

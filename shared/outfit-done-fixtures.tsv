@@ -1,0 +1,12 @@
+# #191: the page the Studio lands on after "Make outfit" (its from-image POST redirects to /approvals#fig-outfit-<name>).
+# Reaching it in the Create Outfit tab sends you back to the page you came from.
+# Read by windows/museforge.test.js AND android OutfitTest.kt.
+# url	done (1/0)
+http://100.69.184.113:8005/approvals#fig-outfit-moto-jacket	1
+http://100.69.184.113:8005/approvals	1
+http://100.69.184.113:8005/approvals/	1
+http://100.69.184.113:8005/library/outfit/from-image?src=https%3A%2F%2Fx.com%2Fa.jpg	0
+http://100.69.184.113:8005/login?next=%2Flibrary%2Foutfit%2Ffrom-image	0
+http://100.69.184.113:8005/approvalsx	0
+http://100.69.184.113:8001/approvals	0
+https://evil.example/approvals	0

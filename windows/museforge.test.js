@@ -1,6 +1,6 @@
 // #179 tests:  node windows/museforge.test.js
 const assert = require('assert');
-const { canSend, outfitUrl, OUTFIT_PAGE } = require('./museforge');
+const { canSend, outfitUrl, isDone, OUTFIT_PAGE } = require('./museforge');
 
 let n = 0;
 const ok = (cond, msg) => { assert.ok(cond, msg); n++; };
@@ -35,5 +35,16 @@ for (const line of fs.readFileSync(path.join(__dirname, '..', 'shared', 'outfit-
   rows++;
 }
 ok(rows >= 7, `only ${rows} fixtures read`);
+
+console.log('#191: the Studio\'s "queued" page (shared fixtures)');
+let done = 0;
+for (const line of fs.readFileSync(path.join(__dirname, '..', 'shared', 'outfit-done-fixtures.tsv'), 'utf8').split('\n')) {
+  if (!line.trim() || line.startsWith('#')) continue;
+  const [url, want] = line.split('\t');
+  ok(isDone(url) === (want === '1'), `isDone(${url}) should be ${want === '1'}`);
+  done++;
+}
+ok(done >= 8, `only ${done} done fixtures read`);
+ok(!isDone('') && !isDone('not a url'), 'nothing is not done');
 
 console.log(`ok, ${n} checks`);

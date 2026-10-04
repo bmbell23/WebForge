@@ -235,6 +235,30 @@ class MainActivity : Activity() {
             .show()
     }
 
+    // #191: Create Outfit opens the (adult) Studio in a new tab; finishing there
+    // returns you to the opener, which may itself be adult.
+    private var outfitTab: Tab? = null
+    private var outfitOpener: Tab? = null
+    private var outfitOpening = false
+
+    private fun clearOutfitPair() { outfitTab = null; outfitOpener = null }
+
+    /** #191: the Studio reached its done page: back to the opener, Studio tab closed. */
+    private fun returnFromOutfit() {
+        val studio = outfitTab ?: return
+        val opener = outfitOpener
+        clearOutfitPair() // first: the switch below sweeps, and the opener must no longer be exempt
+        val oi = tabs.indexOf(opener ?: studio).takeIf { opener != null && it >= 0 }
+        if (oi != null) activateTab(oi) // the sweep closes the Studio tab (adult)
+        tabs.indexOf(studio).takeIf { it >= 0 }?.let { closeTab(it, adult = true) }
+    }
+
+    private fun outfitDone(tab: Tab, url: String, view: WebView) {
+        if (tab !== outfitTab || !Outfit.isDone(url)) return
+        // post: don't destroy a WebView from inside its own client callback
+        view.post { if (tab === outfitTab) returnFromOutfit() }
+    }
+
     /** #181: optional name + description, then the Studio page in a new tab. It confirms before spending. */
     private fun showOutfitDialog(src: String) {
         val box = LinearLayout(this).apply {
@@ -248,7 +272,13 @@ class MainActivity : Activity() {
             .setTitle("Create Outfit")
             .setView(box)
             .setPositiveButton("Open") { _, _ ->
-                Outfit.url(src, name.text.toString(), text.text.toString())?.let { newTab(it) }
+                Outfit.url(src, name.text.toString(), text.text.toString())?.let {
+                    // #191: remember where you came from; newTab's own activation sweeps
+                    // adult tabs, so the opener must already be exempt (outfitOpening).
+                    outfitOpener = active
+                    outfitOpening = true
+                    try { outfitTab = newTab(it) } finally { outfitOpening = false }
+                }
             }
             .setNegativeButton("Cancel", null)
             .show()
@@ -536,6 +566,7 @@ class MainActivity : Activity() {
             }
 
             override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
+                outfitDone(tab, url, view) // #191
                 if (tab === active) syncChrome()
             }
 
@@ -555,6 +586,7 @@ class MainActivity : Activity() {
                     tab.persona = claimed
                     if (tab === active) Personas.setActive(this@MainActivity, claimed)
                 }
+                outfitDone(tab, url, view) // #191
                 if (tab === active) syncChrome()
                 super.doUpdateVisitedHistory(view, url, isReload)
             }
@@ -702,7 +734,9 @@ class MainActivity : Activity() {
         // The active tab goes LAST: by then every other adult tab is gone, so the
         // neighbour it hands off to can't be an unloaded adult tab that loads only to die.
         val current = active
-        val doomed = tabs.filter { it !== except && isAdultTab(it) }.sortedBy { it === current }
+        // #191: switching to/opening the outfit tab keeps the tab you came from.
+        val keep = if (except != null && outfitOpener != null && (outfitOpening || except === outfitTab)) outfitOpener else null
+        val doomed = tabs.filter { it !== except && it !== keep && isAdultTab(it) }.sortedBy { it === current }
         if (doomed.isEmpty()) return
         sweepingAdult = true // closing the active tab activates a neighbour, which sweeps again
         try {
@@ -721,6 +755,7 @@ class MainActivity : Activity() {
         // unconditionally re-activated, so closing a background tab (or the
         // idle sweep closing several) yanked you to a different page.
         val wasActive = index == activeIndex
+        if (tab === outfitTab || tab === outfitOpener) clearOutfitPair() // #191
         tabs.removeAt(index)
         (tab.webView.parent as? ViewGroup)?.removeView(tab.webView)
         tab.webView.destroy()
