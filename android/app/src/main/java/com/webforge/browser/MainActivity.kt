@@ -189,6 +189,43 @@ class MainActivity : Activity() {
             .show()
     }
 
+    // --- #181: long-press menu on images ---
+    private fun showImageMenu(src: String?) {
+        if (!Outfit.canSend(src)) return // data:/blob: images: nothing the Studio could fetch
+        val items = arrayOf("Create Outfit", "Open image in new tab", "Copy image link")
+        android.app.AlertDialog.Builder(this)
+            .setItems(items) { _, which ->
+                when (which) {
+                    0 -> showOutfitDialog(src!!)
+                    1 -> newTab(src)
+                    2 -> {
+                        val cm = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                        cm.setPrimaryClip(android.content.ClipData.newPlainText("image link", src))
+                    }
+                }
+            }
+            .show()
+    }
+
+    /** #181: optional name + description, then the Studio page in a new tab. It confirms before spending. */
+    private fun showOutfitDialog(src: String) {
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(8), dp(20), 0)
+        }
+        val name = EditText(this).apply { hint = "Name (e.g. moto jacket)"; maxLines = 1; inputType = android.text.InputType.TYPE_CLASS_TEXT }
+        val text = EditText(this).apply { hint = "Description (one line)"; maxLines = 1; inputType = android.text.InputType.TYPE_CLASS_TEXT }
+        box.addView(name); box.addView(text)
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Create Outfit")
+            .setView(box)
+            .setPositiveButton("Open") { _, _ ->
+                Outfit.url(src, name.text.toString(), text.text.toString())?.let { newTab(it) }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
     private fun sendToYtdlp(endpoint: String, body: YtDlp.Body) {
         val btn = findViewById<TextView>(R.id.dlBtn)
         val label = body.format + if (body.kids) " (kids)" else if (body.adult) " (adult)" else ""
@@ -370,6 +407,22 @@ class MainActivity : Activity() {
             // engine's OWN string so the Chrome version stays truthful as Play
             // updates System WebView underneath us.
             userAgentString = UserAgent.clean(userAgentString)
+        }
+        // #181: long-press an image → Create Outfit (plus open / copy). A bare
+        // <img> carries its src in the hit result; one inside a link needs
+        // requestFocusNodeHref, whose "src" is the image rather than the href.
+        // Anything else returns false and keeps the WebView's own behavior.
+        wv.setOnLongClickListener {
+            val r = wv.hitTestResult
+            when (r.type) {
+                WebView.HitTestResult.IMAGE_TYPE -> { showImageMenu(r.extra); true }
+                WebView.HitTestResult.SRC_IMAGE_ANCHOR_TYPE -> {
+                    val h = android.os.Handler(mainLooper) { m -> showImageMenu(m.data.getString("src")); true }
+                    wv.requestFocusNodeHref(h.obtainMessage())
+                    true
+                }
+                else -> false
+            }
         }
         // #101: find-in-page counts come back here. Only the visible tab's may
         // reach the bar — a background tab still settling would clobber the
