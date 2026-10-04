@@ -45,7 +45,7 @@ object Outfit {
 
     // #195: background Create. Same rules as createForm/createResult in windows/museforge.js,
     // pinned by shared/outfit-create-fixtures.tsv.
-    const val PRICE_LABEL = "~\$0.07"
+    const val PRICE_LABEL = "~\$0.03"
 
     /** Form body for the from-image POST: all three keys, name/text trimmed (may be empty). */
     fun createForm(src: String?, name: String?, text: String?): String? {
