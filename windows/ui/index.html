@@ -809,6 +809,7 @@
       <div class="seg" id="ytdlpfmt">
         <button data-fmt="video" class="on">🎬 Video</button>
         <button data-fmt="audio">🎵 Audio</button>
+        <button data-fmt="gallery" id="ytdlpgallery" hidden>🖼 Gallery</button>
       </div>
       <label><input type="checkbox" id="ytdlpkids"> Kids</label>
       <label><input type="checkbox" id="ytdlpadult"> Adult</label>
@@ -2066,7 +2067,12 @@
 
     const sync = () => {
       fmtBtns.forEach((b) => b.classList.toggle('on', b.dataset.fmt === format));
-      const noAdult = format === 'audio' || kids.checked;
+      // #177: a gallery goes to Stash, which has no Kids/Adult/Short folders to pick.
+      const gallery = format === 'gallery';
+      kids.disabled = gallery;
+      kids.parentElement.classList.toggle('off', gallery);
+      document.getElementById('ytdlpgo').textContent = gallery ? 'Add to Stash' : 'Download';
+      const noAdult = format === 'audio' || kids.checked || gallery;
       adult.disabled = noAdult;
       adult.parentElement.classList.toggle('off', noAdult);
       short.disabled = noAdult || !adult.checked;
@@ -2100,6 +2106,10 @@
       kids.checked = false;
       adult.checked = !!p.adult;
       short.checked = !!p.short;
+      // #177: only when the page links a few full-size images.
+      const gal = document.getElementById('ytdlpgallery');
+      gal.hidden = !(p.gallery > 0);
+      gal.textContent = `🖼 Gallery (${p.gallery || 0})`;
       document.getElementById('ytdlpurl').textContent = p.title || p.url;
       document.getElementById('ytdlpurl').title = p.url;
       sync();

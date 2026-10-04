@@ -142,12 +142,28 @@ class MainActivity : Activity() {
     // in the background and a toast reports the outcome; the ⤓ shows ⏳ meanwhile.
     private var ytdlpPending = 0
 
+    // #177: run the shared page reader on the active tab; [then] gets its Meta
+    // (empty when the reader fails or there is no page).
+    private fun readStashMeta(then: (Stash.Meta) -> Unit) {
+        val wv = active?.webView
+        val src = Stash.readerSource(this)
+        if (wv == null || src.isEmpty()) { then(Stash.Meta()); return }
+        try {
+            wv.evaluateJavascript(src) { json -> then(Stash.parseMeta(json)) }
+        } catch (e: Exception) { then(Stash.Meta()) }
+    }
+
     private fun showYtdlpPicker() {
         val url = active?.url ?: ""
         if (!YtDlp.downloadable(url)) {
             android.widget.Toast.makeText(this, "Only web pages can be sent to yt-dlp", android.widget.Toast.LENGTH_SHORT).show()
             return
         }
+        // #177: a page with 3+ full-size images also offers "Gallery -> Stash".
+        readStashMeta { meta -> showYtdlpPicker(url, if (Stash.isGallery(meta)) meta else null) }
+    }
+
+    private fun showYtdlpPicker(url: String, galleryMeta: Stash.Meta?) {
         val sites = YtDlp.sites(this)
         val (dAdult, dShort) = YtDlp.defaults(sites, url)
         val box = LinearLayout(this).apply {
@@ -173,7 +189,7 @@ class MainActivity : Activity() {
         sync()
         listOf(fmt, kids, adult, short).forEach { box.addView(it) }
 
-        android.app.AlertDialog.Builder(this)
+        val dialog = android.app.AlertDialog.Builder(this)
             .setTitle("Send to yt-dlp")
             .setMessage(active?.title?.takeIf { it.isNotBlank() } ?: url)
             .setView(box)
@@ -186,13 +202,19 @@ class MainActivity : Activity() {
                 sendToYtdlp(sites.endpoint, body)
             }
             .setNegativeButton("Cancel", null)
-            .show()
+        if (galleryMeta != null) {
+            // #177: url/meta captured now, so a tab that closes later changes nothing.
+            dialog.setNeutralButton("🖼 Gallery (${galleryMeta.imageUrls.size} images) → Stash") { _, _ ->
+                sendToStash(sites.endpoint, "gallery", url, url, galleryMeta)
+            }
+        }
+        dialog.show()
     }
 
     // --- #181: long-press menu on images ---
     private fun showImageMenu(src: String?) {
         if (!Outfit.canSend(src)) return // data:/blob: images: nothing the Studio could fetch
-        val items = arrayOf("Create Outfit", "Open image in new tab", "Copy image link")
+        val items = arrayOf("Create Outfit", "Open image in new tab", "Copy image link", "Add to Stash")
         android.app.AlertDialog.Builder(this)
             .setItems(items) { _, which ->
                 when (which) {
@@ -201,6 +223,12 @@ class MainActivity : Activity() {
                     2 -> {
                         val cm = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
                         cm.setPrimaryClip(android.content.ClipData.newPlainText("image link", src))
+                    }
+                    3 -> { // #177: the page url is captured now, not read from the tab later
+                        val pageUrl = active?.url ?: ""
+                        readStashMeta { meta ->
+                            sendToStash(YtDlp.sites(this).endpoint, "media", src!!, pageUrl, meta)
+                        }
                     }
                 }
             }
@@ -233,6 +261,29 @@ class MainActivity : Activity() {
         btn.text = "⏳"
         android.widget.Toast.makeText(this, "Sending $label to yt-dlp…", android.widget.Toast.LENGTH_SHORT).show()
         YtDlp.send(endpoint, body) { ok, message ->
+            runOnUiThread {
+                ytdlpPending = maxOf(0, ytdlpPending - 1)
+                if (ytdlpPending == 0) btn.text = "⤓"
+                android.widget.Toast.makeText(this, message, android.widget.Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    // #177: POST to the Dashboard's Stash route and poll the job. Shares the
+    // yt-dlp pending counter so the ⤓ shows ⏳ while anything is in flight.
+    private fun sendToStash(ytdlpEndpoint: String, kind: String, url: String, pageUrl: String, meta: Stash.Meta) {
+        val body = Stash.body(kind, url, pageUrl, meta)
+        val endpoint = Stash.endpoint(ytdlpEndpoint)
+        if (body == null || endpoint.isEmpty()) {
+            android.widget.Toast.makeText(this, "Stash can't take that link", android.widget.Toast.LENGTH_SHORT).show()
+            return
+        }
+        val btn = findViewById<TextView>(R.id.dlBtn)
+        val what = when (kind) { "gallery" -> "gallery"; "video" -> "video"; else -> "image" }
+        ytdlpPending++
+        btn.text = "⏳"
+        android.widget.Toast.makeText(this, "Sending $what to Stash…", android.widget.Toast.LENGTH_SHORT).show()
+        Stash.send(endpoint, kind, body) { _, message ->
             runOnUiThread {
                 ytdlpPending = maxOf(0, ytdlpPending - 1)
                 if (ytdlpPending == 0) btn.text = "⤓"
