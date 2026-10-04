@@ -147,13 +147,13 @@ test('every non-separator item has an id and a label', () => {
   }
 });
 
-console.log('#179: Create outfit in MuseForge');
+console.log('#179/#181: Create Outfit');
 
 test('an http(s) image offers it, last in the image section', () => {
   const items = build({ mediaType: 'image', srcURL: 'https://x.com/i.png' }, { imageOutfit: true });
   const got = ids(items);
   assert.strictEqual(got[got.indexOf('image.save') + 1], 'image.outfit');
-  assert.strictEqual(find(items, 'image.outfit').label, 'Create outfit in MuseForge…');
+  assert.strictEqual(find(items, 'image.outfit').label, 'Create Outfit…');
 });
 
 test('an image the Studio cannot fetch does not', () => {

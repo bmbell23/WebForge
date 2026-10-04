@@ -56,8 +56,9 @@ function build(params = {}, ctx = {}) {
       // page loaded rather than a re-encoded copy of what is on screen.
       { id: 'image.save', label: 'Download image' }
     );
-    // #179: hand the picture to MuseForge's Studio to make an outfit from it.
-    if (ctx.imageOutfit) items.push({ id: 'image.outfit', label: 'Create outfit in MuseForge…' });
+    // #179: hand the picture to the Studio to make an outfit from it.
+    // #181: the label names the action, not the product.
+    if (ctx.imageOutfit) items.push({ id: 'image.outfit', label: 'Create Outfit…' });
   }
 
   // A selection inside a text box belongs to the editing section below, not here.

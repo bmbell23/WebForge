@@ -24,4 +24,16 @@ const bare = new URL(outfitUrl('https://ex.com/p.jpg', '  ', ''));
 ok(!bare.searchParams.has('name') && !bare.searchParams.has('text'), 'empty name/description are left off');
 ok(outfitUrl('data:image/png;base64,AAAA', 'x', 'y') === null, 'an unsendable image gives no address');
 
+console.log('#181: shared fixtures (Android reads the same file)');
+const fs = require('fs');
+const path = require('path');
+let rows = 0;
+for (const line of fs.readFileSync(path.join(__dirname, '..', 'shared', 'outfit-fixtures.tsv'), 'utf8').split('\n')) {
+  if (!line.trim() || line.startsWith('#')) continue;
+  const [src, name, text, want] = line.split('\t');
+  ok(outfitUrl(src, name, text) === (want || null), `fixture: ${line}`);
+  rows++;
+}
+ok(rows >= 7, `only ${rows} fixtures read`);
+
 console.log(`ok, ${n} checks`);
