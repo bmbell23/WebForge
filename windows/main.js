@@ -42,6 +42,7 @@ const repaint = require('./repaint'); // #148 — ditto (when to force a frame)
 const focusring = require('./focusring'); // #131 — ditto (chrome surface vs page view)
 const museforge = require('./museforge'); // #179 — Electron-free (the Studio's outfit-from-image address)
 const ytdlp = require('./ytdlp'); // #156 — ditto (what the download button sends)
+const adultlist = require('./adultlist'); // #203 — ditto (your adult-site list)
 const stash = require('./stash'); // #177 — ditto (Add to Stash body + job wording)
 const autofillFrames = require('./autofillframes'); // #141
 
@@ -1954,6 +1955,7 @@ async function setupAdblock() {
 const SYNC_URL = 'http://100.69.184.113:8013/store/bookmarks';
 const PERSONA_SYNC_URL = 'http://100.69.184.113:8013/store/personas'; // #88
 const TABS_SYNC_URL = 'http://100.69.184.113:8013/store/tabs'; // #57
+const ADULT_SYNC_URL = 'http://100.69.184.113:8013/store/adult'; // #203
 let syncTimer = null;
 let syncing = false;
 
@@ -2030,6 +2032,63 @@ async function syncPersonas() {
     // off the tailnet — local definitions stand
   } finally {
     personaSyncing = false;
+  }
+}
+
+// #203: your adult-site list ({added, removed}) on top of the built-in one.
+// Shared with the phone, last-write-wins like personas.
+function adultUser() {
+  const a = getSettings().adultUser;
+  return { ...adultlist.clean(a), updatedAt: (a && a.updatedAt) || 0 };
+}
+function applyAdultUser() {
+  ytdlp.setUser(adultUser());
+  closeAdultTabs(activeId, 'list changed'); // the tab you're on goes when you leave it (#176)
+}
+function saveAdultUser(user, updatedAt = Date.now()) {
+  getSettings().adultUser = { ...adultlist.clean(user), updatedAt };
+  saveSettings();
+  applyAdultUser();
+  pushState();
+  return adultView();
+}
+const adultView = () => ({ ...adultUser(), builtins: ytdlp.builtins() });
+// An empty list is a real choice here (it is the default), so #151's "nothing
+// never overwrites something" is judged by whether you ever edited it: a fresh
+// install is stamped 0 and never pushes; an edit, even one that empties it, does.
+const adultWeight = (at) => (Number(at) > 0 ? 1 : 0);
+
+let adultSyncing = false;
+let adultResync = false; // an edit landed mid-sync: run again with it
+async function syncAdult() {
+  if (adultSyncing) { adultResync = true; return; }
+  adultSyncing = true;
+  try {
+    const res = await fetch(ADULT_SYNC_URL, { signal: AbortSignal.timeout(5000) });
+    const remote = await res.json();
+    const remoteAt = remote.updatedAt || 0;
+    const local = adultUser(); // read after the fetch, so an edit made meanwhile is what we compare
+    const { action } = syncdecide.decide({
+      localAt: local.updatedAt,
+      remoteAt,
+      localWeight: adultWeight(local.updatedAt),
+      remoteWeight: remote.data && typeof remote.data === 'object' ? adultWeight(remoteAt) : 0,
+    });
+    if (action === 'pull') {
+      saveAdultUser(remote.data, remoteAt);
+    } else if (action === 'push') {
+      await fetch(ADULT_SYNC_URL, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ data: adultlist.clean(local), updatedAt: local.updatedAt }),
+        signal: AbortSignal.timeout(5000),
+      });
+    }
+  } catch {
+    // off the tailnet: the local list stands
+  } finally {
+    adultSyncing = false;
+    if (adultResync) { adultResync = false; syncAdult(); }
   }
 }
 
@@ -2562,6 +2621,7 @@ function onUnlocked() {
   }
   syncBookmarks(); // #13: catch up whenever a session starts
   syncPersonas(); // #88
+  syncAdult(); // #203
   syncTabs(); // #57
   sweepStaleTabs(); // #79: a machine left off overnight cleans up on return
   flushPendingExternalUrl(); // #106: a link that arrived while we were locked
@@ -3051,6 +3111,18 @@ ipcMain.on('close-active-tab', () => {
 // before-input-event is synchronous and cannot read the page's selection.
 ipcMain.on('open-text-rule', (_e, text) => openFromSelection(String(text || '')));
 ipcMain.handle('int:get-text-rules', () => textRules());
+ipcMain.handle('int:get-adult', () => adultView()); // #203
+ipcMain.handle('int:save-adult', (_e, user) => { const v = saveAdultUser(user); syncAdult(); return v; });
+ipcMain.handle('int:add-adult', (_e, typed) => {
+  const entry = adultlist.normalize(typed);
+  if (!entry) return { entry: null, view: adultView() };
+  const u = adultUser();
+  const removed = u.removed.filter((e) => e !== entry); // a switched-off built-in comes back on
+  const added = ytdlp.builtins().includes(entry) ? u.added : [...u.added, entry];
+  const view = saveAdultUser({ added, removed });
+  syncAdult();
+  return { entry, view };
+});
 ipcMain.handle('int:save-text-rules', (_e, list) => saveTextRules(list));
 ipcMain.on('activate-tab', errorlog.guard('activate-tab', (_e, id) => activateTab(Number(id))));
 ipcMain.on('toggle-pin', (_e, id) => togglePin(id));
@@ -3996,6 +4068,7 @@ if (!isPrimaryInstance) {
 }
 
 app.whenReady().then(() => {
+  ytdlp.setUser(adultUser()); // #203: before any tab is restored or swept
   if (!isPrimaryInstance) return; // losing the lock means this process is a no-op
   setupLogShipping(); // #171: first, so startup errors reach the server too
   applyTheme(getSettings().theme); // #24: before any view paints
@@ -4012,6 +4085,7 @@ app.whenReady().then(() => {
   whenWindowReady(() => openExternalUrl(urlFromArgv(process.argv))); // #148
   setInterval(syncBookmarks, 10 * 60 * 1000); // #13: periodic catch-up
   setInterval(syncPersonas, 10 * 60 * 1000); // #88
+  setInterval(syncAdult, 10 * 60 * 1000); // #203
   setInterval(syncTabs, 30 * 1000); // #95: 30s, matching Android — a minute felt dead
   setInterval(sweepStaleTabs, 5 * 60 * 1000); // #79
 });

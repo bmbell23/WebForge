@@ -33,6 +33,9 @@ contextBridge.exposeInMainWorld('wf', {
   // selected-text URL rules (#100)
   getTextRules: () => ipcRenderer.invoke('int:get-text-rules'),
   saveTextRules: (list) => ipcRenderer.invoke('int:save-text-rules', list),
+  getAdult: () => ipcRenderer.invoke('int:get-adult'), // #203
+  saveAdult: (user) => ipcRenderer.invoke('int:save-adult', user),
+  addAdult: (typed) => ipcRenderer.invoke('int:add-adult', typed),
   // default browser (#106)
   defaultBrowserStatus: () => ipcRenderer.invoke('int:default-browser-status'),
   openDefaultApps: () => ipcRenderer.invoke('int:open-default-apps'),

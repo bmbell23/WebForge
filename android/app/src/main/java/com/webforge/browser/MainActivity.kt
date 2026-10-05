@@ -131,6 +131,7 @@ class MainActivity : Activity() {
         newTab(linkFrom(intent) ?: newTabUrl()) // #188: opened as the default browser
         BookmarkStore.sync(this) { }
         Personas.sync(this) { runOnUiThread { rehomeTabs() } } // #88/#96
+        AdultList.sync(this) { pulled -> if (pulled) runOnUiThread { adultListChanged() } } // #203
         syncTabsAcrossDevices() // #57 // warm the cache for the bookmarks panel
         UpdateManager(this).checkForUpdate()
     }
@@ -232,6 +233,73 @@ class MainActivity : Activity() {
                     }
                 }
             }
+            .show()
+    }
+
+    // #203: manage the adult-site list; every change applies at once
+    // #203: tabs that just became adult close now; the one you're on goes when you leave it (#176). Same as Windows.
+    private fun adultListChanged() = closeAdultTabs(active, "list changed")
+
+    private fun showAdultSites() {
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(8), dp(20), 0)
+        }
+        fun label(text: String) = TextView(this).apply {
+            this.text = text
+            setTextColor(0xFF7C7C82.toInt())
+            textSize = 12f
+            setPadding(0, dp(14), 0, dp(4))
+        }
+        lateinit var render: () -> Unit
+        render = {
+            box.removeAllViews()
+            val input = EditText(this).apply {
+                hint = "example.com or host:port"; maxLines = 1
+                inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_URI
+            }
+            val addBtn = android.widget.Button(this).apply {
+                text = "Add"
+                setOnClickListener {
+                    val typed = input.text.toString()
+                    if (AdultList.add(this@MainActivity, typed)) { render(); adultListChanged() }
+                    else android.widget.Toast.makeText(this@MainActivity, "Not a site: $typed", android.widget.Toast.LENGTH_SHORT).show()
+                }
+            }
+            val addRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+            addRow.addView(input, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            addRow.addView(addBtn)
+            box.addView(addRow)
+
+            val user = AdultList.load(this)
+            box.addView(label("YOURS"))
+            if (user.added.isEmpty()) box.addView(TextView(this).apply { text = "Nothing added yet" })
+            for (e in user.added) {
+                val line = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+                line.addView(TextView(this).apply { text = e }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                line.addView(android.widget.Button(this).apply {
+                    text = "Remove"
+                    setOnClickListener { AdultList.remove(this@MainActivity, e); render(); adultListChanged() }
+                })
+                box.addView(line)
+            }
+
+            box.addView(label("BUILT-IN (checked = on)"))
+            for (e in YtDlp.builtins(this)) {
+                box.addView(android.widget.CheckBox(this).apply {
+                    text = e
+                    isChecked = e !in user.removed
+                    setOnCheckedChangeListener { _, on -> AdultList.setBuiltinOff(this@MainActivity, e, !on); adultListChanged() }
+                })
+            }
+        }
+        render()
+        val scroll = android.widget.ScrollView(this).apply { addView(box) }
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Adult sites")
+            .setView(scroll)
+            .setPositiveButton("Done", null)
+            .setOnDismissListener { showSettings() }
             .show()
     }
 
@@ -1878,6 +1946,12 @@ class MainActivity : Activity() {
             }
         }
 
+        header(col, "ADULT SITES") // #203
+        val adultCard = card(col)
+        val mine = AdultList.load(this).added.size
+        val builtinOn = YtDlp.builtins(this).count { it !in AdultList.load(this).removed }
+        action(adultCard, "Adult sites", "$mine yours · $builtinOn built-in on") { showAdultSites() }
+
         header(col, "PERSONAS")
         caption(col, "Workspaces with their own tabs. Opening a URL that matches a Persona's rules switches to it; anything unmatched lands in Unassigned. One rule per line — prefix, wildcard (https://*.example.com) or /regex/.")
         val pc = card(col)
@@ -2180,6 +2254,7 @@ class MainActivity : Activity() {
         // never appeared until a cold start. Refresh every time we come back.
         BookmarkStore.sync(this) { }
         Personas.sync(this) { runOnUiThread { rehomeTabs() } } // #88/#96
+        AdultList.sync(this) { pulled -> if (pulled) runOnUiThread { adultListChanged() } } // #203
         syncTabsAcrossDevices() // #57
         sweepHandler.removeCallbacksAndMessages(null)
         sweepHandler.postDelayed(object : Runnable {

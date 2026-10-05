@@ -1,0 +1,24 @@
+# #203: what a typed or pasted adult-site entry becomes ("-" = refused).
+# Read by windows/adultlist.test.js AND android AdultListTest.kt, so the platforms cannot drift.
+# input	normalized
+example.com	example.com
+Example.COM	example.com
+www.example.com	example.com
+https://www.example.com/gallery/1?x=2#top	example.com
+http://user:pw@example.com/	example.com
+cdn.example.co.uk	cdn.example.co.uk
+  example.com  	example.com
+example.com.	example.com
+localhost	localhost
+100.69.184.113:8005	100.69.184.113:8005
+http://100.69.184.113:8005/login?next=%2Fgirl	100.69.184.113:8005
+dockerhost.tailb8b575.ts.net:9999/scenes	dockerhost.tailb8b575.ts.net:9999
+*:18005	*:18005
+www.example.com:8080	www.example.com:8080
+example	-
+	-
+example.com:0	-
+example.com:70000	-
+*	-
+*.example.com	-
+exa mple.com	-

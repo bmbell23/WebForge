@@ -13,8 +13,8 @@
             "elitebabes.com", "pichunter.com", "literotica.com", "rule34video.com"],
   "_adultWords": "#183: a host label CONTAINING one of these is adult too, so sites nobody listed still count. Words that also live in ordinary names (sex: sussex/essex, adult: adultswim) are deliberately absent.",
   "adultWords": ["porn", "xxx", "hentai", "xvideo", "xhamster", "nsfw", "fap", "milf", "nude", "slut", "erotic"],
-  "_adultOrigins": "#191: host:port pairs that are adult. 100.69.184.113 hosts every app, so MuseForge's Studio (:8005) and Stash (:9999, #193) can only be named with their port; the other ports there stay normal.",
-  "adultOrigins": ["100.69.184.113:8005", "dockerhost.tailb8b575.ts.net:8005", "10.0.0.160:8005",
+  "_adultOrigins": "#191: host:port pairs that are adult. 100.69.184.113 hosts every app, so MuseForge's Studio (:8005) and Stash (:9999, #193) can only be named with their port; the other ports there stay normal. *:<port> (#201) matches that port on any host: the Studio and its :18005 PR previews, however you reach them.",
+  "adultOrigins": ["*:8005", "*:18005",
                    "100.69.184.113:9999", "dockerhost.tailb8b575.ts.net:9999", "10.0.0.160:9999"],
   "short": ["streamable.com", "imgur.com", "gfycat.com", "redgifs.com"]
 }
