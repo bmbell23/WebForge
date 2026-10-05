@@ -52,7 +52,13 @@ function originOf(url) {
     return `${u.hostname.toLowerCase()}:${u.port || (u.protocol === 'https:' ? '443' : '80')}`;
   } catch { return ''; }
 }
-const adultOrigin = (url) => (SITES.adultOrigins || []).includes(originOf(url));
+// #201: "*:<port>" names a port on any host.
+const adultOrigin = (url) => {
+  const o = originOf(url);
+  if (!o) return false;
+  const port = o.slice(o.lastIndexOf(':'));
+  return (SITES.adultOrigins || []).some((a) => a === o || a === `*${port}`);
+};
 
 /** Only real web pages can be sent; the new-tab page, file: and friends can't. */
 const downloadable = (url) => hostOf(url) !== '';

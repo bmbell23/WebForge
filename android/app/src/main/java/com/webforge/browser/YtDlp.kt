@@ -84,7 +84,7 @@ object YtDlp {
         if ((scheme != "http" && scheme != "https") || host.isEmpty()) false
         else {
             val port = if (u.port >= 0) u.port else if (scheme == "https") 443 else 80
-            "$host:$port" in sites.adultOrigins
+            "$host:$port" in sites.adultOrigins || "*:$port" in sites.adultOrigins // #201: any host
         }
     } catch (e: Exception) { false }
 

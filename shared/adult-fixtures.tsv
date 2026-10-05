@@ -35,6 +35,13 @@ http://100.69.184.113:8005/library/outfit/from-image?src=https%3A%2F%2Fx.com%2Fa
 http://100.69.184.113:8005/approvals#fig-outfit-moto	1
 http://dockerhost.tailb8b575.ts.net:8005/	1
 http://10.0.0.160:8005/	1
+http://100.69.184.113:8005/login?next=%2Fgirl%2Fgigi%2Fgallery	1
+http://100.69.184.113:18005/	1
+https://dockerhost.tailb8b575.ts.net:18005/approvals	1
+http://localhost:8005/	1
+http://100.69.184.113:8006/	0
+http://100.69.184.113:80050/	0
+http://example.com/?port=8005	0
 http://100.69.184.113:8001/	0
 http://100.69.184.113:8013/logs	0
 http://100.69.184.113/	0
