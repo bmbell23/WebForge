@@ -86,6 +86,7 @@ object AdultList {
 
     private fun updatedAt(c: Context) = prefs(c).getLong("updatedAt", 0)
 
+    @Synchronized
     private fun store(c: Context, u: User, at: Long) {
         prefs(c).edit().putString("data", toJson(u).toString()).putLong("updatedAt", at).apply()
         YtDlp.invalidate()
@@ -97,6 +98,7 @@ object AdultList {
         push(c)
     }
 
+    @Synchronized
     fun add(c: Context, entry: String): Boolean {
         val e = normalize(entry) ?: return false
         val u = load(c)
@@ -106,11 +108,13 @@ object AdultList {
         return true
     }
 
+    @Synchronized
     fun remove(c: Context, entry: String) {
         val u = load(c)
         write(c, User(u.added.filter { it != entry }, u.removed))
     }
 
+    @Synchronized
     fun setBuiltinOff(c: Context, entry: String, off: Boolean) {
         val u = load(c)
         write(c, User(u.added, if (off) (u.removed + entry).distinct() else u.removed.filter { it != entry }))
@@ -130,6 +134,7 @@ object AdultList {
                 val remoteAt = root.optLong("updatedAt", 0)
                 val data = root.optJSONObject("data")
                 val localAt = updatedAt(c)
+                // A fresh install is stamped 0, so it pulls but never pushes (#151); an edit that empties the list still pushes.
                 if (data != null && remoteAt > localAt) {
                     store(c, parse(data.toString()), remoteAt)
                     pulled = true

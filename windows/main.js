@@ -2053,22 +2053,26 @@ function saveAdultUser(user, updatedAt = Date.now()) {
   return adultView();
 }
 const adultView = () => ({ ...adultUser(), builtins: ytdlp.builtins() });
-const adultWeight = (u) => (u ? adultlist.clean(u).added.length + adultlist.clean(u).removed.length : 0);
+// An empty list is a real choice here (it is the default), so #151's "nothing
+// never overwrites something" is judged by whether you ever edited it: a fresh
+// install is stamped 0 and never pushes; an edit, even one that empties it, does.
+const adultWeight = (at) => (Number(at) > 0 ? 1 : 0);
 
 let adultSyncing = false;
+let adultResync = false; // an edit landed mid-sync: run again with it
 async function syncAdult() {
-  if (adultSyncing) return;
+  if (adultSyncing) { adultResync = true; return; }
   adultSyncing = true;
   try {
-    const local = adultUser();
     const res = await fetch(ADULT_SYNC_URL, { signal: AbortSignal.timeout(5000) });
     const remote = await res.json();
     const remoteAt = remote.updatedAt || 0;
+    const local = adultUser(); // read after the fetch, so an edit made meanwhile is what we compare
     const { action } = syncdecide.decide({
       localAt: local.updatedAt,
       remoteAt,
-      localWeight: adultWeight(local),
-      remoteWeight: adultWeight(remote.data),
+      localWeight: adultWeight(local.updatedAt),
+      remoteWeight: remote.data && typeof remote.data === 'object' ? adultWeight(remoteAt) : 0,
     });
     if (action === 'pull') {
       saveAdultUser(remote.data, remoteAt);
@@ -2084,6 +2088,7 @@ async function syncAdult() {
     // off the tailnet: the local list stands
   } finally {
     adultSyncing = false;
+    if (adultResync) { adultResync = false; syncAdult(); }
   }
 }
 

@@ -45,18 +45,20 @@ object YtDlp {
     }
 
     @Volatile private var cached: Sites? = null // #203: the effective list (built-in + yours)
+    @Volatile private var generation = 0
     @Volatile private var baseCached: Sites? = null
 
     /** #203: your list changed; rebuild the effective list on next use. */
-    fun invalidate() { cached = null }
+    fun invalidate() { generation++; cached = null }
 
     private fun base(ctx: Context): Sites = baseCached
         ?: parse(ctx.assets.open("ytdlp-sites.json").bufferedReader().use { it.readText() }).also { baseCached = it }
 
     /** Staged into assets from shared/ by the APK build, like newtab.html. */
     fun sites(ctx: Context): Sites = cached ?: try {
+        val gen = generation // #203: an edit landing mid-build must not leave a stale list cached
         val u = AdultList.load(ctx)
-        AdultList.effective(base(ctx), u.added, u.removed).also { cached = it }
+        AdultList.effective(base(ctx), u.added, u.removed).also { if (gen == generation) cached = it }
     } catch (e: Exception) {
         // #176: not cached, so one failed read can't switch adult-tab closing
         // off for the rest of the process.

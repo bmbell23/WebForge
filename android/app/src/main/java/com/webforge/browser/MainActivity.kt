@@ -131,7 +131,7 @@ class MainActivity : Activity() {
         newTab(linkFrom(intent) ?: newTabUrl()) // #188: opened as the default browser
         BookmarkStore.sync(this) { }
         Personas.sync(this) { runOnUiThread { rehomeTabs() } } // #88/#96
-        AdultList.sync(this) // #203
+        AdultList.sync(this) { pulled -> if (pulled) runOnUiThread { adultListChanged() } } // #203
         syncTabsAcrossDevices() // #57 // warm the cache for the bookmarks panel
         UpdateManager(this).checkForUpdate()
     }
@@ -2254,7 +2254,7 @@ class MainActivity : Activity() {
         // never appeared until a cold start. Refresh every time we come back.
         BookmarkStore.sync(this) { }
         Personas.sync(this) { runOnUiThread { rehomeTabs() } } // #88/#96
-        AdultList.sync(this) // #203
+        AdultList.sync(this) { pulled -> if (pulled) runOnUiThread { adultListChanged() } } // #203
         syncTabsAcrossDevices() // #57
         sweepHandler.removeCallbacksAndMessages(null)
         sweepHandler.postDelayed(object : Runnable {
