@@ -23,8 +23,14 @@ function loadSites() {
   return { endpoint: '', adult: [], short: [] };
 }
 
-const SITES = loadSites();
-const ENDPOINT = SITES.endpoint;
+const adultlist = require('./adultlist');
+
+const BASE = loadSites();
+let SITES = BASE; // #203: BASE plus your own list (setUser)
+const ENDPOINT = BASE.endpoint;
+
+/** #203: apply your {added, removed} on top of the built-in list. */
+function setUser(user) { SITES = adultlist.effective(BASE, user); }
 
 function hostOf(url) {
   try {
@@ -89,4 +95,4 @@ function body(url, choice = {}) {
 // restores. Same list and matching as the picker's Adult default.
 const isAdult = (url) => adultHost(hostOf(url)) || adultOrigin(url);
 
-module.exports = { ENDPOINT, downloadable, defaults, body, hostOf, isAdult };
+module.exports = { ENDPOINT, downloadable, defaults, body, hostOf, isAdult, setUser, builtins: () => adultlist.builtins(BASE) };

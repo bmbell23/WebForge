@@ -44,16 +44,30 @@ object YtDlp {
         return Sites(str("endpoint"), list("adult"), list("short"), list("adultWords"), list("adultOrigins"))
     }
 
-    @Volatile private var cached: Sites? = null
+    @Volatile private var cached: Sites? = null // #203: the effective list (built-in + yours)
+    @Volatile private var baseCached: Sites? = null
+
+    /** #203: your list changed; rebuild the effective list on next use. */
+    fun invalidate() { cached = null }
+
+    private fun base(ctx: Context): Sites = baseCached
+        ?: parse(ctx.assets.open("ytdlp-sites.json").bufferedReader().use { it.readText() }).also { baseCached = it }
 
     /** Staged into assets from shared/ by the APK build, like newtab.html. */
     fun sites(ctx: Context): Sites = cached ?: try {
-        parse(ctx.assets.open("ytdlp-sites.json").bufferedReader().use { it.readText() }).also { cached = it }
+        val u = AdultList.load(ctx)
+        AdultList.effective(base(ctx), u.added, u.removed).also { cached = it }
     } catch (e: Exception) {
         // #176: not cached, so one failed read can't switch adult-tab closing
         // off for the rest of the process.
         Sites("", emptyList(), emptyList())
     }
+
+    /** #203: built-in entries you can switch off in Settings. */
+    fun builtins(ctx: Context): List<String> = try {
+        val b = base(ctx)
+        b.adult + b.adultOrigins
+    } catch (e: Exception) { emptyList() }
 
     fun hostOf(url: String): String = try {
         val u = URI(url.trim())

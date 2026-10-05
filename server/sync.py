@@ -25,7 +25,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
 PORT = int(os.environ.get("PORT", "8013"))
 # #88/#57: personas + per-persona tab sets ride the same store.
-ALLOWED_KEYS = {"bookmarks", "personas", "tabs"}
+ALLOWED_KEYS = {"bookmarks", "personas", "tabs", "adult"}  # #203: your adult-site list
 MAX_BODY = 10_000_000
 
 
