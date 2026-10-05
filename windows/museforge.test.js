@@ -53,7 +53,7 @@ ok(form.get('src') === 'https://ex.com/p.jpg?w=1&h=2', 'src survives its own que
 ok(form.get('name') === 'moto jacket' && form.get('text') === 'leather & denim', 'trimmed, & encoded');
 ok(new URLSearchParams(createForm('https://ex.com/p.jpg', '', '')).get('name') === '', 'an empty name lets the Studio pick one');
 ok(createForm('data:image/png;base64,AA', 'x', 'y') === null, 'unsendable picture → no form');
-ok(PRICE_LABEL === '~$0.07', 'price on the button');
+ok(PRICE_LABEL === '~$0.03', 'price on the button');
 let created = 0;
 for (const line of fs.readFileSync(path.join(__dirname, '..', 'shared', 'outfit-create-fixtures.tsv'), 'utf8').split('\n')) {
   if (!line.trim() || line.startsWith('#')) continue;

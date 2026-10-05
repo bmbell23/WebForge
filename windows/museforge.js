@@ -50,9 +50,9 @@ function isDone(url) {
 // --- #195: Create straight from the dialog, no tab ---
 // The Studio's form POSTs to the same address: src (it fetches the picture
 // itself), name, text. Its only guard is the login cookie, which WebForge
-// already holds from browsing the Studio. 2 figures × $0.035 (the Studio's
-// SHEET_CANDIDATES × PRICE).
-const PRICE_LABEL = '~$0.07';
+// already holds from browsing the Studio. One image at about 3 cents (Brandon,
+// #199; #195 had counted two sheet candidates).
+const PRICE_LABEL = '~$0.03';
 
 /** The form body, or null for a picture the Studio can't fetch. */
 function createForm(src, name, text) {
