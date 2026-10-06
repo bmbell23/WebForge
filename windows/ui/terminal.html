@@ -2,15 +2,35 @@
 <html>
 <head>
 <meta charset="utf-8">
-<title>WebForge Terminal (preview)</title>
+<title>New terminal</title>
 <link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css">
 <style>
   html, body { margin: 0; height: 100%; background: #0c0c0c; overflow: hidden; }
   #term { position: absolute; inset: 6px; }
+  /* #214: the new-tab picker — a terminal tab opened without a host. */
+  #picker { position: absolute; inset: 0; display: none; overflow: auto; padding: 32px 48px; color: #ddd;
+            font: 14px 'Segoe UI', system-ui, sans-serif; background: #0c0c0c; }
+  body.picking #picker { display: block; }
+  body.picking #term { visibility: hidden; }
+  #picker h1 { font-size: 18px; font-weight: 600; margin: 0 0 16px; }
+  #picker h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: #888; margin: 20px 0 6px; }
+  #target { width: 360px; max-width: 100%; padding: 8px 10px; font: 14px 'Cascadia Mono', Consolas, monospace;
+            background: #1a1a1a; color: #eee; border: 1px solid #444; border-radius: 4px; }
+  .host { display: flex; align-items: center; gap: 8px; max-width: 480px; }
+  .host button.go { flex: 1; text-align: left; padding: 6px 10px; font: 14px 'Cascadia Mono', Consolas, monospace;
+                    background: #161616; color: #ddd; border: 1px solid #2a2a2a; border-radius: 4px; cursor: pointer; }
+  .host button.go:hover, .host button.go:focus { background: #23324a; border-color: #3d6bb3; outline: none; }
+  .host button.star { background: none; border: none; color: #c9a227; font-size: 16px; cursor: pointer; }
+  .empty { color: #666; }
 </style>
 </head>
 <body>
 <div id="term"></div>
+<div id="picker">
+  <h1>Open a terminal</h1>
+  <input id="target" type="text" placeholder="user@host, host:port, or an ~/.ssh/config name" spellcheck="false" autocomplete="off">
+  <div id="groups"></div>
+</div>
 <script src="../node_modules/@xterm/xterm/lib/xterm.js"></script>
 <script src="../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
 <script src="../node_modules/@xterm/addon-web-links/lib/addon-web-links.js"></script>
@@ -77,8 +97,54 @@
   term.onResize(({ cols, rows }) => window.terminal.resize(cols, rows));
   window.addEventListener('resize', () => fit.fit());
 
-  window.terminal.start(term.cols, term.rows);
-  term.focus();
+  // #214: a session needs a host to start. ?host= comes from a connection the
+  // user clicked; without it, this tab is the picker until one is chosen.
+  window.terminal.onPrompt((q) => term.write(`\r\n\x1b[33;1m${q}\x1b[0m`));
+  const begin = (target) => {
+    document.body.classList.remove('picking');
+    document.title = target;
+    fit.fit();
+    window.terminal.start(term.cols, term.rows, target);
+    term.focus();
+  };
+  const hostParam = new URLSearchParams(location.search).get('host');
+  if (hostParam) {
+    begin(hostParam);
+  } else {
+    document.body.classList.add('picking');
+    const input = document.getElementById('target');
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && input.value.trim()) begin(input.value.trim());
+    });
+    const render = async () => {
+      const g = (await window.terminal.connections()) || { favorites: [], frequent: [], config: [] };
+      const groups = document.getElementById('groups');
+      groups.replaceChildren();
+      for (const [title, list, fav] of [['★ Favorites', g.favorites, true], ['Frequent', g.frequent, false], ['~/.ssh/config', g.config, false]]) {
+        const h = document.createElement('h2');
+        h.textContent = title;
+        groups.appendChild(h);
+        if (!list.length) {
+          groups.appendChild(Object.assign(document.createElement('div'), { className: 'empty', textContent: 'none yet' }));
+          continue;
+        }
+        for (const t of list) {
+          const row = document.createElement('div');
+          row.className = 'host';
+          const go = Object.assign(document.createElement('button'), { className: 'go', textContent: t });
+          go.onclick = () => begin(t);
+          const star = Object.assign(document.createElement('button'), {
+            className: 'star', textContent: fav ? '★' : '☆', title: fav ? 'Remove from Favorites' : 'Add to Favorites',
+          });
+          star.onclick = () => { window.terminal.favorite(t); setTimeout(render, 50); };
+          row.append(go, star);
+          groups.appendChild(row);
+        }
+      }
+    };
+    render();
+    input.focus();
+  }
 </script>
 </body>
 </html>

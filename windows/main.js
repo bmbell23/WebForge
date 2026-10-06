@@ -46,6 +46,8 @@ const adultlist = require('./adultlist'); // #203 — ditto (your adult-site lis
 const stash = require('./stash'); // #177 — ditto (Add to Stash body + job wording)
 const autofillFrames = require('./autofillframes'); // #141
 const terminalMain = require('./terminal-main'); // #206 — terminal spike (ssh2; needs no native helpers)
+const termHold = require('./terminal').holdDecision; // #214
+const personaorder = require('./personaorder'); // #214
 
 // #134: banks and other sites with a "supported browsers" allowlist refuse to
 // let you sign in when the UA says Electron, even though the engine below is
@@ -91,6 +93,12 @@ const INTERNAL_PAGES = {
 const fileUrl = (p) => `file://${p.replace(/\\/g, '/')}`;
 const isInternalUrl = (u) =>
   typeof u === 'string' && Object.values(INTERNAL_PAGES).some((p) => u.startsWith(fileUrl(p)));
+// #214: a terminal tab. `?host=` connects straight away; without it the page is
+// the host picker. Never synced, saved, or offered to Ctrl+Shift+T.
+const TERMINAL_FILE = path.join(__dirname, 'ui', 'terminal.html');
+const terminalUrl = (target) => fileUrl(TERMINAL_FILE) + (target ? `?host=${encodeURIComponent(target)}` : '');
+const isTerminalUrl = (u) => typeof u === 'string' && u.startsWith(fileUrl(TERMINAL_FILE));
+const isTerminalTab = (id) => personaByTab.get(id) === personas.TERMINAL;
 const searchEngine = () => (ENGINES[getSettings().searchEngine] ? getSettings().searchEngine : 'google');
 const newTabUrl = () => `file://${NEWTAB_FILE.replace(/\\/g, '/')}?e=${searchEngine()}`;
 const isNewTabUrl = (u) => typeof u === 'string' && u.startsWith('file://') && u.includes('newtab.html');
@@ -207,7 +215,7 @@ function sortTabOrder() {
 let saveSessionTimer = null;
 function sessionSnapshot() {
   // #176: adult tabs are never written to the session, so a restart can't bring one back.
-  const kept = tabOrder.filter((id) => !isAdultTab(id));
+  const kept = tabOrder.filter((id) => !isAdultTab(id) && !isTerminalTab(id)); // #214: sessions don't restore
   return {
     tabs: kept
       .map((id) => ({
@@ -797,7 +805,7 @@ function starCurrent() {
     folder: existing?.folder || '',
     exists: Boolean(existing),
     claim: personas.claimFor(url), // #70
-    personas: orderedPersonas().map((p) => ({ id: p.id, name: p.name })),
+    personas: routablePersonas().map((p) => ({ id: p.id, name: p.name })),
   });
 }
 
@@ -857,13 +865,13 @@ function tabState() {
 // #71: Unassigned is the fallback, not a destination — put it last so the
 // Personas you actually use get Ctrl+Space 1, 2, 3. Display and the digit
 // shortcuts share this ordering so the numbers you see are the numbers you press.
+// #214: Terminal is first, so the order is 1 Terminal, 2 Personal, 3 Work,
+// 4 Unassigned. personaorder.js holds the rule, under test.
 function orderedPersonas() {
-  const list = personas.all();
-  return [
-    ...list.filter((p) => p.id !== personas.UNASSIGNED),
-    ...list.filter((p) => p.id === personas.UNASSIGNED),
-  ];
+  return personaorder.orderPersonas(personas.all());
 }
+// Personas a URL can be routed to — everything but Terminal, which has no rules.
+const routablePersonas = () => orderedPersonas().filter((p) => p.id !== personas.TERMINAL);
 
 // #57: other devices' tabs in the Persona we're currently looking at.
 function remoteTabsForActive() {
@@ -1039,7 +1047,10 @@ function contextMenuFor(wc, params) {
 function createTab(url = null, background = false, personaId = null, opts = {}) {
   if (locked) return null; // #15
   const id = nextTabId++;
+  // #214: a new tab in the Terminal Persona is a terminal (the host picker).
+  if (!url && personaId === personas.TERMINAL) url = terminalUrl(null);
   if (!url) url = newTabUrl(); // #43: default landing page is our search page
+  const terminal = isTerminalUrl(url);
   const lazy = Boolean(opts.lazy);
   if (lazy) lazyTabs.set(id, { url, title: opts.title || url }); // #78
   lastActiveAt.set(id, opts.lastActiveAt || Date.now()); // #79
@@ -1049,7 +1060,7 @@ function createTab(url = null, background = false, personaId = null, opts = {}) 
   // created as Unassigned and only jump to Work when it first navigated —
   // which looked like tabs re-homing themselves when you clicked them.
   const claimed = personas.forUrl(url);
-  personaByTab.set(id, claimed !== personas.UNASSIGNED ? claimed : personaId || personas.UNASSIGNED);
+  personaByTab.set(id, terminal ? personas.TERMINAL : claimed !== personas.UNASSIGNED ? claimed : personaId || personas.UNASSIGNED);
   // #95: this URL is open again, so stop publishing "closed" for it — otherwise
   // the other device keeps being told to kill a tab that is sitting right here.
   closedFacts.delete(url);
@@ -1058,9 +1069,11 @@ function createTab(url = null, background = false, personaId = null, opts = {}) 
     // page-side key capture — and no need for subframe node integration (#39).
     // #40: our own pages get the privileged bridge; web content never does.
     webPreferences: {
-      preload: isInternalUrl(url)
-        ? path.join(__dirname, 'internal-preload.js')
-        : path.join(__dirname, 'content-preload.js'),
+      preload: terminal
+        ? path.join(__dirname, 'terminal-preload.js') // #214
+        : isInternalUrl(url)
+          ? path.join(__dirname, 'internal-preload.js')
+          : path.join(__dirname, 'content-preload.js'),
     },
   });
   // #148: an unpainted view defaults to black, which is what made the
@@ -1068,7 +1081,7 @@ function createTab(url = null, background = false, personaId = null, opts = {}) 
   // not fix the missing frame — forceRepaint does — but a blank white page is a
   // far less alarming failure than a black window if one ever slips through.
   try {
-    view.setBackgroundColor('#ffffff');
+    view.setBackgroundColor(terminal ? '#0c0c0c' : '#ffffff');
   } catch (err) {
     errorlog.record('setBackgroundColor', err);
   }
@@ -1076,6 +1089,7 @@ function createTab(url = null, background = false, personaId = null, opts = {}) 
   tabOrder.push(id);
 
   const wc = view.webContents;
+  if (terminal) terminalMain.attach(wc); // #214: its ssh session lives and dies with the tab
   // Popups (window.open / target=_blank) become tabs, never OS windows.
   // #30: they open FOREGROUND — clicking a link that spawns a tab should put
   // you in that tab (matches every mainstream browser; reverses #4's call).
@@ -1511,13 +1525,24 @@ function reopenClosedTab() {
   createTab(last.url, false, last.personaId);
 }
 
-// #206: opens or focuses the terminal spike window. Ctrl+Shift+Tab in it comes back here.
+// #214: Ctrl+Shift+T, Ctrl+Shift+Tab and the >_ button go to the Terminal
+// Persona (it opens the host picker when it has no tabs yet). Already there,
+// they open another terminal tab.
 function openTerminal() {
   if (locked) return;
-  terminalMain.openTerminalWindow({
-    focusMain: () => { win.show(); win.moveTop(); win.focus(); }, // #210
-    openUrl: (url) => { openExternalUrl(url); win.focus(); }, // #206: links from the terminal
-  });
+  if (personas.activeId() === personas.TERMINAL) createTab(null, false, personas.TERMINAL);
+  else switchPersona(personas.TERMINAL);
+}
+
+// #214: a connection clicked in the panel opens as a new terminal tab.
+function openConnection(target) {
+  if (locked || !target) return;
+  createTab(terminalUrl(String(target)), false, personas.TERMINAL);
+}
+
+function pushConnections() {
+  if (!alive()) return;
+  chrome.webContents.send('terminal-connections', terminalMain.connections());
 }
 
 function cycleTab(dir) {
@@ -1562,6 +1587,16 @@ let leaderUntil = 0;
 // takes Ctrl+Space away from other apps.
 function armLeader() {
   if (locked) return;
+  // #214: in a terminal tab Ctrl+Space holds one key instead (see wireChords).
+  // A second Ctrl+Space passes both on — forge turns the pair into a literal one.
+  const twc = !managerOpen && !settingsOpen && isTerminalTab(activeId) ? activeWc() : null;
+  if (twc && terminalMain.isTerminal(twc)) {
+    leaderUntil = 0;
+    if (terminalMain.holding(twc)) terminalMain.passDoublePrefix(twc);
+    else terminalMain.setHold(twc, true);
+    twc.focus();
+    return;
+  }
   leaderUntil = leaderUntil > Date.now() ? 0 : Date.now() + 3000; // toggle
   // Make sure SOMETHING focused hears the next key.
   if (leaderUntil) (managerOpen || settingsOpen ? chrome.webContents : activeWc())?.focus();
@@ -1635,18 +1670,61 @@ function wireChords(wc) {
       armLeader(); // globalShortcut usually beats us here; harmless either way
       return;
     }
+    // #214: a terminal tab. Every key belongs to the shell except the held key
+    // after Ctrl+Space (Persona switch, or prefix + key for forge) and the few
+    // tab chords below. Ctrl+L, Ctrl+S, Ctrl+B, Alt+arrows and Esc are the shell's.
+    if (terminalMain.isTerminal(wc)) {
+      if (terminalMain.holding(wc)) {
+        const d = termHold(input, personaorder.personaDigit);
+        if (d.kind === 'wait') return;
+        if (d.kind === 'persona') {
+          event.preventDefault();
+          terminalMain.setHold(wc, false);
+          const target = orderedPersonas()[d.n - 1];
+          if (target && !locked) switchPersona(target.id);
+          return;
+        }
+        terminalMain.passHeldKey(wc); // xterm encodes the key; main sends the prefix in front of it
+        return;
+      }
+      const k = rawKey.toLowerCase();
+      const chord = modifier.isChord(input) && !input.alt;
+      if (k === 'f11' && modifier.isBare(input)) {
+        event.preventDefault();
+        if (!locked) setFullscreenMode(!fullscreen);
+      } else if (k === 'f4' && modifier.isAltOnly(input)) {
+        event.preventDefault();
+        win.close();
+      } else if (chord && k === 'tab') {
+        event.preventDefault();
+        if (input.shift) openTerminal();
+        else flipTab();
+      } else if (chord && input.shift && k === 't') {
+        event.preventDefault();
+        openTerminal(); // another terminal tab
+      } else if (chord && !input.shift && k === 'f4') {
+        event.preventDefault();
+        closeTab(activeId);
+      } else if (chord && !input.shift && (k === 'pagedown' || k === 'pageup')) {
+        event.preventDefault();
+        cycleTab(k === 'pagedown' ? 1 : -1);
+      }
+      return;
+    }
     if (leaderUntil > Date.now()) {
       if (['control', 'shift', 'alt', 'meta'].includes(rawKey.toLowerCase())) return;
       event.preventDefault();
       leaderUntil = 0;
       if (rawKey.toLowerCase() === 'escape' || locked) return;
-      // #25: bare digits switch Persona (reserved — see hotkeys.set).
-      if (/^[1-9]$/.test(rawKey) && modifier.isBare(input)) {
-        const list = orderedPersonas();
-        const target = list[Number(rawKey) - 1];
+      // #214: Shift+1–9 switch Persona (`!@#$…`, matched on the physical key).
+      // Bare digits stay reserved (hotkeys.set) and do nothing for now.
+      const n = personaorder.personaDigit(input);
+      if (n) {
+        const target = orderedPersonas()[n - 1];
         if (target) switchPersona(target.id);
         return;
       }
+      if (/^[1-9]$/.test(rawKey) && modifier.isBare(input)) return;
       handleHotkeyPress(modifier.keyId(input, rawKey)); // #150: same id on every platform
       return;
     }
@@ -1716,7 +1794,7 @@ function wireChords(wc) {
       // #113: Ctrl+Tab flips between the two most recently used tabs, the way
       // Alt+Tab does; Ctrl+PageDown steps to the next tab in sidebar order.
       // "Previous tab" is deliberately gone — Ctrl+PageUp still walks backwards.
-      // #206: Ctrl+Shift+Tab is now the terminal window (and its way back).
+      // #214: Ctrl+Shift+Tab goes to the Terminal Persona.
       if (input.shift) openTerminal();
       else flipTab();
     } else if (key === 'l' && !input.shift) {
@@ -1861,6 +1939,8 @@ function createWindow() {
     if (cmd === 'browser-forward') activeWc()?.navigationHistory.goForward();
   });
   wireLeaderShortcut(); // #41
+  // #214: terminal tabs' IPC, once. Links from a session open as browser tabs.
+  terminalMain.installIpc({ openUrl: (url) => openExternalUrl(url), onConnectionsChanged: pushConnections });
   win.on('blur', () => closeStrayNewTabs()); // #82: Alt+Tab away disposes of it
   // #176: leaving the window closes every adult tab — alt-tab, clicking another
   // app, minimize, hide. Blur is re-checked after a beat so a focus hop that
@@ -2135,7 +2215,7 @@ function tabUrlOf(id) {
 function shareable(url) {
   // #176: adult tabs never reach the other device, the close tombstones, or
   // Ctrl+Shift+T — every path that remembers a tab goes through here.
-  return Boolean(url) && !isNewTabUrl(url) && !isInternalUrl(url) && !ytdlp.isAdult(url);
+  return Boolean(url) && !isNewTabUrl(url) && !isInternalUrl(url) && !isTerminalUrl(url) && !ytdlp.isAdult(url); // #214
 }
 
 function localTabPayload() {
@@ -3079,7 +3159,7 @@ function menuTemplate() {
           { label: 'Hard Reload', accelerator: 'CmdOrCtrl+Shift+R', click: () => hardReload() },
           { label: 'Find in Page', accelerator: 'CmdOrCtrl+F', click: () => openFind() },
           { label: 'Reopen Closed Tab', accelerator: 'CmdOrCtrl+Alt+T', click: () => reopenClosedTab() }, // #208: Ctrl+Shift+T is the terminal now
-          { label: 'Terminal', accelerator: 'Control+Shift+T', click: () => openTerminal() }, // #206/#208 (Ctrl+Shift+Tab too)
+          { label: 'Terminal', accelerator: 'Control+Shift+T', click: () => openTerminal() }, // #214: the Terminal Persona (Ctrl+Shift+Tab too)
           { label: 'Zoom In', accelerator: 'CmdOrCtrl+=', click: () => zoomBy(1) },
           { label: 'Zoom In', accelerator: 'CmdOrCtrl+Plus', visible: false, click: () => zoomBy(1) },
           { label: 'Zoom Out', accelerator: 'CmdOrCtrl+-', click: () => zoomBy(-1) },
@@ -3104,6 +3184,13 @@ ipcMain.on('reload', () => activeWc()?.reload());
 // #174: home takes the CURRENT tab to the home page, so Back returns you to
 // where you were. Windows home is the new-tab page; Android's is the Dashboard.
 ipcMain.on('open-terminal', () => openTerminal()); // #208: the >_ button
+// #214: the connections panel (the Terminal Persona's bookmarks).
+ipcMain.on('open-connection', (_e, target) => openConnection(target));
+ipcMain.on('favorite-connection', (_e, target) => {
+  terminalMain.toggleFavorite(target);
+  pushConnections();
+});
+ipcMain.on('get-connections', () => pushConnections());
 ipcMain.on('go-home', () => {
   const wc = activeWc();
   if (wc) wc.loadURL(newTabUrl());
@@ -3233,7 +3320,7 @@ function openNewTab() {
     activateTab(existing);
     return;
   }
-  createTab(null, false);
+  createTab(null, false, active === personas.TERMINAL ? personas.TERMINAL : null); // #214
 }
 
 // #79: close normal tabs left untouched for too long. Pinned and hotkey tabs
@@ -3255,6 +3342,7 @@ function sweepStaleTabs() {
       id !== activeId &&
       !pinnedIds.has(id) &&
       !hotkeyByTab.has(id) &&
+      !isTerminalTab(id) && // #214: an idle shell is still a live session
       (lastActiveAt.get(id) || Date.now()) < cutoff
   );
   if (!doomed.length || doomed.length >= tabOrder.length) return;
@@ -3546,7 +3634,7 @@ ipcMain.on('bm-edit-request', (_e, id) => {
     openBookmarkDialog({
       id: b.id, title: b.title, url: b.url, folder: b.folder || '', exists: true,
       claim: personas.claimFor(b.url), // #70
-      personas: orderedPersonas().map((p) => ({ id: p.id, name: p.name })),
+      personas: routablePersonas().map((p) => ({ id: p.id, name: p.name })),
     });
   }
 });
@@ -3831,7 +3919,7 @@ ipcMain.handle('int:clear-errors', () => {
 });
 ipcMain.handle('int:get-all-hotkeys', () => ({
   byPersona: hotkeys.allByPersona(),
-  personas: orderedPersonas().map((p) => ({ id: p.id, name: p.name })),
+  personas: routablePersonas().map((p) => ({ id: p.id, name: p.name })),
   active: personas.activeId(),
 }));
 ipcMain.handle('int:move-hotkey', (_e, { keyId, from, to, force }) => {

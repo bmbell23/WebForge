@@ -1,8 +1,8 @@
-// #206: the terminal window's bridge — the page gets these calls and nothing else.
+// #206/#214: a terminal tab's bridge — the page gets these calls and nothing else.
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('terminal', {
-  start: (cols, rows) => ipcRenderer.send('terminal:start', cols, rows),
+  start: (cols, rows, target) => ipcRenderer.send('terminal:start', cols, rows, target),
   write: (data) => ipcRenderer.send('terminal:write', data),
   resize: (cols, rows) => ipcRenderer.send('terminal:resize', cols, rows),
   copy: (osc52Data) => ipcRenderer.send('terminal:copy', osc52Data),
@@ -12,4 +12,7 @@ contextBridge.exposeInMainWorld('terminal', {
   onPasteText: (cb) => ipcRenderer.on('terminal:paste-text', (_e, text) => cb(text)),
   onData: (cb) => ipcRenderer.on('terminal:data', (_e, buf) => cb(buf)),
   onStatus: (cb) => ipcRenderer.on('terminal:status', (_e, s) => cb(s)),
+  onPrompt: (cb) => ipcRenderer.on('terminal:prompt', (_e, q) => cb(q)), // #214: host-key question
+  connections: () => ipcRenderer.invoke('terminal:connections'), // #214: the new-tab picker
+  favorite: (target) => ipcRenderer.send('terminal:favorite', target),
 });

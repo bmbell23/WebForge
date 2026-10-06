@@ -327,6 +327,13 @@
     font-size: 12px; cursor: pointer;
   }
   .credform .btnrow button.cancel { background: var(--surface); color: var(--text); }
+  /* #214: in the Terminal Persona the bookmarks panel lists connections. */
+  #connlist { display: none; overflow: auto; flex: 1; }
+  body.terminal #connlist { display: block; }
+  body.terminal #bmsearch, body.terminal #bmlist, body.terminal #bmfoot, body.terminal #bmmanage { display: none; }
+  #connlist h4 { margin: 10px 10px 4px; font-size: 11px; text-transform: uppercase; letter-spacing: .08em; opacity: .6; }
+  #connlist input { box-sizing: border-box; width: calc(100% - 20px); margin: 8px 10px; }
+  #connlist .connempty { margin: 0 10px; opacity: .5; font-size: 12px; }
   /* #27: bookmark search */
   #bmsearch {
     margin: 0 8px 6px; height: 26px;
@@ -767,7 +774,7 @@
 <body>
   <div id="sidebar">
     <header>
-      <select id="personaPick" title="Persona (Ctrl+Space then 1-9)"></select>
+      <select id="personaPick" title="Persona (Ctrl+Space then Shift+1-9, i.e. ! @ # $)"></select>
       <button id="newtab" title="New tab (Ctrl+T)">+</button>
     </header>
     <div id="tablist"></div>
@@ -850,6 +857,7 @@
     </header>
     <input id="bmsearch" type="text" placeholder="Search bookmarks" spellcheck="false">
     <div id="bmlist"></div>
+    <div id="connlist"></div>
     <div id="bmfoot">
       <div id="bmnewfolderrow">
         <div class="bmnfhint" id="bmnfhint">New folder</div>
@@ -934,7 +942,8 @@
         <tr><td>Ctrl+T</td><td>New tab</td></tr>
         <tr><td>Ctrl+W / Ctrl+F4</td><td>Close tab</td></tr>
         <tr><td>Ctrl+Tab</td><td>Flip to the tab you were just on</td></tr>
-        <tr><td>Ctrl+Shift+T</td><td>Open / close the terminal (Ctrl+Shift+Tab too)</td></tr>
+        <tr><td>Ctrl+Shift+T</td><td>Terminal Persona; inside it, a new terminal tab (Ctrl+Shift+Tab too)</td></tr>
+        <tr><td>Ctrl+Space, then Shift+1–9</td><td>Switch Persona: ! Terminal, @ Personal, # Work, $ Unassigned (works inside a terminal too)</td></tr>
         <tr><td>Ctrl+PageDown</td><td>Next tab</td></tr>
         <tr><td>Ctrl+Alt+T</td><td>Reopen closed tab</td></tr>
         <tr><td>Ctrl+X</td><td>Close tab (cuts text as normal while typing)</td></tr>
@@ -974,6 +983,10 @@
   if (personaPick) {
     personaPick.onchange = () => webforge.switchPersona(personaPick.value);
     webforge.onPersonas(({ personas, active }) => {
+      // #214: the Terminal Persona swaps the bookmarks panel for connections.
+      const wasTerminal = document.body.classList.contains('terminal');
+      document.body.classList.toggle('terminal', active === 'terminal');
+      if (active === 'terminal' && !wasTerminal) webforge.getConnections();
       personaPick.replaceChildren(
         ...personas.map((p, i) => new Option(`${i + 1}. ${p.name}`, p.id))
       );
@@ -1282,6 +1295,42 @@
   const bmcount = document.getElementById('bmcount');
 
   star.onclick = () => webforge.toggleStar();
+
+  // #214: connections — the Terminal Persona's bookmarks. Click opens a session
+  // tab; ★ adds or removes a Favorite; Enter in the box connects to what you typed.
+  const connlist = document.getElementById('connlist');
+  const connInput = Object.assign(document.createElement('input'), {
+    type: 'text', placeholder: 'user@host or ~/.ssh/config name', spellcheck: false,
+  });
+  connInput.onkeydown = (e) => {
+    if (e.key === 'Enter' && connInput.value.trim()) {
+      webforge.openConnection(connInput.value.trim());
+      connInput.value = '';
+    }
+  };
+  webforge.onConnections((g) => {
+    const nodes = [connInput];
+    for (const [title, list, fav] of [['★ Favorites', g.favorites, true], ['Frequent', g.frequent, false], ['~/.ssh/config', g.config, false]]) {
+      nodes.push(Object.assign(document.createElement('h4'), { textContent: title }));
+      if (!list.length) nodes.push(Object.assign(document.createElement('div'), { className: 'connempty', textContent: 'none yet' }));
+      for (const t of list) {
+        const el = document.createElement('div');
+        el.className = 'bm';
+        el.tabIndex = 0;
+        el.title = `Open a terminal on ${t}`;
+        const name = Object.assign(document.createElement('span'), { className: 'title', textContent: t });
+        const st = Object.assign(document.createElement('button'), {
+          className: 'rm', textContent: fav ? '★' : '☆', title: fav ? 'Remove from Favorites' : 'Add to Favorites',
+        });
+        st.onclick = (e) => { e.stopPropagation(); webforge.favoriteConnection(t); };
+        el.append(name, st);
+        el.onclick = () => webforge.openConnection(t);
+        el.onkeydown = (e) => { if (e.key === 'Enter') webforge.openConnection(t); };
+        nodes.push(el);
+      }
+    }
+    connlist.replaceChildren(...nodes);
+  });
 
   // --- passwords panel (#26) ---
   const pwpanel = document.getElementById('pwpanel');
