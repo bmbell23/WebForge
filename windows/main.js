@@ -26,6 +26,7 @@ const personas = require('./personas'); // #25
 const errorlog = require('./errorlog'); // #75
 const logship = require('./logship'); // #171 — Electron-free, ships errorlog to :8013
 const { ensurePreloadRegistration } = require('./preloadshim'); // #21
+const navloop = require('./navloop'); // #238
 const tabnav = require('./tabnav'); // #113/#114 — unit-tested, Electron-free
 const textrules = require('./textrules'); // #100 — ditto
 const taburl = require('./taburl'); // #107 — ditto
@@ -1276,6 +1277,19 @@ function createTab(url = null, background = false, personaId = null, opts = {}) 
   // not reproduce it on this display-less host — touching the page on every
   // navigation to chase a bug that only happens on FIRST paint was never
   // justified. So: only a view that has never painted, and only once.
+  // #238: a tab that keeps navigating itself (the Outlook "flashing white")
+  // gets one log record a minute with its recent URLs, so the PC log can say
+  // whether it is reloading, re-routing in-page, or bouncing between URLs.
+  const noteNav = navloop.createNavLoop();
+  wc.on('did-start-navigation', (details, legacyUrl, legacyInPage, legacyMainFrame) => {
+    const d = details && typeof details === 'object' && 'url' in details ? details : null;
+    const isMain = d ? d.isMainFrame : legacyMainFrame;
+    if (!isMain) return;
+    const url = d ? d.url : legacyUrl;
+    const inPage = d ? d.isSameDocument : legacyInPage;
+    const report = noteNav(url, inPage ? 'in-page' : 'load');
+    if (report) errorlog.record('nav-loop', `tab=${id} persona=${personaByTab.get(id)} active=${id === activeId}\n${report}`);
+  });
   wc.on('did-stop-loading', () => {
     if (id !== activeId || !win || win.isDestroyed()) return;
     if (!win.isVisible() || win.isMinimized()) return;
