@@ -127,6 +127,28 @@ function directPick(input, ordered) {
   return hit ? hit.id : null;
 }
 
+// #231: what a page title says about unread messages. Teams and Mattermost
+// lead with "(3) …" for a count; Mattermost leads with "* " when there are
+// unread messages but no mentions. Returns { count, dot }.
+function unreadFromTitle(title) {
+  const t = String(title || '').trimStart();
+  const m = /^\((\d{1,5})\+?\)\s/.exec(t);
+  if (m) return { count: Number(m[1]), dot: false };
+  return { count: 0, dot: /^\*\s/.test(t) };
+}
+
+// #231: one badge for a slot's tabs: counts add up, a dot only shows with no count.
+function unreadBadge(titles) {
+  let count = 0;
+  let dot = false;
+  for (const t of titles || []) {
+    const u = unreadFromTitle(t);
+    count += u.count;
+    dot = dot || u.dot;
+  }
+  return count ? `(${count})` : dot ? '•' : '';
+}
+
 // The Persona the key after Ctrl+Space picks, by physical key (`code`) so the
 // symbols live wherever the layout puts them. null when it picks nothing.
 function leaderPick(input, ordered) {
@@ -137,5 +159,5 @@ function leaderPick(input, ordered) {
 
 module.exports = {
   TERMINAL, UNASSIGNED, TERMINAL_PERSONA, KEYMAP, DEFAULT_SLOTS,
-  slots, slotUrl, isSlotId, orderPersonas, leaderPick, directPick, slotFor, openerHome,
+  slots, slotUrl, isSlotId, orderPersonas, leaderPick, unreadFromTitle, unreadBadge, directPick, slotFor, openerHome,
 };
