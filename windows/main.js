@@ -100,6 +100,12 @@ const TERMINAL_FILE = path.join(__dirname, 'ui', 'terminal.html');
 const terminalUrl = (target) => fileUrl(TERMINAL_FILE) + (target ? `?host=${encodeURIComponent(target)}` : '');
 const isTerminalUrl = (u) => typeof u === 'string' && u.startsWith(fileUrl(TERMINAL_FILE));
 const isTerminalTab = (id) => personaByTab.get(id) === personas.TERMINAL;
+// #214: an app slot's tab (Mattermost, Teams, Outlook): one pinned page that
+// never re-homes, syncs or restores. View tabs = terminal or app slot.
+const isSlotTab = (id) => personaorder.isSlotId(personaByTab.get(id));
+const isViewTab = (id) => isTerminalTab(id) || isSlotTab(id);
+// Where a page opened from a terminal or app slot lands: never in the view itself.
+const pageHome = (pid) => (personas.isBuiltinView(pid) ? personas.UNASSIGNED : pid);
 const searchEngine = () => (ENGINES[getSettings().searchEngine] ? getSettings().searchEngine : 'google');
 const newTabUrl = () => `file://${NEWTAB_FILE.replace(/\\/g, '/')}?e=${searchEngine()}`;
 const isNewTabUrl = (u) => typeof u === 'string' && u.startsWith('file://') && u.includes('newtab.html');
@@ -216,7 +222,7 @@ function sortTabOrder() {
 let saveSessionTimer = null;
 function sessionSnapshot() {
   // #176: adult tabs are never written to the session, so a restart can't bring one back.
-  const kept = tabOrder.filter((id) => !isAdultTab(id) && !isTerminalTab(id)); // #214: sessions don't restore
+  const kept = tabOrder.filter((id) => !isAdultTab(id) && !isViewTab(id)); // #214: sessions and app slots don't restore
   return {
     tabs: kept
       .map((id) => ({
@@ -869,10 +875,34 @@ function tabState() {
 // #214: Terminal is first, so the order is 1 Terminal, 2 Personal, 3 Work,
 // 4 Unassigned. personaorder.js holds the rule, under test.
 function orderedPersonas() {
-  return personaorder.orderPersonas(personas.all());
+  return personaorder.orderPersonas(personas.all(), appSlots());
 }
-// Personas a URL can be routed to — everything but Terminal, which has no rules.
-const routablePersonas = () => orderedPersonas().filter((p) => p.id !== personas.TERMINAL);
+// Personas a URL can be routed to: not Terminal or the app slots, which have no rules.
+const routablePersonas = () => orderedPersonas().filter((p) => !personas.isBuiltinView(p.id));
+
+// #214: app slots. Their URLs are local settings (settings.appSlots = {id: url}),
+// editable in Settings › App slots, never synced.
+const appSlots = () => personaorder.slots(getSettings().appSlots);
+function applySlots() {
+  personas.setSlots(personaorder.orderPersonas([], appSlots()).filter((p) => p.slot));
+}
+function saveSlots(urls) {
+  const clean = {};
+  for (const s of personaorder.DEFAULT_SLOTS) {
+    const u = personaorder.slotUrl(urls && urls[s.id]);
+    if (u && u !== s.url) clean[s.id] = u;
+  }
+  getSettings().appSlots = clean;
+  saveSettings();
+  applySlots();
+  // An open slot tab follows its new URL.
+  for (const tid of tabOrder) {
+    const p = isSlotTab(tid) && personas.get(personaByTab.get(tid));
+    if (p && tabs.has(tid) && !lazyTabs.has(tid)) tabs.get(tid).webContents.loadURL(p.url);
+  }
+  pushPersonas();
+  return appSlots();
+}
 
 // #57: other devices' tabs in the Persona we're currently looking at.
 function remoteTabsForActive() {
@@ -894,6 +924,7 @@ function pushPersonas() {
       name: p.name,
       builtin: Boolean(p.builtin),
       rules: p.rules,
+      key: p.key || '', // #214: the key after Ctrl+Space
     })),
     active,
   });
@@ -1050,6 +1081,9 @@ function createTab(url = null, background = false, personaId = null, opts = {}) 
   const id = nextTabId++;
   // #214: a new tab in the Terminal Persona is a terminal (the host picker).
   if (!url && personaId === personas.TERMINAL) url = terminalUrl(null);
+  // #214: an app slot's tab opens the slot's page and stays in the slot.
+  const slot = personaorder.isSlotId(personaId) ? personas.get(personaId) : null;
+  if (!url && slot) url = slot.url;
   if (!url) url = newTabUrl(); // #43: default landing page is our search page
   const terminal = isTerminalUrl(url);
   const lazy = Boolean(opts.lazy);
@@ -1061,7 +1095,16 @@ function createTab(url = null, background = false, personaId = null, opts = {}) 
   // created as Unassigned and only jump to Work when it first navigated —
   // which looked like tabs re-homing themselves when you clicked them.
   const claimed = personas.forUrl(url);
-  personaByTab.set(id, terminal ? personas.TERMINAL : claimed !== personas.UNASSIGNED ? claimed : personaId || personas.UNASSIGNED);
+  personaByTab.set(
+    id,
+    terminal
+      ? personas.TERMINAL
+      : slot
+        ? personaId
+        : claimed !== personas.UNASSIGNED
+          ? claimed
+          : pageHome(personaId || personas.UNASSIGNED)
+  );
   // #95: this URL is open again, so stop publishing "closed" for it — otherwise
   // the other device keeps being told to kill a tab that is sitting right here.
   closedFacts.delete(url);
@@ -1228,7 +1271,8 @@ function createTab(url = null, background = false, personaId = null, opts = {}) 
     // #114: the first load of a lazily-restored tab is not the user navigating
     // anywhere — following it switched Persona under a cycling user.
     const wasFirstLoad = firstLoad.delete(id);
-    if (claimed !== personas.UNASSIGNED && claimed !== current) {
+    // #214: a terminal or app slot tab stays put (Teams bounces through sign-in pages).
+    if (claimed !== personas.UNASSIGNED && claimed !== current && !personas.isBuiltinView(current)) {
       personaByTab.set(id, claimed);
       if (id === activeId && !wasFirstLoad) personas.setActive(claimed);
       pushState();
@@ -1437,7 +1481,7 @@ function closeTab(id, opts = {}) {
 function rehomeAllTabs() {
   for (const tid of tabOrder) {
     const claimed = personas.forUrl(tabUrlOf(tid));
-    if (claimed !== personas.UNASSIGNED) personaByTab.set(tid, claimed);
+    if (claimed !== personas.UNASSIGNED && !isViewTab(tid)) personaByTab.set(tid, claimed); // #214
   }
 }
 
@@ -1686,13 +1730,12 @@ function wireChords(wc) {
     // tab chords below. Ctrl+L, Ctrl+S, Ctrl+B, Alt+arrows and Esc are the shell's.
     if (terminalMain.isTerminal(wc)) {
       if (terminalMain.holding(wc)) {
-        const d = termHold(input, personaorder.personaDigit);
+        const d = termHold(input, (i) => personaorder.leaderPick(i, orderedPersonas()));
         if (d.kind === 'wait') return;
         if (d.kind === 'persona') {
           event.preventDefault();
           terminalMain.setHold(wc, false);
-          const target = orderedPersonas()[d.n - 1];
-          if (target && !locked) switchPersona(target.id);
+          if (!locked) switchPersona(d.id);
           return;
         }
         terminalMain.passHeldKey(wc); // xterm encodes the key; main sends the prefix in front of it
@@ -1727,12 +1770,11 @@ function wireChords(wc) {
       event.preventDefault();
       leaderUntil = 0;
       if (rawKey.toLowerCase() === 'escape' || locked) return;
-      // #214: Shift+1–9 switch Persona (`!@#$…`, matched on the physical key).
-      // Bare digits stay reserved (hotkeys.set) and do nothing for now.
-      const n = personaorder.personaDigit(input);
-      if (n) {
-        const target = orderedPersonas()[n - 1];
-        if (target) switchPersona(target.id);
+      // #214: ` ! @ # $ % ^ pick a Persona or app slot (personaorder.KEYMAP,
+      // matched on the physical key). Bare digits stay reserved (hotkeys.set).
+      const pick = personaorder.leaderPick(input, orderedPersonas());
+      if (pick) {
+        switchPersona(pick);
         return;
       }
       if (/^[1-9]$/.test(rawKey) && modifier.isBare(input)) return;
@@ -1910,7 +1952,7 @@ function handleHotkeyPress(keyId) {
     // tab in the Persona the user is actually working in — landing it in
     // Unassigned would switch them out from under their own hotkey.
     const claimed = personas.forUrl(entry.url);
-    const owner = claimed === personas.UNASSIGNED ? personas.activeId() : claimed;
+    const owner = claimed === personas.UNASSIGNED ? pageHome(personas.activeId()) : claimed; // #214
     const newId = createTab(entry.url, false, owner);
     if (newId !== null) {
       hotkeyByTab.set(newId, keyId);
@@ -2234,7 +2276,7 @@ function localTabPayload() {
   const byPersona = {};
   for (const id of tabOrder) {
     const url = tabUrlOf(id);
-    if (!shareable(url)) continue;
+    if (!shareable(url) || isViewTab(id)) continue; // #214: the phone has no app slots
     const pid = personaByTab.get(id) || personas.UNASSIGNED;
     const pending = lazyTabs.get(id);
     (byPersona[pid] ||= {}).open ||= {};
@@ -2720,7 +2762,7 @@ function onUnlocked() {
   // filed before their Persona's rules existed.
   for (const tid of tabOrder) {
     const claimed = personas.forUrl(tabUrlOf(tid));
-    if (claimed !== personas.UNASSIGNED) personaByTab.set(tid, claimed);
+    if (claimed !== personas.UNASSIGNED && !isViewTab(tid)) personaByTab.set(tid, claimed); // #214
   }
   syncBookmarks(); // #13: catch up whenever a session starts
   syncPersonas(); // #88
@@ -3189,7 +3231,7 @@ function menuTemplate() {
 ipcMain.on('navigate', (_e, input) => {
   const url = resolveInput(input);
   if (!url) return;
-  if (isTerminalTab(activeId)) openExternalUrl(url); // #214: the address bar never replaces a session
+  if (isViewTab(activeId)) openExternalUrl(url); // #214: the address bar never replaces a session or app slot
   else activeWc()?.loadURL(url);
 });
 ipcMain.on('go-back', () => activeWc()?.navigationHistory.goBack());
@@ -3207,7 +3249,7 @@ ipcMain.on('favorite-connection', (_e, target) => {
 ipcMain.on('get-connections', () => pushConnections());
 ipcMain.on('go-home', () => {
   const wc = activeWc();
-  if (isTerminalTab(activeId)) createTab(null, false); // #214: home leaves the terminal, it doesn't replace it
+  if (isViewTab(activeId)) createTab(null, false); // #214: home leaves a terminal or app slot, it doesn't replace it
   else if (wc) wc.loadURL(newTabUrl());
   else openNewTab();
 });
@@ -3243,7 +3285,13 @@ ipcMain.on('activate-tab', errorlog.guard('activate-tab', (_e, id) => activateTa
 ipcMain.on('toggle-pin', (_e, id) => togglePin(id));
 // #25: persona IPC
 ipcMain.on('switch-persona', (_e, id) => switchPersona(String(id)));
-ipcMain.handle('int:get-personas', () => ({ personas: personas.all(), active: personas.activeId() }));
+// #214: in key order, with each Persona's key; Terminal and the app slots are not editable here.
+ipcMain.handle('int:get-personas', () => ({
+  personas: orderedPersonas().filter((p) => !personas.isBuiltinView(p.id)),
+  active: personas.activeId(),
+}));
+ipcMain.handle('int:get-slots', () => ({ slots: appSlots(), defaults: personaorder.DEFAULT_SLOTS, keys: personaorder.KEYMAP }));
+ipcMain.handle('int:save-slots', (_e, urls) => saveSlots(urls));
 ipcMain.handle('int:add-persona', (_e, name) => {
   const p = personas.add(name);
   pushState();
@@ -3359,7 +3407,7 @@ function sweepStaleTabs() {
       id !== activeId &&
       !pinnedIds.has(id) &&
       !hotkeyByTab.has(id) &&
-      !isTerminalTab(id) && // #214: an idle shell is still a live session
+      !isViewTab(id) && // #214: an idle shell is still a live session; an app slot is pinned
       (lastActiveAt.get(id) || Date.now()) < cutoff
   );
   if (!doomed.length || doomed.length >= tabOrder.length) return;
@@ -4187,6 +4235,7 @@ if (!isPrimaryInstance) {
 
 app.whenReady().then(() => {
   ytdlp.setUser(adultUser()); // #203: before any tab is restored or swept
+  applySlots(); // #214: before the active Persona (maybe an app slot) is read
   if (!isPrimaryInstance) return; // losing the lock means this process is a no-op
   setupLogShipping(); // #171: first, so startup errors reach the server too
   applyTheme(getSettings().theme); // #24: before any view paints
