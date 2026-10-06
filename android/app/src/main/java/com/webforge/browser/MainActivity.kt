@@ -819,6 +819,17 @@ class MainActivity : Activity() {
 
     private fun isAdultTab(t: Tab) = YtDlp.isAdult(YtDlp.sites(this), t.url)
 
+    // #245: while an adult tab is showing, FLAG_SECURE blanks the Recents
+    // thumbnail and blocks screenshots, so the page can't be glimpsed from outside.
+    private var adultShield = false
+    private fun syncAdultShield() {
+        val want = active?.let { isAdultTab(it) } == true
+        if (want == adultShield) return
+        adultShield = want
+        if (want) window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        else window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+    }
+
     private fun closeAdultTabs(except: Tab?, @Suppress("UNUSED_PARAMETER") why: String) {
         if (sweepingAdult) return
         // The active tab goes LAST: by then every other adult tab is gone, so the
@@ -1060,6 +1071,7 @@ class MainActivity : Activity() {
     }
 
     private fun syncChrome() {
+        syncAdultShield() // #245
         val t = active ?: return
         // #121: the asset path is an implementation detail — show nothing.
         if (!urlEditing) urlBar.setText(if (t.url == "about:blank" || isNewTabUrl(t.url)) "" else t.url)
@@ -2246,6 +2258,7 @@ class MainActivity : Activity() {
         super.onResume()
         // #155: pages run only while the app is in front.
         active?.webView?.let { it.resumeTimers(); it.onResume() }
+        active?.webView?.visibility = View.VISIBLE // #245: undo onPause's hide if the tab survived (#191 outfit return)
         StallLog.start()
         dropAdultAddress() // #193: whatever the bar held when we left, it shows the tab you are on now
         UpdateManager(this).checkForUpdate()
@@ -2268,7 +2281,10 @@ class MainActivity : Activity() {
 
     override fun onPause() {
         super.onPause()
+        // #245: hide the adult page first, so the last frame on screen isn't it.
+        active?.takeIf { isAdultTab(it) }?.webView?.visibility = View.INVISIBLE
         closeAdultTabs(null, "app paused") // #176: before `active` is paused below
+        syncAdultShield()
         sweepHandler.removeCallbacksAndMessages(null)
         StallLog.stop()
         active?.webView?.let { it.onPause(); it.pauseTimers() } // pauseTimers is app-wide

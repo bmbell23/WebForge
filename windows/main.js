@@ -1303,6 +1303,7 @@ function createTab(url = null, background = false, personaId = null, opts = {}) 
     }
   });
   wc.on('did-navigate', (_e2, navUrl) => {
+    if (id === activeId) syncAdultShield(); // #245: walking onto (or off) an adult site
     if (!String(navUrl).startsWith('data:')) readerTabs.delete(id); // #232: back/forward/link out of the reader view
     if (outfitReturn && outfitReturn.tabId === id && museforge.isDone(navUrl)) finishOutfit(); // #191
     settleLogin(id, wc, navUrl); // #145: did a submitted login just succeed?
@@ -1396,6 +1397,7 @@ function activateTab(id, opts = {}) {
     if (tid !== id) v.setVisible(false);
   }
   activeId = id;
+  syncAdultShield(); // #245
   const view = tabs.get(id);
   lastActiveAt.set(id, Date.now()); // #79: expiry is measured from last use
   lastVisitAt.set(id, Date.now()); // #226
@@ -2135,10 +2137,17 @@ function createWindow() {
   // #176: leaving the window closes every adult tab — alt-tab, clicking another
   // app, minimize, hide. Blur is re-checked after a beat so a focus hop that
   // never really left the window (a native menu, a dialog of ours) doesn't count.
+  // #245: but HIDE first, synchronously, while the window can still paint. A
+  // background window doesn't repaint, so whatever it showed when it lost focus
+  // is what Alt+Tab, the taskbar preview and the first moment back all show.
   win.on('blur', () => {
     clearTimeout(adultBlurTimer);
+    const veiled = tabs.has(activeId) && isAdultTab(activeId) ? activeId : null;
+    if (veiled !== null) tabs.get(veiled).setVisible(false);
     adultBlurTimer = setTimeout(() => {
-      if (win && !win.isDestroyed() && !win.isFocused() && !contextMenuOpen) closeAdultTabs(null, 'window blur');
+      if (!win || win.isDestroyed()) return;
+      if (!win.isFocused() && !contextMenuOpen) closeAdultTabs(null, 'window blur');
+      else if (veiled !== null && veiled === activeId && tabs.has(veiled)) tabs.get(veiled).setVisible(true); // a menu hop: never left
     }, 250);
   });
   win.on('minimize', () => closeAdultTabs(null, 'minimize'));
@@ -3499,6 +3508,20 @@ let sweepingAdult = false;
 
 function isAdultTab(id) {
   return ytdlp.isAdult(tabUrlOf(id));
+}
+
+// #245: while an adult tab is showing, Windows keeps the window out of Alt+Tab
+// and taskbar thumbnails and out of screenshots (SetWindowDisplayAffinity).
+let adultShield = false;
+function syncAdultShield() {
+  const want = activeId !== null && tabs.has(activeId) && isAdultTab(activeId);
+  if (want === adultShield || !win || win.isDestroyed()) return;
+  adultShield = want;
+  try {
+    win.setContentProtection(want);
+  } catch (err) {
+    errorlog.record('adult-shield', err);
+  }
 }
 
 function closeAdultTabs(exceptId = null, why = 'switched tab') {
