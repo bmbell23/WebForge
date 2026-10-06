@@ -80,6 +80,27 @@ function orderPersonas(list, slotList = slots()) {
   ];
 }
 
+// #221: the app slot whose site `url` is on (same scheme, host and port as the
+// slot's URL), or null. A slot claims its whole site, so a second Mattermost
+// channel or an Outlook calendar page opens as another tab in the slot.
+function slotFor(url, slotList = slots()) {
+  let origin;
+  try {
+    origin = new URL(String(url || '')).origin;
+  } catch {
+    return null;
+  }
+  if (!origin || origin === 'null') return null;
+  const hit = slotList.find((s) => {
+    try {
+      return new URL(s.url).origin === origin;
+    } catch {
+      return false;
+    }
+  });
+  return hit ? SLOT_PREFIX + hit.id : null;
+}
+
 // The Persona the key after Ctrl+Space picks, by physical key (`code`) so the
 // symbols live wherever the layout puts them. null when it picks nothing.
 function leaderPick(input, ordered) {
@@ -90,5 +111,5 @@ function leaderPick(input, ordered) {
 
 module.exports = {
   TERMINAL, UNASSIGNED, TERMINAL_PERSONA, KEYMAP, DEFAULT_SLOTS,
-  slots, slotUrl, isSlotId, orderPersonas, leaderPick,
+  slots, slotUrl, isSlotId, orderPersonas, leaderPick, slotFor,
 };

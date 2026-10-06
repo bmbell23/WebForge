@@ -106,6 +106,8 @@ const isSlotTab = (id) => personaorder.isSlotId(personaByTab.get(id));
 const isViewTab = (id) => isTerminalTab(id) || isSlotTab(id);
 // Where a page opened from a terminal or app slot lands: never in the view itself.
 const pageHome = (pid) => (personas.isBuiltinView(pid) ? personas.UNASSIGNED : pid);
+// #221: who claims a URL: an app slot for its own site, else the Persona rules.
+const claimOf = (url) => personaorder.slotFor(url, appSlots()) || personas.forUrl(url);
 const searchEngine = () => (ENGINES[getSettings().searchEngine] ? getSettings().searchEngine : 'google');
 const newTabUrl = () => `file://${NEWTAB_FILE.replace(/\\/g, '/')}?e=${searchEngine()}`;
 const isNewTabUrl = (u) => typeof u === 'string' && u.startsWith('file://') && u.includes('newtab.html');
@@ -222,7 +224,8 @@ function sortTabOrder() {
 let saveSessionTimer = null;
 function sessionSnapshot() {
   // #176: adult tabs are never written to the session, so a restart can't bring one back.
-  const kept = tabOrder.filter((id) => !isAdultTab(id) && !isViewTab(id)); // #214: sessions and app slots don't restore
+  // #214: terminal sessions don't restore. #221: app slot tabs do, now that a slot holds several.
+  const kept = tabOrder.filter((id) => !isAdultTab(id) && !isTerminalTab(id));
   return {
     tabs: kept
       .map((id) => ({
@@ -1093,7 +1096,7 @@ function createTab(url = null, background = false, personaId = null, opts = {}) 
   // a tab adopted from another device) used to win, so a Gerrit tab could be
   // created as Unassigned and only jump to Work when it first navigated —
   // which looked like tabs re-homing themselves when you clicked them.
-  const claimed = personas.forUrl(url);
+  const claimed = claimOf(url); // #221: a slot's own site lands in the slot
   personaByTab.set(
     id,
     terminal
@@ -1265,7 +1268,7 @@ function createTab(url = null, background = false, personaId = null, opts = {}) 
     if (outfitReturn && outfitReturn.tabId === id && museforge.isDone(navUrl)) finishOutfit(); // #191
     settleLogin(id, wc, navUrl); // #145: did a submitted login just succeed?
     // Re-home the tab if it navigated into another persona's territory (#25).
-    const claimed = personas.forUrl(navUrl);
+    const claimed = claimOf(navUrl); // #221: a tab that walks onto a slot's site joins the slot
     const current = personaByTab.get(id);
     // #114: the first load of a lazily-restored tab is not the user navigating
     // anywhere — following it switched Persona under a cycling user.
@@ -1480,7 +1483,7 @@ function closeTab(id, opts = {}) {
 // and #70's bookmark assignment) and all three had both defects. One copy now.
 function rehomeAllTabs() {
   for (const tid of tabOrder) {
-    const claimed = personas.forUrl(tabUrlOf(tid));
+    const claimed = claimOf(tabUrlOf(tid)); // #221
     if (claimed !== personas.UNASSIGNED && !isViewTab(tid)) personaByTab.set(tid, claimed); // #214
   }
 }
@@ -2760,7 +2763,7 @@ function onUnlocked() {
   // #96: re-home anything a rule now claims — restored sessions can hold tabs
   // filed before their Persona's rules existed.
   for (const tid of tabOrder) {
-    const claimed = personas.forUrl(tabUrlOf(tid));
+    const claimed = claimOf(tabUrlOf(tid)); // #221
     if (claimed !== personas.UNASSIGNED && !isViewTab(tid)) personaByTab.set(tid, claimed); // #214
   }
   syncBookmarks(); // #13: catch up whenever a session starts
@@ -3384,7 +3387,8 @@ function openNewTab() {
     activateTab(existing);
     return;
   }
-  createTab(null, false, active === personas.TERMINAL ? personas.TERMINAL : null); // #214
+  // #214: Terminal → host picker. #221: an app slot → another tab on the slot's page.
+  createTab(null, false, personas.isBuiltinView(active) ? active : null);
 }
 
 // #79: close normal tabs left untouched for too long. Pinned and hotkey tabs
