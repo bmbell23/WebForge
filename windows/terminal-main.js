@@ -104,7 +104,8 @@ function openSession(target, { cols, rows, onData, onStatus, onClose }) {
 
 let termWin = null;
 
-// opts.focusMain focuses the browser window (the Ctrl+Shift+Tab escape).
+// opts.focusMain focuses the browser window (the Ctrl+Shift+Tab escape);
+// opts.openUrl opens a clicked link as a tab there.
 function openTerminalWindow(opts = {}) {
   if (termWin && !termWin.isDestroyed()) {
     if (termWin.isMinimized()) termWin.restore();
@@ -134,8 +135,12 @@ function openTerminalWindow(opts = {}) {
   // main.js registers it on the browser window's focus and drops it on blur.
   w.webContents.setIgnoreMenuShortcuts(true);
   w.webContents.on('before-input-event', (event, input) => {
-    if (input.type === 'keyDown' && input.control && input.shift && !input.alt && input.key === 'Tab') {
+    if (input.type === 'keyDown' && input.control && input.shift && !input.alt && (input.key === 'Tab' || input.key.toLowerCase() === 't')) { // #208: Ctrl+Shift+T toggles back too
       event.preventDefault();
+      // #210: hide, don't just focus the browser: both windows are fullscreen and
+      // this one was moveTop()ed, so focusing the browser left it buried behind.
+      // The session stays connected; opening the terminal again shows it.
+      w.hide();
       opts.focusMain?.();
     }
   });
@@ -180,6 +185,13 @@ function openTerminalWindow(opts = {}) {
     const text = term.osc52Text(data);
     if (text !== null) clipboard.writeText(text);
   };
+  // A clicked link opens as a WebForge tab in this process: no second
+  // WebForge.exe, no OS hand-off, none of #148's blank-page path.
+  const onLink = (e, url) => {
+    if (!mine(e) || !/^https?:\/\//i.test(String(url))) return;
+    opts.openUrl?.(String(url));
+  };
+  ipcMain.on('terminal:link', onLink);
   ipcMain.on('terminal:start', onStart);
   ipcMain.on('terminal:write', onWrite);
   ipcMain.on('terminal:resize', onResize);
@@ -195,6 +207,7 @@ function openTerminalWindow(opts = {}) {
     ipcMain.removeListener('terminal:write', onWrite);
     ipcMain.removeListener('terminal:resize', onResize);
     ipcMain.removeListener('terminal:copy', onCopy);
+    ipcMain.removeListener('terminal:link', onLink);
     session?.end();
     session = null;
     termWin = null;

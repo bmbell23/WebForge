@@ -13,6 +13,7 @@
 <div id="term"></div>
 <script src="../node_modules/@xterm/xterm/lib/xterm.js"></script>
 <script src="../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
+<script src="../node_modules/@xterm/addon-web-links/lib/addon-web-links.js"></script>
 <script>
   // #206: spike terminal. Keys, mouse and colour are xterm.js defaults; the
   // only options are the font, the theme and the kitty keyboard protocol that
@@ -23,9 +24,13 @@
     cursorBlink: true,
     theme: { background: '#0c0c0c' },
     vtExtensions: { kittyKeyboard: true },
+    // OSC 8 hyperlinks (the Claude CLI prints these) open as WebForge tabs.
+    linkHandler: { activate: (_e, uri) => window.terminal.openLink(uri), allowNonHttpProtocols: false },
   });
   const fit = new FitAddon.FitAddon();
   term.loadAddon(fit);
+  // Plain URLs in the output, too.
+  term.loadAddon(new WebLinksAddon.WebLinksAddon((_e, uri) => window.terminal.openLink(uri)));
   term.open(document.getElementById('term'));
   fit.fit();
 
