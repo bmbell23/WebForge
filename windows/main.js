@@ -949,6 +949,14 @@ function sendIfChanged(channel, payload) {
   chrome.webContents.send(channel, payload);
 }
 
+// #231: an app slot's unread badge, from its tabs' titles ("(3) …", "* …").
+function slotUnread(pid) {
+  const titles = tabOrder
+    .filter((t) => personaByTab.get(t) === pid)
+    .map((t) => (lazyTabs.has(t) ? lazyTabs.get(t).title : tabs.get(t)?.webContents.getTitle()));
+  return personaorder.unreadBadge(titles);
+}
+
 function pushPersonas() {
   if (!chrome) return;
   const active = personas.activeId();
@@ -959,6 +967,7 @@ function pushPersonas() {
       builtin: Boolean(p.builtin),
       rules: p.rules,
       key: p.key || '', // #214: the key after Ctrl+Space
+      unread: p.slot ? slotUnread(p.id) : '', // #231
     })),
     active,
   });

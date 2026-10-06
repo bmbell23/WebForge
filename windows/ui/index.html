@@ -994,7 +994,8 @@
       document.body.classList.toggle('terminal', active === 'terminal');
       if (active === 'terminal' && !wasTerminal) webforge.getConnections();
       personaPick.replaceChildren(
-        ...personas.map((p) => new Option(`${p.key ? `${p.key}  ` : ''}${p.name}`, p.id)) // #214: the key after Ctrl+Space
+        // #214: the key after Ctrl+Space. #231: an app slot's unread badge.
+        ...personas.map((p) => new Option(`${p.key ? `${p.key}  ` : ''}${p.name}${p.unread ? ` ${p.unread}` : ''}`, p.id))
       );
       personaPick.value = active;
     });

@@ -76,6 +76,20 @@ po.directPick(c('KeyA'), () => { built++; return ordered; });
 eq(built, 0, 'an ordinary Ctrl chord never builds the list');
 eq(po.directPick(c('Digit2'), po.orderPersonas([])), null, 'no Work Persona: Ctrl+2 does nothing');
 
+console.log('unread (#231)');
+eq(po.unreadFromTitle('(3) Town Square - Team Mattermost'), { count: 3, dot: false }, 'Mattermost mentions');
+eq(po.unreadFromTitle('(12) Chat | Microsoft Teams'), { count: 12, dot: false }, 'Teams count');
+eq(po.unreadFromTitle('(99+) Chat | Microsoft Teams'), { count: 99, dot: false }, '99+');
+eq(po.unreadFromTitle('* Town Square - Team Mattermost'), { count: 0, dot: true }, 'Mattermost unread, no mentions');
+eq(po.unreadFromTitle('Mail - Brandon Bell - Outlook'), { count: 0, dot: false }, 'nothing');
+eq(po.unreadFromTitle('Season (2) review'), { count: 0, dot: false }, 'a number later in the title is not a count');
+eq(po.unreadFromTitle('*nix tips'), { count: 0, dot: false }, 'a star without a space is not a dot');
+eq(po.unreadFromTitle(undefined), { count: 0, dot: false }, 'no title');
+eq(po.unreadBadge(['(3) a', '(2) b', '* c']), '(5)', 'counts add up across tabs');
+eq(po.unreadBadge(['* a', 'b']), '•', 'dot without a count');
+eq(po.unreadBadge(['a', 'b']), '', 'all read');
+eq(po.unreadBadge([]), '', 'no tabs');
+
 console.log('slotFor (#221)');
 eq(po.slotFor('http://co-sf-pe-042.colorado.datadirectnet.com:8065/team/channels/town-square'), 'slot-work-mattermost', 'another Work Mattermost page');
 eq(po.slotFor('http://100.69.184.113:8065/agents/pl/abc'), 'slot-personal-mattermost', 'another personal Mattermost page');
