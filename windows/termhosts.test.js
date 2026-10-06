@@ -46,11 +46,45 @@ eq(th.rankFrequent(null), [], 'nothing yet');
 
 console.log('connectionGroups');
 eq(th.connectionGroups({ favorites: ['forge'], uses: { forge: 9, pve01: 4, x: 1 }, configHosts: ['forge', 'pve01', 'dh'] }),
-  { favorites: ['forge'], frequent: ['pve01', 'x'], config: ['dh'] }, 'each host once: Favorites > Frequent > config');
-eq(th.connectionGroups(), { favorites: [], frequent: [], config: [] }, 'empty');
+  { favorites: ['forge'], frequent: ['pve01', 'x'], config: ['dh'], names: {} }, 'each host once: Favorites > Frequent > config');
+eq(th.connectionGroups(), { favorites: [], frequent: [], config: [], names: {} }, 'empty');
 
 console.log('validTarget');
 for (const t of ['dockerhost', 'brandon@dockerhost', 'brandon@dockerhost:2222', 'u@[::1]:22', '10.0.0.160']) eq(th.validTarget(t), true, t);
 for (const t of ['', 'a b', 'x;rm -rf', '@host', 'host:']) eq(th.validTarget(t), false, JSON.stringify(t));
 
-console.log(`termhosts: ${n} passed`);
+console.log('edit a favorite (#228)');
+eq(th.splitTarget('brandon@dockerhost'), { user: 'brandon', host: 'dockerhost', port: null }, 'user@host');
+eq(th.splitTarget('host:2222'), { user: null, host: 'host', port: 2222 }, 'host:port');
+eq(th.splitTarget('u@[::1]:22'), { user: 'u', host: '::1', port: 22 }, 'user@[v6]:port');
+eq(th.splitTarget('[fe80::1]'), { user: null, host: 'fe80::1', port: null }, 'bare [v6]');
+eq(th.joinTarget({ user: 'u', host: 'h', port: 2222 }), 'u@h:2222', 'join all');
+eq(th.joinTarget({ host: 'h' }), 'h', 'host only');
+eq(th.joinTarget({ user: 'u', host: '::1', port: 22 }), 'u@[::1]:22', 'v6 bracketed with port');
+eq(th.joinTarget({ user: 'u', host: '::1' }), 'u@[::1]', 'v6 bracketed without port');
+eq(th.joinTarget({ host: 'h', port: '' }), 'h', 'blank port');
+eq(th.joinTarget({ host: 'h', port: 0 }), null, 'port 0');
+eq(th.joinTarget({ host: 'h', port: 65536 }), null, 'port too big');
+eq(th.joinTarget({ host: 'h', port: 'x' }), null, 'port not a number');
+eq(th.joinTarget({ host: '' }), null, 'no host');
+eq(th.joinTarget({ user: 'a b', host: 'h' }), null, 'invalid user');
+for (const t of ['a@b', 'b:2222', 'u@[::1]:22']) eq(th.joinTarget(th.splitTarget(t)), t, 'round trip ' + t);
+const base = { favorites: ['a', 'x@b', 'c'], uses: { 'x@b': 3, 'y@b': 2 }, names: { 'x@b': 'Old', c: 'See' } };
+const snap = JSON.stringify(base);
+const r1 = th.renameFavorite(base, 'x@b', { name: ' New ', user: 'y', host: 'b' });
+eq(r1.ok, true, 'rename ok');
+eq(r1.target, 'y@b', 'new target');
+eq(r1.hosts.favorites, ['a', 'y@b', 'c'], 'same position');
+eq(r1.hosts.uses, { 'y@b': 5 }, 'uses moved and summed');
+eq(r1.hosts.names, { 'y@b': 'New', c: 'See' }, 'name trimmed, old name removed');
+eq(JSON.stringify(base), snap, 'input not mutated');
+eq(th.renameFavorite(base, 'x@b', { name: '', user: 'x', host: 'b' }).hosts.names, { c: 'See' }, 'blank name clears');
+eq(th.renameFavorite(base, 'x@b', { name: 'x@b', user: 'x', host: 'b' }).hosts.names, { c: 'See' }, 'name equal to target clears');
+eq(th.renameFavorite(base, 'x@b', { name: 'N', user: 'x', host: 'b', port: 2200 }).hosts.uses, { 'x@b:2200': 3, 'y@b': 2 }, 'uses follow the target');
+eq(th.renameFavorite(base, 'x@b', { host: 'a' }).ok, false, 'already another favorite');
+eq(th.renameFavorite(base, 'x@b', { host: 'a b' }).ok, false, 'invalid');
+eq(th.renameFavorite(base, 'nope', { host: 'z' }).ok, false, 'unknown favorite');
+eq(th.renameFavorite(base, 'a', { name: 'Alpha', host: 'a' }).hosts.names.a, 'Alpha', 'name-only edit');
+eq(th.connectionGroups({ favorites: ['a', 'b'], names: { a: 'Alpha', z: 'Stray' } }).names, { a: 'Alpha' }, 'names only for favorites');
+
+console.log(`termhosts:${n} passed`);

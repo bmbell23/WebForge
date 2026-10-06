@@ -15,4 +15,5 @@ contextBridge.exposeInMainWorld('terminal', {
   onPrompt: (cb) => ipcRenderer.on('terminal:prompt', (_e, q) => cb(q)), // #214: host-key question
   connections: () => ipcRenderer.invoke('terminal:connections'), // #214: the new-tab picker
   favorite: (target) => ipcRenderer.send('terminal:favorite', target),
+  editFavorite: (target, fields) => ipcRenderer.invoke('terminal:edit-favorite', { target, fields }), // #228
 });
