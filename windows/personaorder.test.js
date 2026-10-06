@@ -55,6 +55,27 @@ eq(po.leaderPick(k('Digit1', { alt: true }), ordered), null, 'Alt+Shift+1 is not
 eq(po.leaderPick(k('Numpad1'), ordered), null, 'numpad is not');
 eq(po.leaderPick({ key: '!', shift: true }, ordered), null, 'matched on code, not key');
 
+console.log('directPick (#224)');
+const c = (code, mods = {}) => ({ code, control: true, shift: false, alt: false, meta: false, ...mods });
+eq(po.directPick(c('Backquote'), ordered), 'terminal', 'Ctrl+` Terminal');
+eq(po.directPick(c('Backquote', { shift: true }), ordered), 'terminal', 'Ctrl+~ Terminal');
+eq(po.directPick(c('Digit1'), ordered), 'slot-work-mattermost', 'Ctrl+1 Work Mattermost');
+eq(po.directPick(c('Digit2'), ordered), 'w', 'Ctrl+2 Work');
+eq(po.directPick(c('Digit3'), ordered), 'slot-personal-mattermost', 'Ctrl+3 Mattermost');
+eq(po.directPick(c('Digit4'), () => ordered), 'p', 'Ctrl+4 Personal (list built lazily)');
+eq(po.directPick(c('Digit5'), ordered), 'slot-teams', 'Ctrl+5 Teams');
+eq(po.directPick(c('Digit6'), ordered), 'slot-outlook', 'Ctrl+6 Outlook');
+eq(po.directPick(c('Digit7'), ordered), null, 'Ctrl+7 is free');
+eq(po.directPick(c('Digit0'), ordered), null, 'Ctrl+0 stays Actual Size');
+eq(po.directPick(c('Digit1', { shift: true }), ordered), null, 'Ctrl+Shift+1 stays the page\'s');
+eq(po.directPick(c('Digit1', { control: false }), ordered), null, 'bare 1 types a 1');
+eq(po.directPick(c('Digit1', { alt: true }), ordered), null, 'AltGr is not Ctrl');
+eq(po.directPick(c('Numpad1'), ordered), null, 'numpad is not');
+let built = 0;
+po.directPick(c('KeyA'), () => { built++; return ordered; });
+eq(built, 0, 'an ordinary Ctrl chord never builds the list');
+eq(po.directPick(c('Digit2'), po.orderPersonas([])), null, 'no Work Persona: Ctrl+2 does nothing');
+
 console.log('slotFor (#221)');
 eq(po.slotFor('http://co-sf-pe-042.colorado.datadirectnet.com:8065/team/channels/town-square'), 'slot-work-mattermost', 'another Work Mattermost page');
 eq(po.slotFor('http://100.69.184.113:8065/agents/pl/abc'), 'slot-personal-mattermost', 'another personal Mattermost page');
