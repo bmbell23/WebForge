@@ -7,6 +7,9 @@ contextBridge.exposeInMainWorld('terminal', {
   resize: (cols, rows) => ipcRenderer.send('terminal:resize', cols, rows),
   copy: (osc52Data) => ipcRenderer.send('terminal:copy', osc52Data),
   openLink: (url) => ipcRenderer.send('terminal:link', url),
+  paste: () => ipcRenderer.send('terminal:paste'), // #212
+  copyText: (text) => ipcRenderer.send('terminal:copy-text', text),
+  onPasteText: (cb) => ipcRenderer.on('terminal:paste-text', (_e, text) => cb(text)),
   onData: (cb) => ipcRenderer.on('terminal:data', (_e, buf) => cb(buf)),
   onStatus: (cb) => ipcRenderer.on('terminal:status', (_e, s) => cb(s)),
 });
