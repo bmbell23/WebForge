@@ -87,4 +87,7 @@ eq(th.renameFavorite(base, 'nope', { host: 'z' }).ok, false, 'unknown favorite')
 eq(th.renameFavorite(base, 'a', { name: 'Alpha', host: 'a' }).hosts.names.a, 'Alpha', 'name-only edit');
 eq(th.connectionGroups({ favorites: ['a', 'b'], names: { a: 'Alpha', z: 'Stray' } }).names, { a: 'Alpha' }, 'names only for favorites');
 
+eq(th.connectionGroups({ favorites: ['root@pve01'], uses: { pve01: 3, 'brandon@pve01': 2 }, configHosts: ['pve01', 'dh'] }),
+  { favorites: ['root@pve01'], frequent: ['brandon@pve01'], config: ['dh'], names: {} },
+  '#241: a Favorite hides its bare host, not another user on it');
 console.log(`termhosts:${n} passed`);

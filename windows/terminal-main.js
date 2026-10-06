@@ -190,7 +190,11 @@ function toggleFavorite(target) {
 }
 // #228: edit a Favorite's name / user / host / port. Returns { ok, error? , target? }.
 function editFavorite(oldTarget, fields) {
-  const r = termhosts.renameFavorite(loadHosts(), String(oldTarget || ''), fields || {});
+  const old = String(oldTarget || '').trim();
+  const h = loadHosts();
+  // #241: editing a Frequent or ssh-config host saves it as a Favorite.
+  const base = h.favorites.includes(old) || !termhosts.validTarget(old) ? h : { ...h, favorites: [...h.favorites, old] };
+  const r = termhosts.renameFavorite(base, old, fields || {});
   if (!r.ok) return { ok: false, error: r.error };
   hostsCache = r.hosts;
   saveHosts();

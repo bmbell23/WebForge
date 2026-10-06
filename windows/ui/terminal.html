@@ -192,13 +192,12 @@
             className: 'star', textContent: fav ? '★' : '☆', title: fav ? 'Remove from Favorites' : 'Add to Favorites',
           });
           star.onclick = () => { window.terminal.favorite(t); setTimeout(render, 50); };
-          if (fav) {
-            const ed = Object.assign(document.createElement('button'), { className: 'edit', textContent: '✎', title: 'Edit this favorite' });
-            ed.onclick = (e) => { e.stopPropagation(); editRow(t, label, row); };
-            row.append(go, ed, star);
-          } else {
-            row.append(go, star);
-          }
+          // #241: every row can be edited; a non-Favorite becomes one when saved.
+          const ed = Object.assign(document.createElement('button'), {
+            className: 'edit', textContent: '✎', title: fav ? 'Edit this favorite' : 'Edit (saves it as a Favorite)',
+          });
+          ed.onclick = (e) => { e.stopPropagation(); editRow(t, label, row); };
+          row.append(go, ed, star);
           groups.appendChild(row);
         }
       }
