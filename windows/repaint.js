@@ -47,13 +47,30 @@ function shouldForce(ctx) {
 
   // The white case. Shown again after being hidden, at identical geometry —
   // exactly where setBounds cannot help.
-  if (c.becameVisible) return { force: true, reason: 'became visible at unchanged geometry' };
+  //
+  // #216: but only after a real absence. Forcing on EVERY tab switch meant two
+  // layouts of Teams/Outlook plus a capturePage per click. A frame is only
+  // evicted after the view has sat hidden a while, so a quick flip keeps it.
+  // hiddenMs undefined = unknown, which keeps the old (forcing) behaviour.
+  if (c.becameVisible) {
+    if (c.hiddenMs !== undefined && c.hiddenMs < EVICT_MS) {
+      return { force: false, reason: 'hidden too briefly to lose its frame' };
+    }
+    return { force: true, reason: 'became visible at unchanged geometry' };
+  }
 
   // The window came back from minimise/occlusion with the same size as before.
-  if (c.windowReturned) return { force: true, reason: 'window returned at unchanged geometry' };
+  // #216: a plain focus (alt-tab between two visible windows) never hid it.
+  if (c.windowReturned) {
+    if (c.windowWasHidden === false) return { force: false, reason: 'window was never hidden' };
+    return { force: true, reason: 'window returned at unchanged geometry' };
+  }
 
   return { force: false, reason: 'nothing to provoke' };
 }
+
+// #216: how long a view must sit hidden before re-showing it forces a repaint.
+const EVICT_MS = 2 * 60 * 1000;
 
 /**
  * A geometry that differs from `bounds` by one pixel, for the fallback nudge.
@@ -139,4 +156,4 @@ function leversFor(ctx, attempt) {
   return levers;
 }
 
-module.exports = { shouldForce, nudgeBounds, isDistinct, leversFor, LEVERS };
+module.exports = { shouldForce, nudgeBounds, isDistinct, leversFor, LEVERS, EVICT_MS };
