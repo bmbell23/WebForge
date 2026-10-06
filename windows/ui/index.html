@@ -1410,7 +1410,11 @@
     const names = g.names || {};
     const nodes = [connInput];
     for (const [title, list, fav] of [['★ Favorites', g.favorites, true], ['Frequent', g.frequent, false], ['~/.ssh/config', g.config, false]]) {
-      nodes.push(Object.assign(document.createElement('h4'), { textContent: title }));
+      nodes.push(Object.assign(document.createElement('h4'), {
+        textContent: title,
+        // #241: say where these come from
+        title: title === '~/.ssh/config' ? 'Host entries in C:\\Users\\<you>\\.ssh\\config, the file OpenSSH reads. Edit one with ✎ to save it as a Favorite.' : '',
+      }));
       if (!list.length) nodes.push(Object.assign(document.createElement('div'), { className: 'connempty', textContent: 'none yet' }));
       for (const t of list) {
         const el = document.createElement('div');
@@ -1423,13 +1427,12 @@
           className: 'rm', textContent: fav ? '★' : '☆', title: fav ? 'Remove from Favorites' : 'Add to Favorites',
         });
         st.onclick = (e) => { e.stopPropagation(); webforge.favoriteConnection(t); };
-        if (fav) {
-          const ed = Object.assign(document.createElement('button'), { className: 'rm', textContent: '✎', title: 'Edit this favorite' });
-          ed.onclick = (e) => { e.stopPropagation(); editRow(t, label, el); };
-          el.append(name, ed, st);
-        } else {
-          el.append(name, st);
-        }
+        // #241: every row can be edited; a non-Favorite becomes one when saved.
+        const ed = Object.assign(document.createElement('button'), {
+          className: 'rm', textContent: '✎', title: fav ? 'Edit this favorite' : 'Edit (saves it as a Favorite)',
+        });
+        ed.onclick = (e) => { e.stopPropagation(); editRow(t, label, el); };
+        el.append(name, ed, st);
         el.onclick = () => webforge.openConnection(t);
         el.onkeydown = (e) => { if (e.key === 'Enter' && e.target === el) webforge.openConnection(t); };
         nodes.push(el);

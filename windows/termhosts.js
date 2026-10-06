@@ -87,6 +87,12 @@ function rankFrequent(uses, limit = 8) {
 // one group only: Favorites beat Frequent beat ssh config.
 function connectionGroups({ favorites = [], uses = {}, configHosts: cfg = [], names = {} } = {}) {
   const seen = new Set(favorites);
+  // #241: a Favorite also hides the bare host it was made from (an edited
+  // ssh-config "pve01" saved as "root@pve01" shouldn't show twice).
+  for (const f of favorites) {
+    const h = splitTarget(f)?.host;
+    if (h) seen.add(h);
+  }
   const frequent = rankFrequent(uses).filter((t) => !seen.has(t));
   for (const t of frequent) seen.add(t);
   return {
