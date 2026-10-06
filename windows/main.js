@@ -1743,6 +1743,16 @@ function wireChords(wc) {
       armLeader(); // globalShortcut usually beats us here; harmless either way
       return;
     }
+    // #224: Ctrl+` and Ctrl+1–6 jump straight to a Persona or app, from any
+    // page or terminal (the shell never sees them). Ctrl+Space + key still works.
+    const direct = personaorder.directPick(input, orderedPersonas);
+    if (direct) {
+      event.preventDefault();
+      leaderUntil = 0;
+      if (terminalMain.isTerminal(wc)) terminalMain.setHold(wc, false);
+      if (!locked) switchPersona(direct);
+      return;
+    }
     // #214: a terminal tab. Every key belongs to the shell except the held key
     // after Ctrl+Space (Persona switch, or prefix + key for forge) and the few
     // tab chords below. Ctrl+L, Ctrl+S, Ctrl+B, Alt+arrows and Esc are the shell's.
