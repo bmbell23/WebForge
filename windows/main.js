@@ -887,6 +887,7 @@ function applySlots() {
   personas.setSlots(personaorder.orderPersonas([], appSlots()).filter((p) => p.slot));
 }
 function saveSlots(urls) {
+  const before = new Map(appSlots().map((s) => [s.id, s.url]));
   const clean = {};
   for (const s of personaorder.DEFAULT_SLOTS) {
     const u = personaorder.slotUrl(urls && urls[s.id]);
@@ -895,10 +896,10 @@ function saveSlots(urls) {
   getSettings().appSlots = clean;
   saveSettings();
   applySlots();
-  // An open slot tab follows its new URL.
+  // An open slot tab follows a CHANGED URL; the rest keep their calls and drafts.
   for (const tid of tabOrder) {
     const p = isSlotTab(tid) && personas.get(personaByTab.get(tid));
-    if (p && tabs.has(tid) && !lazyTabs.has(tid)) tabs.get(tid).webContents.loadURL(p.url);
+    if (p && tabs.has(tid) && !lazyTabs.has(tid) && before.get(p.slot) !== p.url) tabs.get(tid).webContents.loadURL(p.url);
   }
   pushPersonas();
   return appSlots();
@@ -1431,7 +1432,8 @@ function closeTab(id, opts = {}) {
   // applying someone else's close, which must not echo back.
   if (!opts.remote) {
     const url = tabUrlOf(id);
-    if (shareable(url)) {
+    // #214: an app slot is reopened by its key, and the phone must not lose its own Teams tab.
+    if (shareable(url) && !isViewTab(id)) {
       closedFacts.set(url, Date.now());
       setTimeout(syncTabs, 400); // #95: propagate the close right away
       // #101: remember it for Ctrl+Shift+T. shareable() already screens out
@@ -3428,6 +3430,7 @@ ipcMain.on('open-in-new-tab', (_e, url) => {
 });
 ipcMain.on('set-hotkey', (_e, { keyId, url, title }) => {
   if (locked) return;
+  if (personas.isBuiltinView(personas.activeId())) return; // #214: Terminal and app slots hold no bookmarks
   if (!hotkeys.set(String(keyId), { url, title }, personas.activeId())) return; // digits reserved
   broadcastHotkeys();
   pushState();
@@ -4024,7 +4027,7 @@ ipcMain.handle('int:delete-folder', (_e, folder) => {
   return n;
 });
 ipcMain.handle('int:set-hotkey', (_e, { keyId, url, title }) => {
-  if (locked) return false;
+  if (locked || personas.isBuiltinView(personas.activeId())) return false; // #214
   if (!hotkeys.set(String(keyId), { url, title }, personas.activeId())) return false;
   broadcastHotkeys();
   pushState();
