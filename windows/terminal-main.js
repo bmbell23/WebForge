@@ -5,7 +5,8 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { Client, utils } = require('ssh2');
+// Loaded on first use, so a packaging problem with ssh2 can only break the terminal, never startup.
+const ssh2 = () => require('ssh2');
 const term = require('./terminal');
 
 const DEFAULT_TARGET = 'brandon@dockerhost';
@@ -19,7 +20,7 @@ function readPrivateKey(home) {
   for (const file of term.keyCandidates(home)) {
     try {
       const buf = fs.readFileSync(file);
-      if (!(utils.parseKey(buf) instanceof Error)) return buf;
+      if (!(ssh2().utils.parseKey(buf) instanceof Error)) return buf;
     } catch {}
   }
   return null;
@@ -59,7 +60,7 @@ function buildConfig(target, say) {
 // Opens a shell. Hooks: onData(Buffer), onStatus(kind, text), onClose().
 // Returns { write, resize, end }.
 function openSession(target, { cols, rows, onData, onStatus, onClose }) {
-  const conn = new Client();
+  const conn = new (ssh2().Client)();
   let stream = null;
   let closed = false;
   const close = () => {
