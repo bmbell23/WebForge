@@ -12,7 +12,10 @@
   },
   "dependencies": {
     "@ghostery/adblocker-electron": "^2.18.1",
-    "electron-updater": "^6.3.9"
+    "@xterm/addon-fit": "0.12.0-beta.301",
+    "@xterm/xterm": "6.1.0-beta.304",
+    "electron-updater": "^6.3.9",
+    "ssh2": "1.17.0"
   },
   "devDependencies": {
     "electron": "^34.0.0",
@@ -21,6 +24,7 @@
   "build": {
     "appId": "com.webforge.browser",
     "productName": "WebForge",
+    "npmRebuild": false,
     "directories": {
       "output": "dist"
     },

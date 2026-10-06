@@ -1,0 +1,51 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>WebForge Terminal (preview)</title>
+<link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css">
+<style>
+  html, body { margin: 0; height: 100%; background: #0c0c0c; overflow: hidden; }
+  #term { position: absolute; inset: 6px; }
+</style>
+</head>
+<body>
+<div id="term"></div>
+<script src="../node_modules/@xterm/xterm/lib/xterm.js"></script>
+<script src="../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
+<script>
+  // #206: spike terminal. Keys, mouse and colour are xterm.js defaults; the
+  // only options are the font, the theme and the kitty keyboard protocol that
+  // forge's Ctrl+Space needs (@xterm/xterm 6.1 betas only).
+  const term = new Terminal({
+    fontFamily: "'Cascadia Mono', Consolas, monospace",
+    fontSize: 14,
+    cursorBlink: true,
+    theme: { background: '#0c0c0c' },
+    vtExtensions: { kittyKeyboard: true },
+  });
+  const fit = new FitAddon.FitAddon();
+  term.loadAddon(fit);
+  term.open(document.getElementById('term'));
+  fit.fit();
+
+  // OSC 52 set only; main decodes, caps and ignores "?" and bad base64.
+  term.parser.registerOscHandler(52, (data) => {
+    window.terminal.copy(data);
+    return true;
+  });
+
+  const COLORS = { info: '36', warn: '33', error: '31;1' };
+  window.terminal.onData((buf) => term.write(buf));
+  window.terminal.onStatus(({ kind, text }) => {
+    term.write(`\r\n\x1b[${COLORS[kind] || '0'}m${text}\x1b[0m\r\n`);
+  });
+  term.onData((d) => window.terminal.write(d));
+  term.onResize(({ cols, rows }) => window.terminal.resize(cols, rows));
+  window.addEventListener('resize', () => fit.fit());
+
+  window.terminal.start(term.cols, term.rows);
+  term.focus();
+</script>
+</body>
+</html>

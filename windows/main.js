@@ -45,6 +45,7 @@ const ytdlp = require('./ytdlp'); // #156 — ditto (what the download button se
 const adultlist = require('./adultlist'); // #203 — ditto (your adult-site list)
 const stash = require('./stash'); // #177 — ditto (Add to Stash body + job wording)
 const autofillFrames = require('./autofillframes'); // #141
+const terminalMain = require('./terminal-main'); // #206 — terminal spike (ssh2; needs no native helpers)
 
 // #134: banks and other sites with a "supported browsers" allowlist refuse to
 // let you sign in when the UA says Electron, even though the engine below is
@@ -1510,6 +1511,12 @@ function reopenClosedTab() {
   createTab(last.url, false, last.personaId);
 }
 
+// #206: opens or focuses the terminal spike window. Ctrl+Shift+Tab in it comes back here.
+function openTerminal() {
+  if (locked) return;
+  terminalMain.openTerminalWindow({ focusMain: () => win.focus() });
+}
+
 function cycleTab(dir) {
   // #75: cycle within the ACTIVE Persona only — walking the global tabOrder
   // jumped into other Personas' tabs and yanked the workspace out from under
@@ -1704,9 +1711,10 @@ function wireChords(wc) {
     if (key === 'tab') {
       event.preventDefault();
       // #113: Ctrl+Tab flips between the two most recently used tabs, the way
-      // Alt+Tab does; Ctrl+Shift+Tab steps to the next tab in sidebar order.
+      // Alt+Tab does; Ctrl+PageDown steps to the next tab in sidebar order.
       // "Previous tab" is deliberately gone — Ctrl+PageUp still walks backwards.
-      if (input.shift) cycleTab(1);
+      // #206: Ctrl+Shift+Tab is now the terminal window (and its way back).
+      if (input.shift) openTerminal();
       else flipTab();
     } else if (key === 'l' && !input.shift) {
       // #103: Ctrl+L did nothing. The menu item's code was correct — and a probe
@@ -3051,9 +3059,9 @@ function menuTemplate() {
           { label: 'Lock WebForge', accelerator: 'CmdOrCtrl+Shift+L', click: () => showLock() },
           { label: 'Import Passwords (CSV)…', click: () => locked || importPasswordsCsv() },
           // #113: keep these in step with wireChords, or the menu advertises
-          // behaviour the app no longer has.
+          // behaviour the app no longer has. #206: Ctrl+Shift+Tab moved to the terminal.
           { label: 'Recent Tab', accelerator: 'Control+Tab', click: () => flipTab() },
-          { label: 'Next Tab', accelerator: 'Control+Shift+Tab', click: () => cycleTab(1) },
+          { label: 'Next Tab', accelerator: 'Control+PageDown', click: () => cycleTab(1) },
           {
             label: 'Focus Address Bar',
             accelerator: 'CmdOrCtrl+L',
@@ -3068,6 +3076,7 @@ function menuTemplate() {
           { label: 'Hard Reload', accelerator: 'CmdOrCtrl+Shift+R', click: () => hardReload() },
           { label: 'Find in Page', accelerator: 'CmdOrCtrl+F', click: () => openFind() },
           { label: 'Reopen Closed Tab', accelerator: 'CmdOrCtrl+Shift+T', click: () => reopenClosedTab() },
+          { label: 'Terminal (preview)', accelerator: 'Control+Shift+Tab', click: () => openTerminal() }, // #206
           { label: 'Zoom In', accelerator: 'CmdOrCtrl+=', click: () => zoomBy(1) },
           { label: 'Zoom In', accelerator: 'CmdOrCtrl+Plus', visible: false, click: () => zoomBy(1) },
           { label: 'Zoom Out', accelerator: 'CmdOrCtrl+-', click: () => zoomBy(-1) },
