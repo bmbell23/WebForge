@@ -81,8 +81,6 @@ function get(keyId, personaId) {
 
 function set(keyId, entry, personaId) {
   if (!keyId || !entry?.url) return false;
-  // Bare digits are reserved for Persona switching (Ctrl+Space then 1-9).
-  if (/^[1-9]$/.test(keyId)) return false;
   const b = bucket(personaId);
   // #73: one hotkey per bookmark per Persona. Without this an older key for
   // the same URL survived and kept winning keyForUrl(), so the badge showed

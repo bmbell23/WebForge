@@ -869,11 +869,9 @@ function tabState() {
   });
 }
 
-// #71: Unassigned is the fallback, not a destination — put it last so the
-// Personas you actually use get Ctrl+Space 1, 2, 3. Display and the digit
-// shortcuts share this ordering so the numbers you see are the numbers you press.
-// #214: Terminal is first, so the order is 1 Terminal, 2 Personal, 3 Work,
-// 4 Unassigned. personaorder.js holds the rule, under test.
+// #71: Unassigned is the fallback, not a destination, so it goes last.
+// #214: keyed Personas and app slots come first, in key order (` ! @ # $ % ^).
+// personaorder.js holds the rule, under test.
 function orderedPersonas() {
   return personaorder.orderPersonas(personas.all(), appSlots());
 }
@@ -1773,13 +1771,12 @@ function wireChords(wc) {
       leaderUntil = 0;
       if (rawKey.toLowerCase() === 'escape' || locked) return;
       // #214: ` ! @ # $ % ^ pick a Persona or app slot (personaorder.KEYMAP,
-      // matched on the physical key). Bare digits stay reserved (hotkeys.set).
+      // matched on the physical key). #217: digits are bookmark hotkeys like any other key.
       const pick = personaorder.leaderPick(input, orderedPersonas());
       if (pick) {
         switchPersona(pick);
         return;
       }
-      if (/^[1-9]$/.test(rawKey) && modifier.isBare(input)) return;
       handleHotkeyPress(modifier.keyId(input, rawKey)); // #150: same id on every platform
       return;
     }
@@ -3431,7 +3428,7 @@ ipcMain.on('open-in-new-tab', (_e, url) => {
 ipcMain.on('set-hotkey', (_e, { keyId, url, title }) => {
   if (locked) return;
   if (personas.isBuiltinView(personas.activeId())) return; // #214: Terminal and app slots hold no bookmarks
-  if (!hotkeys.set(String(keyId), { url, title }, personas.activeId())) return; // digits reserved
+  if (!hotkeys.set(String(keyId), { url, title }, personas.activeId())) return;
   broadcastHotkeys();
   pushState();
 });

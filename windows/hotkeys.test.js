@@ -70,5 +70,12 @@ test('the same key can mean different things in different Personas (#25)', () =>
   assert.strictEqual(hotkeys.get('b', 'personal').url, 'https://personal.example.com');
 });
 
+test('#217: digits bind like any other key, now that Personas use ` ! @ # $ % ^', () => {
+  assert.strictEqual(hotkeys.set('1', { url: 'https://one.example.com', title: 'One' }, 'work'), true);
+  assert.strictEqual(hotkeys.set('9', { url: 'https://nine.example.com', title: 'Nine' }, 'work'), true);
+  assert.strictEqual(hotkeys.get('1', 'work').url, 'https://one.example.com');
+  assert.strictEqual(hotkeys.get('9', 'work').url, 'https://nine.example.com');
+});
+
 fs.rmSync(userData, { recursive: true, force: true });
 console.log(`\n${run} tests passed`);
