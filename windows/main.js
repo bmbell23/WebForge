@@ -5,7 +5,7 @@
 // and added after it, so they cover chrome's dead area. Only the active tab's
 // view is visible. Full tab state is broadcast to the chrome UI on every
 // change; it re-renders from that.
-const { app, BaseWindow, BrowserWindow, WebContentsView, Notification, clipboard, ipcMain, dialog, Menu, nativeTheme, session } = require('electron');
+const { app, BaseWindow, BrowserWindow, WebContentsView, Notification, clipboard, ipcMain, dialog, Menu, nativeTheme, session, powerMonitor } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto'); // #57: stable device id
@@ -178,6 +178,9 @@ const lastActiveAt = new Map(); // #79: tabId -> ms, for inactivity expiry
 // showing it is not enough to make it — hence forceRepaint below.
 const everPainted = new Set(); // tabId
 const lastBounds = new Map(); // #148: tabId -> the bounds layout() last applied
+const hiddenAt = new Map(); // #216: tabId -> ms it was last hidden, so a quick flip skips the repaint
+let windowWasHidden = false; // #216: minimised/hidden since the last return, vs a plain focus
+let blurredAt = 0; // #216: a long blur counts as hidden — occlusion fires no minimise
 // #101: Ctrl+Shift+T — closed tabs, most recent last. Capped so a long session
 // can't grow it without bound; pinned tabs never reach here (closeTab refuses).
 const closedTabs = [];
@@ -241,6 +244,15 @@ function sessionSnapshot() {
     active: Math.max(0, kept.indexOf(activeId)),
   };
 }
+// #216: every state push asked for a save, and Teams/Outlook/Mattermost retitle
+// their tabs with each unread count, so the session was re-encrypted and
+// rewritten constantly. Only what restore depends on (urls, pins, hotkeys,
+// Personas, order, active) triggers a write now; titles and last-used times
+// ride along with the next one, and quit always writes.
+let savedSessionKey = null;
+function sessionKey(snap) {
+  return JSON.stringify([snap.active, snap.tabs.map((t) => [t.url, t.pinned, t.pinHome, t.hotkey, t.persona])]);
+}
 function saveSessionSoon() {
   if (locked) return;
   clearTimeout(saveSessionTimer);
@@ -249,13 +261,19 @@ function saveSessionSoon() {
   // flushed synchronously on the way out.
   saveSessionTimer = setTimeout(() => {
     if (!alive()) return;
-    vault.writeFile('session', sessionSnapshot());
-  }, 500);
+    const snap = sessionSnapshot();
+    const key = sessionKey(snap);
+    if (key === savedSessionKey) return;
+    vault.writeFile('session', snap);
+    savedSessionKey = key;
+  }, 3000);
 }
 function saveSessionNow() {
   if (locked) return;
   clearTimeout(saveSessionTimer);
-  vault.writeFile('session', sessionSnapshot());
+  const snap = sessionSnapshot();
+  vault.writeFile('session', snap);
+  savedSessionKey = sessionKey(snap);
 }
 function loadLegacyPinned() {
   const f = path.join(app.getPath('userData'), 'pinned.json');
@@ -917,10 +935,20 @@ function remoteTabsForActive() {
   return out;
 }
 
+// #216: the sidebar re-renders on every message, and most pushes change
+// nothing in a given channel. Send a channel only when its payload differs.
+const lastSent = new Map(); // channel -> JSON last sent
+function sendIfChanged(channel, payload) {
+  const json = JSON.stringify(payload);
+  if (lastSent.get(channel) === json) return;
+  lastSent.set(channel, json);
+  chrome.webContents.send(channel, payload);
+}
+
 function pushPersonas() {
   if (!chrome) return;
   const active = personas.activeId();
-  chrome.webContents.send('personas-updated', {
+  sendIfChanged('personas-updated', {
     personas: orderedPersonas().map((p) => ({
       id: p.id,
       name: p.name,
@@ -952,7 +980,7 @@ function pushState() {
   pushTimer = setTimeout(() => {
     pushTimer = null;
     pushStateNow();
-  }, 40);
+  }, 100); // #216: was 40ms; a loading page still lands in one or two pushes
 }
 
 function pushStateNow() {
@@ -962,8 +990,8 @@ function pushStateNow() {
   // updating until the next successful push.
   if (!alive()) return;
   pushPersonas(); // #25
-  chrome.webContents.send('tabs-updated', tabState());
-  chrome.webContents.send('remote-tabs', remoteTabsForActive()); // #57
+  sendIfChanged('tabs-updated', tabState()); // #216
+  sendIfChanged('remote-tabs', remoteTabsForActive()); // #57
   const wc = activeWc();
   const title = wc?.getTitle();
   win.setTitle(title ? `${title} — WebForge` : 'WebForge');
@@ -1344,6 +1372,7 @@ function activateTab(id, opts = {}) {
   if (owner !== personas.activeId()) personas.setActive(owner); // #25
   const leaving = activeId; // #82 — must be captured BEFORE the reassignment
   if (leaving !== id && tabs.has(leaving)) terminalMain.clearHold(tabs.get(leaving).webContents); // #214
+  if (leaving !== id && tabs.has(leaving)) hiddenAt.set(leaving, Date.now()); // #216
   // #83: hide every other view, not just the outgoing one. Relying on a single
   // setVisible(false) meant any missed bookkeeping left two views stacked and
   // z-order picked the winner — the 'wrong tab' the user was seeing.
@@ -1383,7 +1412,8 @@ function activateTab(id, opts = {}) {
   // If it didn't, setBounds was a no-op and this view may show the last frame it
   // had — or none at all — until something provokes the compositor.
   const moved = boundsChangedFor(id);
-  forceRepaint(id, { becameVisible: true, boundsChanged: moved });
+  const since = hiddenAt.get(id); // #216
+  forceRepaint(id, { becameVisible: true, boundsChanged: moved, hiddenMs: since === undefined ? undefined : Date.now() - since });
   // #30: keyboard focus MUST follow activation — if it stays on a hidden view
   // (or nothing), key events vanish and hotkey swapping "stops working".
   view.webContents.focus();
@@ -1453,6 +1483,7 @@ function closeTab(id, opts = {}) {
   lazyTabs.delete(id);
   lastActiveAt.delete(id);
   everPainted.delete(id); // #148
+  hiddenAt.delete(id); // #216
   lastBounds.delete(id); // #148
   openedAt.delete(id);
   for (const [page, tid] of internalTabs) if (tid === id) internalTabs.delete(page);
@@ -2016,7 +2047,10 @@ function createWindow() {
   win.contentView.addChildView(chrome);
   chrome.webContents.loadFile(path.join(__dirname, 'ui', 'index.html'));
   // Chrome renders from pushed state; re-push once it's ready to receive.
-  chrome.webContents.on('did-finish-load', pushState);
+  chrome.webContents.on('did-finish-load', () => {
+    lastSent.clear(); // #216: a fresh page has seen nothing yet
+    pushState();
+  });
   chrome.webContents.on('did-finish-load', pushTabGroups); // #34
   wireChords(chrome.webContents); // #22
 
@@ -2034,13 +2068,29 @@ function createWindow() {
   // occlusion, which IS a compositor event. So the window returning must also
   // force a frame, not merely re-assert geometry.
   const onWindowReturn = () => {
-    // #148 round 5: chrome first, and unconditionally. It draws the sidebar and
-    // nav bar, and a window-wide blank means it is as stalled as the page is.
-    forceRepaintChrome();
+    // #216: restore, show and focus all land here, and focus fires on every
+    // alt-tab. Only a window that was really minimised/hidden needs provoking.
+    const wasHidden = windowWasHidden || (blurredAt > 0 && Date.now() - blurredAt >= repaint.EVICT_MS);
+    // Only a return the user can actually see uses the flag up. restore/show can
+    // fire while the window is still minimised, and then the later focus must force.
+    if (win.isVisible() && !win.isMinimized()) {
+      windowWasHidden = false;
+      blurredAt = 0;
+    }
+    // #148 round 5: chrome first. It draws the sidebar and nav bar, and a
+    // window-wide blank means it is as stalled as the page is.
+    if (wasHidden) forceRepaintChrome();
     if (activeId === null || !tabs.has(activeId)) return layout();
     const moved = boundsChangedFor(activeId);
-    forceRepaint(activeId, { windowReturned: true, boundsChanged: moved });
+    forceRepaint(activeId, { windowReturned: true, windowWasHidden: wasHidden, boundsChanged: moved });
   };
+  win.on('minimize', () => (windowWasHidden = true));
+  win.on('hide', () => (windowWasHidden = true));
+  win.on('blur', () => (blurredAt = Date.now()));
+  // Sleep and screen lock hide nothing as far as the window knows, but they are
+  // exactly where frames get dropped.
+  powerMonitor.on('resume', () => (windowWasHidden = true));
+  powerMonitor.on('unlock-screen', () => (windowWasHidden = true));
   win.on('restore', onWindowReturn);
   win.on('show', onWindowReturn);
   win.on('focus', onWindowReturn);
@@ -2697,11 +2747,12 @@ function showLock() {
     view.webContents.close();
   }
   tabs.clear();
+  hiddenAt.clear(); // #216
   tabOrder = [];
   pinnedIds.clear();
   activeId = null;
   win.setTitle('WebForge — locked');
-  chrome.webContents.send('tabs-updated', []);
+  sendIfChanged('tabs-updated', []); // #216: through the dedupe, or unlock could skip its first push
 
   lockView = new WebContentsView({
     webPreferences: { preload: path.join(__dirname, 'preload.js') },
@@ -4259,7 +4310,31 @@ app.whenReady().then(() => {
   setInterval(syncAdult, 10 * 60 * 1000); // #203
   setInterval(syncTabs, 30 * 1000); // #95: 30s, matching Android — a minute felt dead
   setInterval(sweepStaleTabs, 5 * 60 * 1000); // #79
+  setInterval(recordPerf, 10 * 60 * 1000); // #216
 });
+
+// #216: the slowdown report came with no numbers to check it against. Every 10
+// minutes, log tab counts and CPU/memory per process type, so the next round
+// can compare instead of guess. Lands in errors.log and the server's copy (#171).
+function recordPerf() {
+  if (!alive()) return;
+  try {
+    const byType = {};
+    for (const m of app.getAppMetrics()) {
+      const t = (byType[m.type] ||= { n: 0, cpu: 0, mb: 0 });
+      t.n += 1;
+      t.cpu += m.cpu?.percentCPUUsage || 0;
+      t.mb += (m.memory?.workingSetSize || 0) / 1024; // KB -> MB
+    }
+    const procs = Object.entries(byType)
+      .map(([type, t]) => `${type}=${t.n}/${t.cpu.toFixed(1)}%/${Math.round(t.mb)}MB`)
+      .join(' ');
+    const terminals = [...tabs.keys()].filter(isTerminalTab).length;
+    errorlog.record('perf', `tabs=${tabs.size} unloaded=${lazyTabs.size} terminals=${terminals} ${procs}`);
+  } catch (err) {
+    errorlog.record('perf', err);
+  }
+}
 
 app.on('before-quit', () => {
   clearInterval(fsPollTimer); // #20: never let the poll outlive the window
@@ -4275,6 +4350,7 @@ app.on('before-quit', () => {
   saveSessionNow(); // flush any pending debounce
   clearTimeout(shipTimer);
   shipper?.flush(); // #171: best effort; whatever doesn't make it is in errors.log
+  errorlog.flush(); // #216: the log writes on a timer now; quit won't wait for it
 });
 app.on('window-all-closed', () => app.quit());
 
@@ -4312,7 +4388,9 @@ function setupLogShipping() {
 // log it and keep running instead of Electron's default uncaught dialog.
 process.on('uncaughtException', (err) => {
   errorlog.record('uncaughtException', err); // #75: visible in Settings
+  errorlog.flush(); // #216: the log is buffered now, and this may be the last thing we do
 });
 process.on('unhandledRejection', (err) => {
   errorlog.record('unhandledRejection', err);
+  errorlog.flush(); // #216
 });

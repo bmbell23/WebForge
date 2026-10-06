@@ -10,6 +10,7 @@ const path = require('path');
 // Loaded on first use, so a packaging problem with ssh2 can only break the terminal, never startup.
 const ssh2 = () => require('ssh2');
 const term = require('./terminal');
+const { createBatcher } = require('./termbatch');
 const termhosts = require('./termhosts');
 
 const DEFAULT_TARGET = 'brandon@dockerhost';
@@ -210,19 +211,26 @@ function send(st, channel, payload) {
 function connect(st) {
   if (!st.target) return;
   let mine = null; // onClose can run before openSession returns (a sync connect failure)
+  // #216: one IPC message per ~8 ms of ssh output, not one per ssh2 chunk.
+  const batch = createBatcher((buf) => send(st, 'terminal:data', buf));
   mine = openSession(st.target, {
     ...st.size,
-    onData: (buf) => send(st, 'terminal:data', buf),
-    onStatus: (kind, text) => send(st, 'terminal:status', { kind, text }),
+    onData: (buf) => batch.push(buf),
+    onStatus: (kind, text) => {
+      batch.flushNow(); // #216: keep output ahead of the status that follows it
+      send(st, 'terminal:status', { kind, text });
+    },
     onReady: () => {
       recordUse(st.target);
       hooks.onConnectionsChanged?.();
     },
     ask: (question, cb) => {
+      batch.flushNow(); // #216
       send(st, 'terminal:prompt', question);
       st.answer = cb;
     },
     onClose: () => {
+      batch.flushNow(); // #216: the tail of the output lands before the disconnect notice
       if (st.session !== mine) return;
       st.session = null;
       st.answer = null;

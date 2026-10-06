@@ -14,6 +14,7 @@
     "@ghostery/adblocker-electron": "^2.18.1",
     "@xterm/addon-fit": "0.12.0-beta.301",
     "@xterm/addon-web-links": "0.13.0-beta.301",
+    "@xterm/addon-webgl": "0.20.0-beta.300",
     "@xterm/xterm": "6.1.0-beta.304",
     "electron-updater": "^6.3.9",
     "ssh2": "1.17.0"

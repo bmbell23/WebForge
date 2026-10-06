@@ -34,6 +34,7 @@
 <script src="../node_modules/@xterm/xterm/lib/xterm.js"></script>
 <script src="../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
 <script src="../node_modules/@xterm/addon-web-links/lib/addon-web-links.js"></script>
+<script src="../node_modules/@xterm/addon-webgl/lib/addon-webgl.js"></script>
 <script>
   // #206: spike terminal. Keys, mouse and colour are xterm.js defaults; the
   // only options are the font, the theme and the kitty keyboard protocol that
@@ -52,6 +53,12 @@
   // Plain URLs in the output, too.
   term.loadAddon(new WebLinksAddon.WebLinksAddon((_e, uri) => window.terminal.openLink(uri)));
   term.open(document.getElementById('term'));
+  // #216: GPU renderer; any failure falls back silently to the default DOM renderer.
+  try {
+    const gl = new WebglAddon.WebglAddon();
+    gl.onContextLoss(() => gl.dispose());
+    term.loadAddon(gl);
+  } catch (_) {}
   fit.fit();
 
   // OSC 52 set only; main decodes, caps and ignores "?" and bad base64.

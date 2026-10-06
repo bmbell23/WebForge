@@ -1,6 +1,6 @@
 // #148 tests:  node windows/repaint.test.js
 const assert = require('assert');
-const { shouldForce, nudgeBounds, isDistinct } = require('./repaint');
+const { shouldForce, nudgeBounds, isDistinct, EVICT_MS } = require('./repaint');
 
 let run = 0;
 const test = (name, fn) => {
@@ -154,6 +154,32 @@ test('leversFor never returns the shared array, so a caller cannot corrupt it', 
   const a = leversFor({ everPainted: false }, 0);
   a.push('nonsense');
   assert.deepStrictEqual(LEVERS, ['visibility', 'invalidate', 'nudge', 'capture']);
+});
+
+console.log('#216: not on every tab switch');
+
+test('a quick flip back to a painted tab does NOT force (it still has its frame)', () => {
+  const d = shouldForce({ everPainted: true, becameVisible: true, boundsChanged: false, hiddenMs: 5000 });
+  assert.strictEqual(d.force, false);
+  assert.deepStrictEqual(leversFor({ everPainted: true, becameVisible: true, hiddenMs: 5000 }, 0), []);
+});
+
+test('a tab hidden past the eviction window IS forced (the WHITE case survives)', () => {
+  const d = shouldForce({ everPainted: true, becameVisible: true, boundsChanged: false, hiddenMs: EVICT_MS });
+  assert.strictEqual(d.force, true);
+});
+
+test('a never-painted view is forced however briefly it was hidden', () => {
+  assert.strictEqual(shouldForce({ everPainted: false, becameVisible: true, hiddenMs: 10 }).force, true);
+});
+
+test('focus without the window having been hidden does NOT force', () => {
+  const d = shouldForce({ everPainted: true, windowReturned: true, windowWasHidden: false });
+  assert.strictEqual(d.force, false);
+});
+
+test('restore after a real minimise IS forced', () => {
+  assert.strictEqual(shouldForce({ everPainted: true, windowReturned: true, windowWasHidden: true }).force, true);
 });
 
 console.log(`\n${run} tests passed`);
