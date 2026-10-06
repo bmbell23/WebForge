@@ -40,6 +40,7 @@ contextBridge.exposeInMainWorld('webforge', {
   goForward: () => ipcRenderer.send('go-forward'),
   reload: () => ipcRenderer.send('reload'),
   goHome: () => ipcRenderer.send('go-home'), // #174
+  openTerminal: () => ipcRenderer.send('open-terminal'), // #208
   // #126: ticket-key box — same channel Ctrl+J uses (#100).
   openTextRule: (text) => ipcRenderer.send('open-text-rule', text),
   // #127: direct-template quick boxes (Amazon). Reuses the channel
