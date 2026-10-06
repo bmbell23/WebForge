@@ -28,10 +28,11 @@ const KEYMAP = [
 ];
 
 const DEFAULT_SLOTS = Object.freeze([
-  { id: 'work-mattermost', name: 'Work Mattermost', url: 'http://co-sf-pe-042.colorado.datadirectnet.com:8065/' },
-  { id: 'personal-mattermost', name: 'Mattermost', url: 'http://100.69.184.113:8065/' },
-  { id: 'teams', name: 'Teams', url: 'https://teams.cloud.microsoft/' },
-  { id: 'outlook', name: 'Outlook', url: 'https://outlook.cloud.microsoft/mail/' },
+  // `home`: the Persona a page opened FROM the slot lands in (#219).
+  { id: 'work-mattermost', name: 'Work Mattermost', url: 'http://co-sf-pe-042.colorado.datadirectnet.com:8065/', home: 'work' },
+  { id: 'personal-mattermost', name: 'Mattermost', url: 'http://100.69.184.113:8065/', home: 'personal' },
+  { id: 'teams', name: 'Teams', url: 'https://teams.cloud.microsoft/', home: 'work' },
+  { id: 'outlook', name: 'Outlook', url: 'https://outlook.cloud.microsoft/mail/', home: 'work' },
 ]);
 
 // An http(s) URL, or null.
@@ -101,6 +102,19 @@ function slotFor(url, slotList = slots()) {
   return hit ? SLOT_PREFIX + hit.id : null;
 }
 
+// #219: where a page opened from Persona `pid` belongs (URL rules still win in
+// createTab). A normal Persona keeps it; an app slot sends it to its home Persona
+// (Work or Personal, by name); the Terminal, or a slot whose home is missing,
+// sends it to Unassigned.
+function openerHome(pid, ordered) {
+  if (pid === TERMINAL) return UNASSIGNED;
+  if (!isSlotId(pid)) return pid || UNASSIGNED;
+  const def = DEFAULT_SLOTS.find((s) => SLOT_PREFIX + s.id === pid);
+  const home = def && (ordered || []).find((p) => !p.slot && p.id !== TERMINAL && p.id !== UNASSIGNED &&
+    String(p.name || '').trim().toLowerCase() === def.home);
+  return home ? home.id : UNASSIGNED;
+}
+
 // The Persona the key after Ctrl+Space picks, by physical key (`code`) so the
 // symbols live wherever the layout puts them. null when it picks nothing.
 function leaderPick(input, ordered) {
@@ -111,5 +125,5 @@ function leaderPick(input, ordered) {
 
 module.exports = {
   TERMINAL, UNASSIGNED, TERMINAL_PERSONA, KEYMAP, DEFAULT_SLOTS,
-  slots, slotUrl, isSlotId, orderPersonas, leaderPick, slotFor,
+  slots, slotUrl, isSlotId, orderPersonas, leaderPick, slotFor, openerHome,
 };

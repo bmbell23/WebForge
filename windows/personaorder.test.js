@@ -66,4 +66,14 @@ eq(po.slotFor('https://login.microsoftonline.com/x'), null, 'sign-in pages are n
 eq(po.slotFor('not a url'), null, 'junk');
 eq(po.slotFor('https://chat.example.com/x', po.slots({ 'work-mattermost': 'https://chat.example.com/' })), 'slot-work-mattermost', 'follows an edited slot URL');
 
+console.log('openerHome (#219)');
+eq(po.openerHome('w', ordered), 'w', 'a normal Persona keeps its popups');
+eq(po.openerHome('slot-work-mattermost', ordered), 'w', 'Work Mattermost → Work');
+eq(po.openerHome('slot-teams', ordered), 'w', 'Teams → Work');
+eq(po.openerHome('slot-outlook', ordered), 'w', 'Outlook → Work');
+eq(po.openerHome('slot-personal-mattermost', ordered), 'p', 'Mattermost → Personal');
+eq(po.openerHome('terminal', ordered), 'unassigned', 'Terminal → Unassigned');
+eq(po.openerHome('slot-teams', po.orderPersonas([])), 'unassigned', 'no Work Persona → Unassigned');
+eq(po.openerHome(undefined, ordered), 'unassigned', 'unknown opener → Unassigned');
+
 console.log(`personaorder: ${n} passed`);
