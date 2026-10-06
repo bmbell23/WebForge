@@ -48,6 +48,7 @@ const autofillFrames = require('./autofillframes'); // #141
 const terminalMain = require('./terminal-main'); // #206 — terminal spike (ssh2; needs no native helpers)
 const termHold = require('./terminal').holdDecision; // #214
 const personaorder = require('./personaorder'); // #214
+const termhosts = require('./termhosts'); // #214
 
 // #134: banks and other sites with a "supported browsers" allowlist refuse to
 // let you sign in when the UA says Electron, even though the engine below is
@@ -1089,7 +1090,11 @@ function createTab(url = null, background = false, personaId = null, opts = {}) 
   tabOrder.push(id);
 
   const wc = view.webContents;
-  if (terminal) terminalMain.attach(wc); // #214: its ssh session lives and dies with the tab
+  if (terminal) {
+    terminalMain.attach(wc); // #214: its ssh session lives and dies with the tab
+    // A terminal tab never becomes a web page: that page would inherit window.terminal.
+    wc.on('will-navigate', (event) => event.preventDefault());
+  }
   // Popups (window.open / target=_blank) become tabs, never OS windows.
   // #30: they open FOREGROUND — clicking a link that spawns a tab should put
   // you in that tab (matches every mainstream browser; reverses #4's call).
@@ -1292,6 +1297,7 @@ function activateTab(id, opts = {}) {
   const owner = personaByTab.get(id) || personas.UNASSIGNED;
   if (owner !== personas.activeId()) personas.setActive(owner); // #25
   const leaving = activeId; // #82 — must be captured BEFORE the reassignment
+  if (leaving !== id && tabs.has(leaving)) terminalMain.clearHold(tabs.get(leaving).webContents); // #214
   // #83: hide every other view, not just the outgoing one. Relying on a single
   // setVisible(false) meant any missed bookkeeping left two views stacked and
   // z-order picked the winner — the 'wrong tab' the user was seeing.
@@ -1536,7 +1542,7 @@ function openTerminal() {
 
 // #214: a connection clicked in the panel opens as a new terminal tab.
 function openConnection(target) {
-  if (locked || !target) return;
+  if (locked || !termhosts.validTarget(target)) return;
   createTab(terminalUrl(String(target)), false, personas.TERMINAL);
 }
 
@@ -1585,6 +1591,7 @@ let leaderUntil = 0;
 // when focus sat nowhere (chrome dead space, overlay just closed) the chord
 // was silently missed. Registered on focus / released on blur so it never
 // takes Ctrl+Space away from other apps.
+let lastTermArm = 0; // #214
 function armLeader() {
   if (locked) return;
   // #214: in a terminal tab Ctrl+Space holds one key instead (see wireChords).
@@ -1592,6 +1599,10 @@ function armLeader() {
   const twc = !managerOpen && !settingsOpen && isTerminalTab(activeId) ? activeWc() : null;
   if (twc && terminalMain.isTerminal(twc)) {
     leaderUntil = 0;
+    // globalShortcut and before-input-event can both report one press; that
+    // must not read as the double Ctrl+Space that passes a literal one on.
+    if (Date.now() - lastTermArm < 60) return;
+    lastTermArm = Date.now();
     if (terminalMain.holding(twc)) terminalMain.passDoublePrefix(twc);
     else terminalMain.setHold(twc, true);
     twc.focus();
@@ -1942,6 +1953,7 @@ function createWindow() {
   // #214: terminal tabs' IPC, once. Links from a session open as browser tabs.
   terminalMain.installIpc({ openUrl: (url) => openExternalUrl(url), onConnectionsChanged: pushConnections });
   win.on('blur', () => closeStrayNewTabs()); // #82: Alt+Tab away disposes of it
+  win.on('blur', () => terminalMain.clearAllHolds()); // #214: a held Ctrl+Space doesn't survive leaving
   // #176: leaving the window closes every adult tab — alt-tab, clicking another
   // app, minimize, hide. Blur is re-checked after a beat so a focus hop that
   // never really left the window (a native menu, a dialog of ours) doesn't count.
@@ -3176,11 +3188,13 @@ function menuTemplate() {
 
 ipcMain.on('navigate', (_e, input) => {
   const url = resolveInput(input);
-  if (url) activeWc()?.loadURL(url);
+  if (!url) return;
+  if (isTerminalTab(activeId)) openExternalUrl(url); // #214: the address bar never replaces a session
+  else activeWc()?.loadURL(url);
 });
 ipcMain.on('go-back', () => activeWc()?.navigationHistory.goBack());
 ipcMain.on('go-forward', () => activeWc()?.navigationHistory.goForward());
-ipcMain.on('reload', () => activeWc()?.reload());
+ipcMain.on('reload', () => { if (!isTerminalTab(activeId)) activeWc()?.reload(); }); // #214: would orphan the session
 // #174: home takes the CURRENT tab to the home page, so Back returns you to
 // where you were. Windows home is the new-tab page; Android's is the Dashboard.
 ipcMain.on('open-terminal', () => openTerminal()); // #208: the >_ button
@@ -3193,7 +3207,8 @@ ipcMain.on('favorite-connection', (_e, target) => {
 ipcMain.on('get-connections', () => pushConnections());
 ipcMain.on('go-home', () => {
   const wc = activeWc();
-  if (wc) wc.loadURL(newTabUrl());
+  if (isTerminalTab(activeId)) createTab(null, false); // #214: home leaves the terminal, it doesn't replace it
+  else if (wc) wc.loadURL(newTabUrl());
   else openNewTab();
 });
 // #101: find bar — the UI lives in the chrome renderer, the search runs here.
@@ -3314,7 +3329,9 @@ function openNewTab() {
   if (locked) return;
   const active = personas.activeId();
   const existing = tabOrder.find(
-    (id) => (personaByTab.get(id) || personas.UNASSIGNED) === active && isUnusedNewTab(id)
+    (id) =>
+      (personaByTab.get(id) || personas.UNASSIGNED) === active &&
+      (isUnusedNewTab(id) || terminalMain.isPicker(tabs.get(id).webContents)) // #214: reuse an unused picker
   );
   if (existing !== undefined) {
     activateTab(existing);

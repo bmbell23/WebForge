@@ -72,6 +72,8 @@ console.log(`${n} assertions passed`);
   const d = (input) => t.holdDecision(input, po.personaDigit);
   e2(d(key('Shift', 'ShiftLeft', { shift: true })), { kind: 'wait' }, 'Shift on its own keeps holding');
   e2(d(key('Control', 'ControlLeft', { control: true })), { kind: 'wait' }, 'Ctrl on its own keeps holding');
+  e2(d(key('CapsLock', 'CapsLock')), { kind: 'wait' }, 'a lock key keeps holding');
+  e2(d(key('Dead', 'Quote')), { kind: 'wait' }, 'a dead key keeps holding');
   e2(d(key('!', 'Digit1', { shift: true })), { kind: 'persona', n: 1 }, '! = Persona 1');
   e2(d(key('$', 'Digit4', { shift: true })), { kind: 'persona', n: 4 }, '$ = Persona 4');
   e2(d(key('%', 'Digit5', { shift: true })), { kind: 'pass' }, 'Shift+5 is forge\'s (Cora OKed !@#$ only)');

@@ -111,7 +111,9 @@ const CTRL_SPACE = '\x1b[32;5u';
 //   'pass'          send the prefix, then let the key through to xterm
 function holdDecision(input, personaDigit) {
   const key = String(input?.key || '').toLowerCase();
-  if (['control', 'shift', 'alt', 'meta'].includes(key)) return { kind: 'wait' };
+  if (['control', 'shift', 'alt', 'meta', 'altgraph', 'capslock', 'numlock', 'scrolllock', 'dead', 'unidentified'].includes(key)) {
+    return { kind: 'wait' };
+  }
   const n = personaDigit(input, 4);
   if (n) return { kind: 'persona', n };
   return { kind: 'pass' };

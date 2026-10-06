@@ -139,7 +139,7 @@ function openSession(target, { cols, rows, onData, onStatus, onClose, onReady = 
     conn.connect(buildConfig(target, onStatus, ask));
   } catch (err) {
     onStatus('error', `connection error: ${err.message}`);
-    close();
+    setImmediate(close); // after the caller has the handle, so its onClose can recognise it
   }
   return {
     write: (data) => stream?.write(data),
@@ -209,7 +209,8 @@ function send(st, channel, payload) {
 
 function connect(st) {
   if (!st.target) return;
-  const mine = openSession(st.target, {
+  let mine = null; // onClose can run before openSession returns (a sync connect failure)
+  mine = openSession(st.target, {
     ...st.size,
     onData: (buf) => send(st, 'terminal:data', buf),
     onStatus: (kind, text) => send(st, 'terminal:status', { kind, text }),
@@ -234,12 +235,13 @@ function connect(st) {
 // Called by main.js for every terminal tab it creates.
 function attach(wc) {
   const st = { wc, target: null, session: null, size: { cols: 80, rows: 24 }, hold: false, prefix: false, answer: null };
-  tabs.set(wc.id, st);
+  const wid = wc.id; // read now: a destroyed webContents may not answer
+  tabs.set(wid, st);
   // Every key belongs to the shell: no menu accelerator (Ctrl+W, Ctrl+T …) may
   // fire from a terminal tab. main.js's before-input-event still sees them.
   wc.setIgnoreMenuShortcuts(true);
   wc.once('destroyed', () => {
-    tabs.delete(st.wc.id);
+    tabs.delete(wid);
     st.session?.end();
     st.session = null;
   });
@@ -247,6 +249,16 @@ function attach(wc) {
 
 const isTerminal = (wc) => Boolean(wc && tabs.has(wc.id));
 const holding = (wc) => Boolean(wc && tabs.get(wc.id)?.hold);
+// A tab with no host yet is the picker: Ctrl+T reuses it rather than stacking more.
+const isPicker = (wc) => Boolean(wc && tabs.has(wc.id) && !tabs.get(wc.id).target);
+
+function clearHold(wc) {
+  const st = wc && tabs.get(wc.id);
+  if (st) st.hold = st.prefix = false;
+}
+function clearAllHolds() {
+  for (const st of tabs.values()) st.hold = st.prefix = false;
+}
 
 function setHold(wc, on) {
   const st = wc && tabs.get(wc.id);
@@ -259,6 +271,10 @@ function passHeldKey(wc) {
   if (!st) return;
   st.hold = false;
   st.prefix = true;
+  // A key xterm turns into no data (Ctrl+C as copy, a lock key) must not leave
+  // the prefix waiting to land in front of something unrelated later.
+  clearTimeout(st.prefixTimer);
+  st.prefixTimer = setTimeout(() => { st.prefix = false; }, 250);
 }
 
 // Ctrl+Space twice: pass both on; forge turns them into one literal Ctrl+Space.
@@ -280,7 +296,7 @@ function installIpc(h) {
     const st = stateFor(e);
     if (!st) return;
     st.size = { cols, rows };
-    if (!st.target && typeof target === 'string' && target.trim()) {
+    if (!st.target && typeof target === 'string' && termhosts.validTarget(target)) {
       st.target = target.trim();
       st.prefix = false; // a Ctrl+Space pressed on the picker is not meant for the shell
     }
@@ -290,7 +306,9 @@ function installIpc(h) {
     const st = stateFor(e);
     if (!st) return;
     if (st.answer) {
-      const yes = /^[yY]/.test(data);
+      // Only y / n / Enter answer the host-key question; anything else waits.
+      if (!/^[yYnN\r]$/.test(data)) return;
+      const yes = /^[yY]$/.test(data);
       const cb = st.answer;
       st.answer = null;
       send(st, 'terminal:status', { kind: yes ? 'info' : 'warn', text: yes ? 'trusted' : 'not trusted — disconnecting' });
@@ -340,6 +358,6 @@ function installIpc(h) {
 
 module.exports = {
   openSession, buildConfig, DEFAULT_TARGET,
-  attach, installIpc, isTerminal, holding, setHold, passHeldKey, passDoublePrefix,
+  attach, installIpc, isTerminal, isPicker, holding, setHold, clearHold, clearAllHolds, passHeldKey, passDoublePrefix,
   connections, toggleFavorite,
 };
