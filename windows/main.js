@@ -970,42 +970,14 @@ function pushStateNow() {
   saveSessionSoon();
 }
 
-// #111: translate a window.open() features string into BrowserWindow options.
-// Sizes are clamped — a page asking for a 20×20 or 9000px window gets something
-// usable instead. Web preferences deliberately match a normal tab: the page
-// preload, no node integration, context isolation on. A popup is web content
-// and must never be more privileged than the tab that opened it.
-function popupWindowOptions(features) {
-  const parsed = {};
-  for (const part of String(features || '').split(',')) {
-    const [key, value] = part.split('=').map((s) => (s || '').trim());
-    if (key) parsed[key.toLowerCase()] = value;
-  }
-  const num = (key, min, max, fallback) => {
-    const n = parseInt(parsed[key], 10);
-    return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : fallback;
-  };
-  return {
-    width: num('width', 240, 2400, 900),
-    height: num('height', 180, 1600, 700),
-    autoHideMenuBar: true,
-    show: false, // shown in did-create-window, after ready-to-show
-    // #111 round 2: the likely reason the first fix looked like nothing
-    // happened. The app always launches fullscreen (#37), and an unparented
-    // window can be created BEHIND a fullscreen one — indistinguishable from
-    // never opening. A child window always renders above its parent.
-    // `parent` accepts a BaseWindow (BrowserWindowConstructorOptions extends
-    // BaseWindowConstructorOptions), which is what `win` is.
-    // Deliberately NOT modal: a terminal popup must stay usable alongside the
-    // page that launched it.
-    parent: win,
-    webPreferences: {
-      preload: path.join(__dirname, 'content-preload.js'),
-      nodeIntegration: false,
-      contextIsolation: true,
-    },
-  };
-}
+// #111/#219: a popup's page is web content and must never be more privileged
+// than a normal tab, whoever opened it: the page preload, no node integration,
+// context isolation on. Applied when a tab adopts a window.open() page.
+const POPUP_PREFS = Object.freeze({
+  preload: path.join(__dirname, 'content-preload.js'),
+  nodeIntegration: false,
+  contextIsolation: true,
+});
 
 // --- #133: the right-click menu ----------------------------------------------
 //
@@ -1020,15 +992,18 @@ function contextMenuFor(wc, params) {
   const selection = String(params.selectionText || '').trim();
   const hit = selection && !params.isEditable ? textrules.resolve(selection, textRules()) : null;
   const nav = wc.navigationHistory;
+  // #219: a link opened from here lands in this tab's Persona (an app slot's home).
+  const fromId = [...tabs].find(([, v]) => v.webContents === wc)?.[0];
+  const home = personaorder.openerHome(personaByTab.get(fromId), orderedPersonas());
 
   const actions = {
-    'link.open': () => openOrFocus(params.linkURL, false),
-    'link.openBackground': () => openOrFocus(params.linkURL, true),
+    'link.open': () => openOrFocus(params.linkURL, false, undefined, home),
+    'link.openBackground': () => openOrFocus(params.linkURL, true, undefined, home),
     'link.copy': () => clipboard.writeText(params.linkURL),
     // There is no downloads surface yet — Electron's default Save As dialog is
     // what makes this item honest. A real downloads UI is its own ticket.
     'link.save': () => wc.downloadURL(params.linkURL),
-    'image.open': () => openOrFocus(params.srcURL, false),
+    'image.open': () => openOrFocus(params.srcURL, false, undefined, home),
     'image.copy': () => wc.copyImageAt(params.x, params.y),
     'image.copyAddress': () => clipboard.writeText(params.srcURL),
     'image.save': () => wc.downloadURL(params.srcURL),
@@ -1110,7 +1085,10 @@ function createTab(url = null, background = false, personaId = null, opts = {}) 
   // #95: this URL is open again, so stop publishing "closed" for it — otherwise
   // the other device keeps being told to kill a tab that is sitting right here.
   closedFacts.delete(url);
-  const view = new WebContentsView({
+  // #219: a popup's page arrives already made (Electron's createWindow hook);
+  // the tab adopts it so window.opener keeps working for sign-in popups.
+  const adopt = opts.adopt || null;
+  const view = new WebContentsView(adopt ? { webContents: adopt.webContents, webPreferences: { ...adopt.webPreferences, ...POPUP_PREFS } } : {
     // #41: hotkeys fire from the main process now (Ctrl+Space leader), so no
     // page-side key capture — and no need for subframe node integration (#39).
     // #40: our own pages get the privileged bridge; web content never does.
@@ -1132,7 +1110,10 @@ function createTab(url = null, background = false, personaId = null, opts = {}) 
     errorlog.record('setBackgroundColor', err);
   }
   tabs.set(id, view);
-  tabOrder.push(id);
+  // #219: a popup goes right after the tab that opened it.
+  const after = opts.after !== undefined ? tabOrder.indexOf(opts.after) : -1;
+  if (after >= 0) tabOrder.splice(after + 1, 0, id);
+  else tabOrder.push(id);
 
   const wc = view.webContents;
   if (terminal) {
@@ -1144,44 +1125,39 @@ function createTab(url = null, background = false, personaId = null, opts = {}) 
   // #30: they open FOREGROUND — clicking a link that spawns a tab should put
   // you in that tab (matches every mainstream browser; reverses #4's call).
   // #31: same URL already open → focus that tab instead of spawning a dupe.
-  // #111: a deliberate popup — window.open() WITH features — becomes a real
-  // window. Denying it made window.open() return null, so any page that kept
-  // the handle (`w.document.write(...)`, `w.focus()`, `w.location = …`) threw on
-  // the next line and its flow died: that is why credential prompts and terminal
-  // launchers produced nothing at all. target=_blank still becomes a tab (#30).
+  // #111: a deliberate popup — window.open() WITH features — must not be
+  // denied: that made window.open() return null, so any page that kept the
+  // handle (`w.document.write(...)`, `w.focus()`, `w.location = …`) threw on the
+  // next line and its flow died (credential prompts, terminal launchers).
+  // #219: it is allowed, but as a TAB: createWindow adopts the new page into a
+  // tab, so the handle (and window.opener for sign-in popups) still works.
+  // Every new window lands in the opener's Persona (an app slot's home Persona).
   wc.setWindowOpenHandler((details) => {
     const real = popuprule.wantsRealWindow(details); // #125
+    const home = personaorder.openerHome(personaByTab.get(id), orderedPersonas());
     // #111 round 2: log every decision. The first fix keyed only on
     // disposition === 'new-window' and did not work, and there is no Windows
     // machine here to observe on — so the app has to say what it decided.
     errorlog.record(
       'window-open',
-      `decision=${real ? 'window' : 'tab'} disposition=${details.disposition} ` +
+      `decision=${real ? 'adopted-tab' : 'tab'} disposition=${details.disposition} ` +
         `frameName="${details.frameName}" features="${details.features}" ` +
         `fullscreen=${fullscreen} url=${details.url}`
     );
+    if (locked) return { action: 'deny' };
     if (real) {
-      return { action: 'allow', overrideBrowserWindowOptions: popupWindowOptions(details.features) };
+      return {
+        action: 'allow',
+        outlivesOpener: true, // closing the opener tab doesn't take the popup tab with it
+        overrideBrowserWindowOptions: { webPreferences: { ...POPUP_PREFS } },
+        createWindow: (options) => {
+          const tid = createTab(details.url || 'about:blank', false, home, { adopt: options, after: id });
+          return tabs.get(tid).webContents;
+        },
+      };
     }
-    openOrFocus(details.url, false);
+    openOrFocus(details.url, false, undefined, home);
     return { action: 'deny' };
-  });
-  // #111: popups are web content too — same chords, and the #108 error pages
-  // instead of another blank rectangle when one fails to load.
-  wc.on('did-create-window', (child) => {
-    const cwc = child.webContents;
-    wireChords(cwc); // #22
-    wireLoadFailures(cwc); // #108
-    child.setMenu(null); // a popup has no business showing our app menu
-    // #111 round 2: the app ALWAYS launches fullscreen (#37), and a popup that
-    // opens behind a fullscreen window looks exactly like a popup that never
-    // opened. `parent` (set in popupWindowOptions) keeps it above the main
-    // window; this is the belt to that pair of braces.
-    child.once('ready-to-show', () => {
-      child.show();
-      child.moveTop();
-      child.focus();
-    });
   });
   // #33: hotkey tabs are STICKY — page-initiated navigation (link clicks)
   // opens elsewhere instead of navigating the hotkey tab away. Programmatic
@@ -1191,7 +1167,7 @@ function createTab(url = null, background = false, personaId = null, opts = {}) 
   wc.on('will-navigate', (event, navUrl) => {
     if (isStickyTab(id)) { // #117: pinned tabs divert like hotkey tabs
       event.preventDefault();
-      openOrFocus(navUrl, false);
+      openOrFocus(navUrl, false, undefined, personaorder.openerHome(personaByTab.get(id), orderedPersonas())); // #219
     }
   });
   // #33 round 4 — the invariant the user actually asked for: a hotkey tab is
@@ -1218,7 +1194,7 @@ function createTab(url = null, background = false, personaId = null, opts = {}) 
     // the exclusion openOrFocus picked it as its own rescue target, opened
     // nothing, and the loadURL below then threw the page away. That is the
     // "bookmark flickers and never opens" report.
-    openOrFocus(navUrl, false, id);
+    openOrFocus(navUrl, false, id, personaorder.openerHome(personaByTab.get(id), orderedPersonas())); // #219
     wc.loadURL(home);
     setTimeout(() => {
       reHoming = false;
@@ -1325,7 +1301,11 @@ function createTab(url = null, background = false, personaId = null, opts = {}) 
 
   win.contentView.addChildView(view);
   view.setVisible(false);
-  if (!lazy) wc.loadURL(url); // #78: lazy tabs load on first activation
+  // #219: a page that closes itself (window.close() from a popup) takes its tab with it.
+  wc.once('destroyed', () => {
+    if (tabs.get(id) === view) closeTab(id, { gone: true });
+  });
+  if (!lazy && !adopt) wc.loadURL(url); // #78: lazy tabs load on first activation; #219: an adopted page is already loading
   if (background && activeId !== null) pushState();
   else activateTab(id);
   return id;
@@ -1426,7 +1406,7 @@ function activateTab(id, opts = {}) {
 function closeTab(id, opts = {}) {
   const view = tabs.get(id);
   if (!view) return;
-  if (pinnedIds.has(id) && !opts.adult) return; // #9: pinned tabs don't close — unpin first (#176: adult ones do)
+  if (pinnedIds.has(id) && !opts.adult && !opts.gone) return; // #219: a destroyed page can't stay pinned; #9: pinned tabs don't close — unpin first (#176: adult ones do)
   if (outfitReturn && (id === outfitReturn.tabId || id === outfitReturn.openerId)) outfitReturn = null; // #191
   pinnedIds.delete(id);
   // #57: a close is a fact other devices must learn about — unless we're only
@@ -1458,7 +1438,7 @@ function closeTab(id, opts = {}) {
   for (const [page, tid] of internalTabs) if (tid === id) internalTabs.delete(page);
   tabOrder = tabOrder.filter((t) => t !== id);
   win.contentView.removeChildView(view);
-  view.webContents.close();
+  if (!view.webContents.isDestroyed()) view.webContents.close(); // #219: it may have closed itself
   if (activeId === id) {
     activeId = null;
     if (tabOrder.length === 0) createTab(); // the window always has ≥1 tab
@@ -1509,13 +1489,13 @@ function findTabByUrl(url, exceptId) {
 // #138: `exceptId` must be threaded through — a sticky tab re-homing itself
 // calls this to put the destination SOMEWHERE ELSE, and without the exclusion
 // "somewhere else" could be the very tab it is about to send home.
-function openOrFocus(url, background, exceptId) {
+function openOrFocus(url, background, exceptId, personaId = null) {
   const existing = findTabByUrl(url, exceptId);
   if (existing !== null) {
     if (!background) activateTab(existing);
     return existing;
   }
-  return createTab(url, background);
+  return createTab(url, background, personaId); // #219: personaId = where it came from
 }
 
 // #31: intentional duplicate of the active tab (Ctrl+Shift+U).
