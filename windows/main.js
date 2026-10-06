@@ -3100,6 +3100,7 @@ ipcMain.on('go-forward', () => activeWc()?.navigationHistory.goForward());
 ipcMain.on('reload', () => activeWc()?.reload());
 // #174: home takes the CURRENT tab to the home page, so Back returns you to
 // where you were. Windows home is the new-tab page; Android's is the Dashboard.
+ipcMain.on('open-terminal', () => openTerminal()); // #208: the >_ button
 ipcMain.on('go-home', () => {
   const wc = activeWc();
   if (wc) wc.loadURL(newTabUrl());

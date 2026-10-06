@@ -777,6 +777,7 @@
     <button id="forward" title="Forward">→</button>
     <button id="reloadstop" title="Reload">⟳</button>
     <button id="home" title="Home">⌂</button>
+    <button id="termbtn" title="Terminal (Ctrl+Shift+Tab)">&gt;_</button>
     <input id="url" type="text" spellcheck="false"
            placeholder="Search or enter address">
     <!-- #126/#127: quick boxes. The Jira one resolves through the shared text
@@ -981,6 +982,7 @@
   forward.onclick = () => webforge.goForward();
   reloadstop.onclick = () => (activeLoading ? webforge.stop() : webforge.reload());
   document.getElementById('home').onclick = () => webforge.goHome(); // #174
+  document.getElementById('termbtn').onclick = () => webforge.openTerminal(); // #208
   url.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') { urlEditing = false; webforge.navigate(url.value); url.blur(); }
   });
