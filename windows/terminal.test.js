@@ -84,6 +84,29 @@ console.log(`${n} assertions passed`);
   e2(d(key('r', 'KeyR')), { kind: 'pass' }, 'a letter passes');
   e2(d(key('Escape', 'Escape')), { kind: 'pass' }, 'Esc passes; forge cancels');
   e2(t.CTRL_SPACE, '\x1b[32;5u', 'Ctrl+Space as kitty CSI-u');
+  // #249: replacing a changed key
+  const kh = [
+    '# comment',
+    'co-sf-pe-042 ssh-ed25519 OLDKEY',
+    'co-sf-pe-042,10.36.21.5 ssh-ed25519 OLDKEY',
+    'co-sf-pe-042 ssh-rsa RSAKEY',
+    '[co-sf-pe-042]:2222 ssh-ed25519 OTHERPORT',
+    '*.colorado.example ssh-ed25519 WILD',
+    '|1|abc=|def= ssh-ed25519 HASHED',
+    'pve01 ssh-ed25519 PVE',
+  ].join('\n');
+  e2(t.knownHostsWithout(kh, 'co-sf-pe-042', 22, 'ssh-ed25519').split('\n'), [
+    '# comment',
+    '10.36.21.5 ssh-ed25519 OLDKEY',
+    'co-sf-pe-042 ssh-rsa RSAKEY',
+    '[co-sf-pe-042]:2222 ssh-ed25519 OTHERPORT',
+    '*.colorado.example ssh-ed25519 WILD',
+    '|1|abc=|def= ssh-ed25519 HASHED',
+    'pve01 ssh-ed25519 PVE',
+  ], 'drops only this host:port + key type; a shared line keeps its other name; wildcards, hashed and other ports stay');
+  const kb2 = Buffer.concat([Buffer.from([0, 0, 0, 11]), Buffer.from('ssh-ed25519'), Buffer.from([0, 0, 0, 1, 9])]);
+  const fixed = t.knownHostsWithout(kh, 'co-sf-pe-042', 22, 'ssh-ed25519') + '\n' + t.knownHostsLine('co-sf-pe-042', 22, kb2);
+  e2(t.knownHostsVerdict(fixed, 'co-sf-pe-042', 22, 'ssh-ed25519', kb2.toString('base64')), 'match', 'after the rewrite the new key matches');
   const kb = Buffer.concat([Buffer.from([0, 0, 0, 11]), Buffer.from('ssh-ed25519'), Buffer.from([0, 0, 0, 1, 7])]);
   e2(t.knownHostsLine('dockerhost', 22, kb), `dockerhost ssh-ed25519 ${kb.toString('base64')}`, 'known_hosts line, port 22');
   e2(t.knownHostsLine('h', 2222, kb).split(' ')[0], '[h]:2222', 'known_hosts line, other port');

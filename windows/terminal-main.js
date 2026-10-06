@@ -74,8 +74,29 @@ function buildConfig(target, say, ask = (_q, cb) => cb(false)) {
       const verdict = term.knownHostsVerdict(knownHosts, host, port, term.keyTypeOf(key), key.toString('base64'));
       if (verdict === 'match') return verify(true);
       if (verdict === 'mismatch') {
-        say('error', `!! HOST KEY FOR ${host} HAS CHANGED (${term.fingerprint(key)}) — refusing to connect. Someone may be intercepting this connection; if the change is expected, fix ~/.ssh/known_hosts.`);
-        return verify(false);
+        // #249: say why, then offer the fix instead of sending you to edit the file.
+        say('error', `!! THE HOST KEY FOR ${host} HAS CHANGED. It now offers ${term.keyTypeOf(key)} ${term.fingerprint(key)}.`);
+        ask(
+          'Expected if the server was reinstalled or rebuilt. If not, someone may be intercepting this connection.\r\n' +
+            'Replace the saved key with this one? [y/N] ',
+          (yes) => {
+            if (!yes) {
+              say('error', 'refusing to connect: the saved key was kept');
+              return verify(false);
+            }
+            try {
+              if (knownHosts) fs.writeFileSync(`${knownHostsFile}.old`, knownHosts); // like ssh-keygen -R
+              const kept = term.knownHostsWithout(knownHosts, host, port, term.keyTypeOf(key)).replace(/\n*$/, '');
+              knownHosts = `${kept ? `${kept}\n` : ''}${term.knownHostsLine(host, port, key)}\n`;
+              fs.writeFileSync(knownHostsFile, knownHosts);
+              say('info', `saved the new key for ${host} (the old file is known_hosts.old)`);
+            } catch (err) {
+              say('warn', `trusted for this session only: could not rewrite known_hosts (${err.message})`);
+            }
+            verify(true);
+          }
+        );
+        return undefined;
       }
       // #214: unknown host — ask once; yes saves it, so it never asks again.
       ask(`${host}${port === 22 ? '' : `:${port}`} is not a known host. Its ${term.keyTypeOf(key)} key is ${term.fingerprint(key)}.\r\nTrust it and save it to ~/.ssh/known_hosts? [y/N] `, (yes) => {
