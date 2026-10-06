@@ -46,6 +46,9 @@ const adultlist = require('./adultlist'); // #203 — ditto (your adult-site lis
 const stash = require('./stash'); // #177 — ditto (Add to Stash body + job wording)
 const autofillFrames = require('./autofillframes'); // #141
 const terminalMain = require('./terminal-main'); // #206 — terminal spike (ssh2; needs no native helpers)
+const termHold = require('./terminal').holdDecision; // #214
+const personaorder = require('./personaorder'); // #214
+const termhosts = require('./termhosts'); // #214
 
 // #134: banks and other sites with a "supported browsers" allowlist refuse to
 // let you sign in when the UA says Electron, even though the engine below is
@@ -91,6 +94,18 @@ const INTERNAL_PAGES = {
 const fileUrl = (p) => `file://${p.replace(/\\/g, '/')}`;
 const isInternalUrl = (u) =>
   typeof u === 'string' && Object.values(INTERNAL_PAGES).some((p) => u.startsWith(fileUrl(p)));
+// #214: a terminal tab. `?host=` connects straight away; without it the page is
+// the host picker. Never synced, saved, or offered to Ctrl+Shift+T.
+const TERMINAL_FILE = path.join(__dirname, 'ui', 'terminal.html');
+const terminalUrl = (target) => fileUrl(TERMINAL_FILE) + (target ? `?host=${encodeURIComponent(target)}` : '');
+const isTerminalUrl = (u) => typeof u === 'string' && u.startsWith(fileUrl(TERMINAL_FILE));
+const isTerminalTab = (id) => personaByTab.get(id) === personas.TERMINAL;
+// #214: an app slot's tab (Mattermost, Teams, Outlook): one pinned page that
+// never re-homes, syncs or restores. View tabs = terminal or app slot.
+const isSlotTab = (id) => personaorder.isSlotId(personaByTab.get(id));
+const isViewTab = (id) => isTerminalTab(id) || isSlotTab(id);
+// Where a page opened from a terminal or app slot lands: never in the view itself.
+const pageHome = (pid) => (personas.isBuiltinView(pid) ? personas.UNASSIGNED : pid);
 const searchEngine = () => (ENGINES[getSettings().searchEngine] ? getSettings().searchEngine : 'google');
 const newTabUrl = () => `file://${NEWTAB_FILE.replace(/\\/g, '/')}?e=${searchEngine()}`;
 const isNewTabUrl = (u) => typeof u === 'string' && u.startsWith('file://') && u.includes('newtab.html');
@@ -207,7 +222,7 @@ function sortTabOrder() {
 let saveSessionTimer = null;
 function sessionSnapshot() {
   // #176: adult tabs are never written to the session, so a restart can't bring one back.
-  const kept = tabOrder.filter((id) => !isAdultTab(id));
+  const kept = tabOrder.filter((id) => !isAdultTab(id) && !isViewTab(id)); // #214: sessions and app slots don't restore
   return {
     tabs: kept
       .map((id) => ({
@@ -797,7 +812,7 @@ function starCurrent() {
     folder: existing?.folder || '',
     exists: Boolean(existing),
     claim: personas.claimFor(url), // #70
-    personas: orderedPersonas().map((p) => ({ id: p.id, name: p.name })),
+    personas: routablePersonas().map((p) => ({ id: p.id, name: p.name })),
   });
 }
 
@@ -857,12 +872,37 @@ function tabState() {
 // #71: Unassigned is the fallback, not a destination — put it last so the
 // Personas you actually use get Ctrl+Space 1, 2, 3. Display and the digit
 // shortcuts share this ordering so the numbers you see are the numbers you press.
+// #214: Terminal is first, so the order is 1 Terminal, 2 Personal, 3 Work,
+// 4 Unassigned. personaorder.js holds the rule, under test.
 function orderedPersonas() {
-  const list = personas.all();
-  return [
-    ...list.filter((p) => p.id !== personas.UNASSIGNED),
-    ...list.filter((p) => p.id === personas.UNASSIGNED),
-  ];
+  return personaorder.orderPersonas(personas.all(), appSlots());
+}
+// Personas a URL can be routed to: not Terminal or the app slots, which have no rules.
+const routablePersonas = () => orderedPersonas().filter((p) => !personas.isBuiltinView(p.id));
+
+// #214: app slots. Their URLs are local settings (settings.appSlots = {id: url}),
+// editable in Settings › App slots, never synced.
+const appSlots = () => personaorder.slots(getSettings().appSlots);
+function applySlots() {
+  personas.setSlots(personaorder.orderPersonas([], appSlots()).filter((p) => p.slot));
+}
+function saveSlots(urls) {
+  const before = new Map(appSlots().map((s) => [s.id, s.url]));
+  const clean = {};
+  for (const s of personaorder.DEFAULT_SLOTS) {
+    const u = personaorder.slotUrl(urls && urls[s.id]);
+    if (u && u !== s.url) clean[s.id] = u;
+  }
+  getSettings().appSlots = clean;
+  saveSettings();
+  applySlots();
+  // An open slot tab follows a CHANGED URL; the rest keep their calls and drafts.
+  for (const tid of tabOrder) {
+    const p = isSlotTab(tid) && personas.get(personaByTab.get(tid));
+    if (p && tabs.has(tid) && !lazyTabs.has(tid) && before.get(p.slot) !== p.url) tabs.get(tid).webContents.loadURL(p.url);
+  }
+  pushPersonas();
+  return appSlots();
 }
 
 // #57: other devices' tabs in the Persona we're currently looking at.
@@ -885,6 +925,7 @@ function pushPersonas() {
       name: p.name,
       builtin: Boolean(p.builtin),
       rules: p.rules,
+      key: p.key || '', // #214: the key after Ctrl+Space
     })),
     active,
   });
@@ -1039,7 +1080,13 @@ function contextMenuFor(wc, params) {
 function createTab(url = null, background = false, personaId = null, opts = {}) {
   if (locked) return null; // #15
   const id = nextTabId++;
+  // #214: a new tab in the Terminal Persona is a terminal (the host picker).
+  if (!url && personaId === personas.TERMINAL) url = terminalUrl(null);
+  // #214: an app slot's tab opens the slot's page and stays in the slot.
+  const slot = personaorder.isSlotId(personaId) ? personas.get(personaId) : null;
+  if (!url && slot) url = slot.url;
   if (!url) url = newTabUrl(); // #43: default landing page is our search page
+  const terminal = isTerminalUrl(url);
   const lazy = Boolean(opts.lazy);
   if (lazy) lazyTabs.set(id, { url, title: opts.title || url }); // #78
   lastActiveAt.set(id, opts.lastActiveAt || Date.now()); // #79
@@ -1049,7 +1096,16 @@ function createTab(url = null, background = false, personaId = null, opts = {}) 
   // created as Unassigned and only jump to Work when it first navigated —
   // which looked like tabs re-homing themselves when you clicked them.
   const claimed = personas.forUrl(url);
-  personaByTab.set(id, claimed !== personas.UNASSIGNED ? claimed : personaId || personas.UNASSIGNED);
+  personaByTab.set(
+    id,
+    terminal
+      ? personas.TERMINAL
+      : slot
+        ? personaId
+        : claimed !== personas.UNASSIGNED
+          ? claimed
+          : pageHome(personaId || personas.UNASSIGNED)
+  );
   // #95: this URL is open again, so stop publishing "closed" for it — otherwise
   // the other device keeps being told to kill a tab that is sitting right here.
   closedFacts.delete(url);
@@ -1058,9 +1114,11 @@ function createTab(url = null, background = false, personaId = null, opts = {}) 
     // page-side key capture — and no need for subframe node integration (#39).
     // #40: our own pages get the privileged bridge; web content never does.
     webPreferences: {
-      preload: isInternalUrl(url)
-        ? path.join(__dirname, 'internal-preload.js')
-        : path.join(__dirname, 'content-preload.js'),
+      preload: terminal
+        ? path.join(__dirname, 'terminal-preload.js') // #214
+        : isInternalUrl(url)
+          ? path.join(__dirname, 'internal-preload.js')
+          : path.join(__dirname, 'content-preload.js'),
     },
   });
   // #148: an unpainted view defaults to black, which is what made the
@@ -1068,7 +1126,7 @@ function createTab(url = null, background = false, personaId = null, opts = {}) 
   // not fix the missing frame — forceRepaint does — but a blank white page is a
   // far less alarming failure than a black window if one ever slips through.
   try {
-    view.setBackgroundColor('#ffffff');
+    view.setBackgroundColor(terminal ? '#0c0c0c' : '#ffffff');
   } catch (err) {
     errorlog.record('setBackgroundColor', err);
   }
@@ -1076,6 +1134,11 @@ function createTab(url = null, background = false, personaId = null, opts = {}) 
   tabOrder.push(id);
 
   const wc = view.webContents;
+  if (terminal) {
+    terminalMain.attach(wc); // #214: its ssh session lives and dies with the tab
+    // A terminal tab never becomes a web page: that page would inherit window.terminal.
+    wc.on('will-navigate', (event) => event.preventDefault());
+  }
   // Popups (window.open / target=_blank) become tabs, never OS windows.
   // #30: they open FOREGROUND — clicking a link that spawns a tab should put
   // you in that tab (matches every mainstream browser; reverses #4's call).
@@ -1209,7 +1272,8 @@ function createTab(url = null, background = false, personaId = null, opts = {}) 
     // #114: the first load of a lazily-restored tab is not the user navigating
     // anywhere — following it switched Persona under a cycling user.
     const wasFirstLoad = firstLoad.delete(id);
-    if (claimed !== personas.UNASSIGNED && claimed !== current) {
+    // #214: a terminal or app slot tab stays put (Teams bounces through sign-in pages).
+    if (claimed !== personas.UNASSIGNED && claimed !== current && !personas.isBuiltinView(current)) {
       personaByTab.set(id, claimed);
       if (id === activeId && !wasFirstLoad) personas.setActive(claimed);
       pushState();
@@ -1278,6 +1342,7 @@ function activateTab(id, opts = {}) {
   const owner = personaByTab.get(id) || personas.UNASSIGNED;
   if (owner !== personas.activeId()) personas.setActive(owner); // #25
   const leaving = activeId; // #82 — must be captured BEFORE the reassignment
+  if (leaving !== id && tabs.has(leaving)) terminalMain.clearHold(tabs.get(leaving).webContents); // #214
   // #83: hide every other view, not just the outgoing one. Relying on a single
   // setVisible(false) meant any missed bookkeeping left two views stacked and
   // z-order picked the winner — the 'wrong tab' the user was seeing.
@@ -1367,7 +1432,8 @@ function closeTab(id, opts = {}) {
   // applying someone else's close, which must not echo back.
   if (!opts.remote) {
     const url = tabUrlOf(id);
-    if (shareable(url)) {
+    // #214: an app slot is reopened by its key, and the phone must not lose its own Teams tab.
+    if (shareable(url) && !isViewTab(id)) {
       closedFacts.set(url, Date.now());
       setTimeout(syncTabs, 400); // #95: propagate the close right away
       // #101: remember it for Ctrl+Shift+T. shareable() already screens out
@@ -1417,7 +1483,7 @@ function closeTab(id, opts = {}) {
 function rehomeAllTabs() {
   for (const tid of tabOrder) {
     const claimed = personas.forUrl(tabUrlOf(tid));
-    if (claimed !== personas.UNASSIGNED) personaByTab.set(tid, claimed);
+    if (claimed !== personas.UNASSIGNED && !isViewTab(tid)) personaByTab.set(tid, claimed); // #214
   }
 }
 
@@ -1511,13 +1577,24 @@ function reopenClosedTab() {
   createTab(last.url, false, last.personaId);
 }
 
-// #206: opens or focuses the terminal spike window. Ctrl+Shift+Tab in it comes back here.
+// #214: Ctrl+Shift+T, Ctrl+Shift+Tab and the >_ button go to the Terminal
+// Persona (it opens the host picker when it has no tabs yet). Already there,
+// they open another terminal tab.
 function openTerminal() {
   if (locked) return;
-  terminalMain.openTerminalWindow({
-    focusMain: () => { win.show(); win.moveTop(); win.focus(); }, // #210
-    openUrl: (url) => { openExternalUrl(url); win.focus(); }, // #206: links from the terminal
-  });
+  if (personas.activeId() === personas.TERMINAL) createTab(null, false, personas.TERMINAL);
+  else switchPersona(personas.TERMINAL);
+}
+
+// #214: a connection clicked in the panel opens as a new terminal tab.
+function openConnection(target) {
+  if (locked || !termhosts.validTarget(target)) return;
+  createTab(terminalUrl(String(target)), false, personas.TERMINAL);
+}
+
+function pushConnections() {
+  if (!alive()) return;
+  chrome.webContents.send('terminal-connections', terminalMain.connections());
 }
 
 function cycleTab(dir) {
@@ -1560,8 +1637,23 @@ let leaderUntil = 0;
 // when focus sat nowhere (chrome dead space, overlay just closed) the chord
 // was silently missed. Registered on focus / released on blur so it never
 // takes Ctrl+Space away from other apps.
+let lastTermArm = 0; // #214
 function armLeader() {
   if (locked) return;
+  // #214: in a terminal tab Ctrl+Space holds one key instead (see wireChords).
+  // A second Ctrl+Space passes both on — forge turns the pair into a literal one.
+  const twc = !managerOpen && !settingsOpen && isTerminalTab(activeId) ? activeWc() : null;
+  if (twc && terminalMain.isTerminal(twc)) {
+    leaderUntil = 0;
+    // globalShortcut and before-input-event can both report one press; that
+    // must not read as the double Ctrl+Space that passes a literal one on.
+    if (Date.now() - lastTermArm < 60) return;
+    lastTermArm = Date.now();
+    if (terminalMain.holding(twc)) terminalMain.passDoublePrefix(twc);
+    else terminalMain.setHold(twc, true);
+    twc.focus();
+    return;
+  }
   leaderUntil = leaderUntil > Date.now() ? 0 : Date.now() + 3000; // toggle
   // Make sure SOMETHING focused hears the next key.
   if (leaderUntil) (managerOpen || settingsOpen ? chrome.webContents : activeWc())?.focus();
@@ -1635,18 +1727,59 @@ function wireChords(wc) {
       armLeader(); // globalShortcut usually beats us here; harmless either way
       return;
     }
+    // #214: a terminal tab. Every key belongs to the shell except the held key
+    // after Ctrl+Space (Persona switch, or prefix + key for forge) and the few
+    // tab chords below. Ctrl+L, Ctrl+S, Ctrl+B, Alt+arrows and Esc are the shell's.
+    if (terminalMain.isTerminal(wc)) {
+      if (terminalMain.holding(wc)) {
+        const d = termHold(input, (i) => personaorder.leaderPick(i, orderedPersonas()));
+        if (d.kind === 'wait') return;
+        if (d.kind === 'persona') {
+          event.preventDefault();
+          terminalMain.setHold(wc, false);
+          if (!locked) switchPersona(d.id);
+          return;
+        }
+        terminalMain.passHeldKey(wc); // xterm encodes the key; main sends the prefix in front of it
+        return;
+      }
+      const k = rawKey.toLowerCase();
+      const chord = modifier.isChord(input) && !input.alt;
+      if (k === 'f11' && modifier.isBare(input)) {
+        event.preventDefault();
+        if (!locked) setFullscreenMode(!fullscreen);
+      } else if (k === 'f4' && modifier.isAltOnly(input)) {
+        event.preventDefault();
+        win.close();
+      } else if (chord && k === 'tab') {
+        event.preventDefault();
+        if (input.shift) openTerminal();
+        else flipTab();
+      } else if (chord && input.shift && k === 't') {
+        event.preventDefault();
+        openTerminal(); // another terminal tab
+      } else if (chord && !input.shift && k === 'f4') {
+        event.preventDefault();
+        closeTab(activeId);
+      } else if (chord && !input.shift && (k === 'pagedown' || k === 'pageup')) {
+        event.preventDefault();
+        cycleTab(k === 'pagedown' ? 1 : -1);
+      }
+      return;
+    }
     if (leaderUntil > Date.now()) {
       if (['control', 'shift', 'alt', 'meta'].includes(rawKey.toLowerCase())) return;
       event.preventDefault();
       leaderUntil = 0;
       if (rawKey.toLowerCase() === 'escape' || locked) return;
-      // #25: bare digits switch Persona (reserved — see hotkeys.set).
-      if (/^[1-9]$/.test(rawKey) && modifier.isBare(input)) {
-        const list = orderedPersonas();
-        const target = list[Number(rawKey) - 1];
-        if (target) switchPersona(target.id);
+      // #214: ` ! @ # $ % ^ pick a Persona or app slot (personaorder.KEYMAP,
+      // matched on the physical key). Bare digits stay reserved (hotkeys.set).
+      const pick = personaorder.leaderPick(input, orderedPersonas());
+      if (pick) {
+        switchPersona(pick);
         return;
       }
+      if (/^[1-9]$/.test(rawKey) && modifier.isBare(input)) return;
       handleHotkeyPress(modifier.keyId(input, rawKey)); // #150: same id on every platform
       return;
     }
@@ -1716,7 +1849,7 @@ function wireChords(wc) {
       // #113: Ctrl+Tab flips between the two most recently used tabs, the way
       // Alt+Tab does; Ctrl+PageDown steps to the next tab in sidebar order.
       // "Previous tab" is deliberately gone — Ctrl+PageUp still walks backwards.
-      // #206: Ctrl+Shift+Tab is now the terminal window (and its way back).
+      // #214: Ctrl+Shift+Tab goes to the Terminal Persona.
       if (input.shift) openTerminal();
       else flipTab();
     } else if (key === 'l' && !input.shift) {
@@ -1821,7 +1954,7 @@ function handleHotkeyPress(keyId) {
     // tab in the Persona the user is actually working in — landing it in
     // Unassigned would switch them out from under their own hotkey.
     const claimed = personas.forUrl(entry.url);
-    const owner = claimed === personas.UNASSIGNED ? personas.activeId() : claimed;
+    const owner = claimed === personas.UNASSIGNED ? pageHome(personas.activeId()) : claimed; // #214
     const newId = createTab(entry.url, false, owner);
     if (newId !== null) {
       hotkeyByTab.set(newId, keyId);
@@ -1861,7 +1994,10 @@ function createWindow() {
     if (cmd === 'browser-forward') activeWc()?.navigationHistory.goForward();
   });
   wireLeaderShortcut(); // #41
+  // #214: terminal tabs' IPC, once. Links from a session open as browser tabs.
+  terminalMain.installIpc({ openUrl: (url) => openExternalUrl(url), onConnectionsChanged: pushConnections });
   win.on('blur', () => closeStrayNewTabs()); // #82: Alt+Tab away disposes of it
+  win.on('blur', () => terminalMain.clearAllHolds()); // #214: a held Ctrl+Space doesn't survive leaving
   // #176: leaving the window closes every adult tab — alt-tab, clicking another
   // app, minimize, hide. Blur is re-checked after a beat so a focus hop that
   // never really left the window (a native menu, a dialog of ours) doesn't count.
@@ -2135,14 +2271,14 @@ function tabUrlOf(id) {
 function shareable(url) {
   // #176: adult tabs never reach the other device, the close tombstones, or
   // Ctrl+Shift+T — every path that remembers a tab goes through here.
-  return Boolean(url) && !isNewTabUrl(url) && !isInternalUrl(url) && !ytdlp.isAdult(url);
+  return Boolean(url) && !isNewTabUrl(url) && !isInternalUrl(url) && !isTerminalUrl(url) && !ytdlp.isAdult(url); // #214
 }
 
 function localTabPayload() {
   const byPersona = {};
   for (const id of tabOrder) {
     const url = tabUrlOf(id);
-    if (!shareable(url)) continue;
+    if (!shareable(url) || isViewTab(id)) continue; // #214: the phone has no app slots
     const pid = personaByTab.get(id) || personas.UNASSIGNED;
     const pending = lazyTabs.get(id);
     (byPersona[pid] ||= {}).open ||= {};
@@ -2628,7 +2764,7 @@ function onUnlocked() {
   // filed before their Persona's rules existed.
   for (const tid of tabOrder) {
     const claimed = personas.forUrl(tabUrlOf(tid));
-    if (claimed !== personas.UNASSIGNED) personaByTab.set(tid, claimed);
+    if (claimed !== personas.UNASSIGNED && !isViewTab(tid)) personaByTab.set(tid, claimed); // #214
   }
   syncBookmarks(); // #13: catch up whenever a session starts
   syncPersonas(); // #88
@@ -3079,7 +3215,7 @@ function menuTemplate() {
           { label: 'Hard Reload', accelerator: 'CmdOrCtrl+Shift+R', click: () => hardReload() },
           { label: 'Find in Page', accelerator: 'CmdOrCtrl+F', click: () => openFind() },
           { label: 'Reopen Closed Tab', accelerator: 'CmdOrCtrl+Alt+T', click: () => reopenClosedTab() }, // #208: Ctrl+Shift+T is the terminal now
-          { label: 'Terminal', accelerator: 'Control+Shift+T', click: () => openTerminal() }, // #206/#208 (Ctrl+Shift+Tab too)
+          { label: 'Terminal', accelerator: 'Control+Shift+T', click: () => openTerminal() }, // #214: the Terminal Persona (Ctrl+Shift+Tab too)
           { label: 'Zoom In', accelerator: 'CmdOrCtrl+=', click: () => zoomBy(1) },
           { label: 'Zoom In', accelerator: 'CmdOrCtrl+Plus', visible: false, click: () => zoomBy(1) },
           { label: 'Zoom Out', accelerator: 'CmdOrCtrl+-', click: () => zoomBy(-1) },
@@ -3096,17 +3232,27 @@ function menuTemplate() {
 
 ipcMain.on('navigate', (_e, input) => {
   const url = resolveInput(input);
-  if (url) activeWc()?.loadURL(url);
+  if (!url) return;
+  if (isViewTab(activeId)) openExternalUrl(url); // #214: the address bar never replaces a session or app slot
+  else activeWc()?.loadURL(url);
 });
 ipcMain.on('go-back', () => activeWc()?.navigationHistory.goBack());
 ipcMain.on('go-forward', () => activeWc()?.navigationHistory.goForward());
-ipcMain.on('reload', () => activeWc()?.reload());
+ipcMain.on('reload', () => { if (!isTerminalTab(activeId)) activeWc()?.reload(); }); // #214: would orphan the session
 // #174: home takes the CURRENT tab to the home page, so Back returns you to
 // where you were. Windows home is the new-tab page; Android's is the Dashboard.
 ipcMain.on('open-terminal', () => openTerminal()); // #208: the >_ button
+// #214: the connections panel (the Terminal Persona's bookmarks).
+ipcMain.on('open-connection', (_e, target) => openConnection(target));
+ipcMain.on('favorite-connection', (_e, target) => {
+  terminalMain.toggleFavorite(target);
+  pushConnections();
+});
+ipcMain.on('get-connections', () => pushConnections());
 ipcMain.on('go-home', () => {
   const wc = activeWc();
-  if (wc) wc.loadURL(newTabUrl());
+  if (isViewTab(activeId)) createTab(null, false); // #214: home leaves a terminal or app slot, it doesn't replace it
+  else if (wc) wc.loadURL(newTabUrl());
   else openNewTab();
 });
 // #101: find bar — the UI lives in the chrome renderer, the search runs here.
@@ -3141,7 +3287,13 @@ ipcMain.on('activate-tab', errorlog.guard('activate-tab', (_e, id) => activateTa
 ipcMain.on('toggle-pin', (_e, id) => togglePin(id));
 // #25: persona IPC
 ipcMain.on('switch-persona', (_e, id) => switchPersona(String(id)));
-ipcMain.handle('int:get-personas', () => ({ personas: personas.all(), active: personas.activeId() }));
+// #214: in key order, with each Persona's key; Terminal and the app slots are not editable here.
+ipcMain.handle('int:get-personas', () => ({
+  personas: orderedPersonas().filter((p) => !personas.isBuiltinView(p.id)),
+  active: personas.activeId(),
+}));
+ipcMain.handle('int:get-slots', () => ({ slots: appSlots(), defaults: personaorder.DEFAULT_SLOTS, keys: personaorder.KEYMAP }));
+ipcMain.handle('int:save-slots', (_e, urls) => saveSlots(urls));
 ipcMain.handle('int:add-persona', (_e, name) => {
   const p = personas.add(name);
   pushState();
@@ -3227,13 +3379,15 @@ function openNewTab() {
   if (locked) return;
   const active = personas.activeId();
   const existing = tabOrder.find(
-    (id) => (personaByTab.get(id) || personas.UNASSIGNED) === active && isUnusedNewTab(id)
+    (id) =>
+      (personaByTab.get(id) || personas.UNASSIGNED) === active &&
+      (isUnusedNewTab(id) || terminalMain.isPicker(tabs.get(id).webContents)) // #214: reuse an unused picker
   );
   if (existing !== undefined) {
     activateTab(existing);
     return;
   }
-  createTab(null, false);
+  createTab(null, false, active === personas.TERMINAL ? personas.TERMINAL : null); // #214
 }
 
 // #79: close normal tabs left untouched for too long. Pinned and hotkey tabs
@@ -3255,6 +3409,7 @@ function sweepStaleTabs() {
       id !== activeId &&
       !pinnedIds.has(id) &&
       !hotkeyByTab.has(id) &&
+      !isViewTab(id) && // #214: an idle shell is still a live session; an app slot is pinned
       (lastActiveAt.get(id) || Date.now()) < cutoff
   );
   if (!doomed.length || doomed.length >= tabOrder.length) return;
@@ -3275,6 +3430,7 @@ ipcMain.on('open-in-new-tab', (_e, url) => {
 });
 ipcMain.on('set-hotkey', (_e, { keyId, url, title }) => {
   if (locked) return;
+  if (personas.isBuiltinView(personas.activeId())) return; // #214: Terminal and app slots hold no bookmarks
   if (!hotkeys.set(String(keyId), { url, title }, personas.activeId())) return; // digits reserved
   broadcastHotkeys();
   pushState();
@@ -3546,7 +3702,7 @@ ipcMain.on('bm-edit-request', (_e, id) => {
     openBookmarkDialog({
       id: b.id, title: b.title, url: b.url, folder: b.folder || '', exists: true,
       claim: personas.claimFor(b.url), // #70
-      personas: orderedPersonas().map((p) => ({ id: p.id, name: p.name })),
+      personas: routablePersonas().map((p) => ({ id: p.id, name: p.name })),
     });
   }
 });
@@ -3831,7 +3987,7 @@ ipcMain.handle('int:clear-errors', () => {
 });
 ipcMain.handle('int:get-all-hotkeys', () => ({
   byPersona: hotkeys.allByPersona(),
-  personas: orderedPersonas().map((p) => ({ id: p.id, name: p.name })),
+  personas: routablePersonas().map((p) => ({ id: p.id, name: p.name })),
   active: personas.activeId(),
 }));
 ipcMain.handle('int:move-hotkey', (_e, { keyId, from, to, force }) => {
@@ -3871,7 +4027,7 @@ ipcMain.handle('int:delete-folder', (_e, folder) => {
   return n;
 });
 ipcMain.handle('int:set-hotkey', (_e, { keyId, url, title }) => {
-  if (locked) return false;
+  if (locked || personas.isBuiltinView(personas.activeId())) return false; // #214
   if (!hotkeys.set(String(keyId), { url, title }, personas.activeId())) return false;
   broadcastHotkeys();
   pushState();
@@ -4082,6 +4238,7 @@ if (!isPrimaryInstance) {
 
 app.whenReady().then(() => {
   ytdlp.setUser(adultUser()); // #203: before any tab is restored or swept
+  applySlots(); // #214: before the active Persona (maybe an app slot) is read
   if (!isPrimaryInstance) return; // losing the lock means this process is a no-op
   setupLogShipping(); // #171: first, so startup errors reach the server too
   applyTheme(getSettings().theme); // #24: before any view paints

@@ -93,4 +93,34 @@ function keyCandidates(homeDir) {
   return ['id_ed25519', 'id_ecdsa', 'id_rsa'].map((n) => path.join(homeDir, '.ssh', n));
 }
 
-module.exports = { parseTarget, knownHostsVerdict, keyTypeOf, fingerprint, osc52Text, keyCandidates, OSC52_MAX_BASE64 };
+// #214: the known_hosts line for a host key the user just accepted.
+function knownHostsLine(host, port, keyBuf) {
+  const name = port === 22 ? host : `[${host}]:${port}`;
+  return `${name} ${keyTypeOf(keyBuf)} ${keyBuf.toString('base64')}`;
+}
+
+// #214: Ctrl+Space as kitty CSI-u — what forge reads as its prefix (Cora, #205).
+const CTRL_SPACE = '\x1b[32;5u';
+
+// #214: inside a terminal tab, Ctrl+Space holds the NEXT key. A Persona key
+// (` and Shift+1–6, see personaorder.KEYMAP; Cora: all unbound in forge) switches
+// Persona and forge never sees the prefix; any other key goes to the session
+// right behind the prefix, in one write. Bare modifiers keep waiting. No timeout:
+// forge never expires an armed prefix, so neither do we.
+//   'wait'          a modifier on its own; keep holding
+//   'persona'       switch to Persona `id` (forge sees nothing)
+//   'pass'          send the prefix, then let the key through to xterm
+function holdDecision(input, pick) {
+  const key = String(input?.key || '').toLowerCase();
+  if (['control', 'shift', 'alt', 'meta', 'altgraph', 'capslock', 'numlock', 'scrolllock', 'dead', 'unidentified'].includes(key)) {
+    return { kind: 'wait' };
+  }
+  const id = pick(input);
+  if (id) return { kind: 'persona', id };
+  return { kind: 'pass' };
+}
+
+module.exports = {
+  parseTarget, knownHostsVerdict, keyTypeOf, fingerprint, osc52Text, keyCandidates, OSC52_MAX_BASE64,
+  knownHostsLine, CTRL_SPACE, holdDecision,
+};

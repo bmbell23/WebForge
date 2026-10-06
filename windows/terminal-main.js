@@ -1,5 +1,7 @@
-// #206: terminal spike — a bare window that SSHes to DEFAULT_TARGET and runs the
-// remote shell (forge). Main-process half: the ssh2 connection and the window.
+// #206/#214: the terminal's main-process half — ssh2 connections, one per
+// terminal tab, and the Terminal Persona's saved hosts. #214 retired the
+// separate window: a terminal session is a tab (a WebContentsView on
+// ui/terminal.html) in the Terminal Persona, and main.js owns the tab.
 // electron is required lazily so openSession/buildConfig run under plain node
 // (the smoke test does exactly that).
 const fs = require('fs');
@@ -8,6 +10,7 @@ const path = require('path');
 // Loaded on first use, so a packaging problem with ssh2 can only break the terminal, never startup.
 const ssh2 = () => require('ssh2');
 const term = require('./terminal');
+const termhosts = require('./termhosts');
 
 const DEFAULT_TARGET = 'brandon@dockerhost';
 
@@ -15,51 +18,91 @@ function agentPath() {
   return process.env.SSH_AUTH_SOCK || (process.platform === 'win32' ? '\\\\.\\pipe\\openssh-ssh-agent' : null);
 }
 
-// First readable key in ~/.ssh that is not passphrase-protected.
-function readPrivateKey(home) {
+function readKey(file) {
+  try {
+    const buf = fs.readFileSync(file);
+    return ssh2().utils.parseKey(buf) instanceof Error ? null : buf;
+  } catch {
+    return null;
+  }
+}
+
+// The config's IdentityFile first, then the first readable key in ~/.ssh that
+// is not passphrase-protected.
+function readPrivateKey(home, identityFile) {
+  if (identityFile) {
+    const k = readKey(identityFile.replace(/^~(?=[\\/])/, home));
+    if (k) return k;
+  }
   for (const file of term.keyCandidates(home)) {
-    try {
-      const buf = fs.readFileSync(file);
-      if (!(ssh2().utils.parseKey(buf) instanceof Error)) return buf;
-    } catch {}
+    const k = readKey(file);
+    if (k) return k;
   }
   return null;
 }
 
+function sshConfigText(home = os.homedir()) {
+  try {
+    return fs.readFileSync(path.join(home, '.ssh', 'config'), 'utf8');
+  } catch {
+    return '';
+  }
+}
+
 // `say(kind, text)` surfaces notices in the terminal; kind is info | warn | error.
-function buildConfig(target, say) {
-  const t = term.parseTarget(target);
+// `ask(question, cb)` asks a y/N question in the terminal (#214's host-key prompt).
+function buildConfig(target, say, ask = (_q, cb) => cb(false)) {
   const home = os.homedir();
+  const t = term.parseTarget(target);
+  // #214: a ~/.ssh/config alias resolves the way OpenSSH would resolve it.
+  const r = termhosts.resolveHost(termhosts.parseSshConfig(sshConfigText(home)), t.host);
+  const host = r.host;
+  const port = t.port !== 22 ? t.port : r.port || 22;
+  const knownHostsFile = path.join(home, '.ssh', 'known_hosts');
   let knownHosts = '';
   try {
-    knownHosts = fs.readFileSync(path.join(home, '.ssh', 'known_hosts'), 'utf8');
+    knownHosts = fs.readFileSync(knownHostsFile, 'utf8');
   } catch {}
   const config = {
-    host: t.host,
-    port: t.port,
-    username: t.username || os.userInfo().username,
-    readyTimeout: 15000,
+    host,
+    port,
+    username: t.username || r.username || os.userInfo().username,
+    readyTimeout: 90000, // #214: long enough to answer the host-key question
     keepaliveInterval: 20000,
-    hostVerifier: (key) => {
-      const verdict = term.knownHostsVerdict(knownHosts, t.host, t.port, term.keyTypeOf(key), key.toString('base64'));
+    hostVerifier: (key, verify) => {
+      const verdict = term.knownHostsVerdict(knownHosts, host, port, term.keyTypeOf(key), key.toString('base64'));
+      if (verdict === 'match') return verify(true);
       if (verdict === 'mismatch') {
-        say('error', `!! HOST KEY FOR ${t.host} HAS CHANGED (${term.fingerprint(key)}) — refusing to connect. Someone may be intercepting this connection; if the change is expected, fix ~/.ssh/known_hosts.`);
-        return false;
+        say('error', `!! HOST KEY FOR ${host} HAS CHANGED (${term.fingerprint(key)}) — refusing to connect. Someone may be intercepting this connection; if the change is expected, fix ~/.ssh/known_hosts.`);
+        return verify(false);
       }
-      if (verdict === 'unknown') say('warn', `host key ${term.fingerprint(key)} not verified: first use; phase 1 will ask`);
-      return true;
+      // #214: unknown host — ask once; yes saves it, so it never asks again.
+      ask(`${host}${port === 22 ? '' : `:${port}`} is not a known host. Its ${term.keyTypeOf(key)} key is ${term.fingerprint(key)}.\r\nTrust it and save it to ~/.ssh/known_hosts? [y/N] `, (yes) => {
+        if (yes) {
+          try {
+            fs.mkdirSync(path.dirname(knownHostsFile), { recursive: true });
+            const sep = knownHosts && !knownHosts.endsWith('\n') ? '\n' : '';
+            fs.appendFileSync(knownHostsFile, `${sep}${term.knownHostsLine(host, port, key)}\n`);
+            knownHosts += `${sep}${term.knownHostsLine(host, port, key)}\n`;
+          } catch (err) {
+            say('warn', `trusted for this session only: could not write known_hosts (${err.message})`);
+          }
+        }
+        verify(Boolean(yes));
+      });
+      return undefined;
     },
   };
   const agent = agentPath();
   if (agent) config.agent = agent;
-  const privateKey = readPrivateKey(home);
+  const privateKey = readPrivateKey(home, r.identityFile);
   if (privateKey) config.privateKey = privateKey;
   return config;
 }
 
-// Opens a shell. Hooks: onData(Buffer), onStatus(kind, text), onClose().
-// Returns { write, resize, end }.
-function openSession(target, { cols, rows, onData, onStatus, onClose }) {
+// Opens a shell. Hooks: onData(Buffer), onStatus(kind, text), onClose(),
+// onReady(), ask(question, cb). Returns { write, resize, end }.
+function openSession(target, { cols, rows, onData, onStatus, onClose, onReady = () => {}, ask }) {
   const conn = new (ssh2().Client)();
   let stream = null;
   let closed = false;
@@ -76,6 +119,7 @@ function openSession(target, { cols, rows, onData, onStatus, onClose }) {
         return;
       }
       stream = s;
+      onReady();
       s.on('data', onData);
       s.stderr.on('data', onData);
       s.on('close', () => {
@@ -91,7 +135,12 @@ function openSession(target, { cols, rows, onData, onStatus, onClose }) {
   });
   conn.on('close', close);
   onStatus('info', `connecting to ${target}…`);
-  conn.connect(buildConfig(target, onStatus));
+  try {
+    conn.connect(buildConfig(target, onStatus, ask));
+  } catch (err) {
+    onStatus('error', `connection error: ${err.message}`);
+    setImmediate(close); // after the caller has the handle, so its onClose can recognise it
+  }
   return {
     write: (data) => stream?.write(data),
     resize: (c, r) => stream?.setWindow(r, c, 0, 0),
@@ -102,125 +151,213 @@ function openSession(target, { cols, rows, onData, onStatus, onClose }) {
   };
 }
 
-let termWin = null;
-
-// opts.focusMain focuses the browser window (the Ctrl+Shift+Tab escape);
-// opts.openUrl opens a clicked link as a tab there.
-function openTerminalWindow(opts = {}) {
-  if (termWin && !termWin.isDestroyed()) {
-    if (termWin.isMinimized()) termWin.restore();
-    termWin.show();
-    termWin.focus();
-    termWin.moveTop();
-    return termWin;
-  }
-  const { BrowserWindow, ipcMain, clipboard } = require('electron');
-  const w = new BrowserWindow({
-    width: 1000,
-    height: 640,
-    title: 'WebForge Terminal (preview)',
-    backgroundColor: '#0c0c0c',
-    fullscreen: true, // the browser window is always fullscreen (#37); a smaller window would open behind it
-    show: false,
-    webPreferences: {
-      preload: path.join(__dirname, 'terminal-preload.js'),
-      contextIsolation: true,
-      nodeIntegration: false,
-    },
-  });
-  termWin = w;
-  w.setMenu(null);
-  // Every key belongs to the shell: no menu accelerator (Ctrl+W, Ctrl+Shift+T …)
-  // may fire from this window. The leader globalShortcut is already released —
-  // main.js registers it on the browser window's focus and drops it on blur.
-  w.webContents.setIgnoreMenuShortcuts(true);
-  w.webContents.on('before-input-event', (event, input) => {
-    if (input.type === 'keyDown' && input.control && input.shift && !input.alt && (input.key === 'Tab' || input.key.toLowerCase() === 't')) { // #208: Ctrl+Shift+T toggles back too
-      event.preventDefault();
-      // #210: hide, don't just focus the browser: both windows are fullscreen and
-      // this one was moveTop()ed, so focusing the browser left it buried behind.
-      // The session stays connected; opening the terminal again shows it.
-      w.hide();
-      opts.focusMain?.();
+// --- #214: saved hosts (Favorites + use counts) -----------------------------
+let hostsCache = null;
+function hostsFile() {
+  return path.join(require('electron').app.getPath('userData'), 'terminal-hosts.json');
+}
+function loadHosts() {
+  if (!hostsCache) {
+    try {
+      hostsCache = JSON.parse(fs.readFileSync(hostsFile(), 'utf8'));
+    } catch {
+      hostsCache = { favorites: [DEFAULT_TARGET], uses: {} }; // forge is one click away on day one
     }
-  });
-
-  let session = null; // null while disconnected
-  let size = { cols: 80, rows: 24 };
-  const send = (channel, payload) => {
-    if (!w.isDestroyed()) w.webContents.send(channel, payload);
-  };
-  const connect = () => {
-    const mine = openSession(DEFAULT_TARGET, {
-      ...size,
-      onData: (buf) => send('terminal:data', buf),
-      onStatus: (kind, text) => send('terminal:status', { kind, text }),
-      onClose: () => {
-        if (session !== mine) return;
-        session = null;
-        send('terminal:status', { kind: 'info', text: '[disconnected — press Enter to reconnect]' });
-      },
-    });
-    session = mine;
-  };
-
-  const mine = (e) => !w.isDestroyed() && e.sender === w.webContents;
-  const onStart = (e, cols, rows) => {
-    if (!mine(e)) return;
-    size = { cols, rows };
-    if (!session) connect();
-  };
-  const onWrite = (e, data) => {
-    if (!mine(e)) return;
-    if (session) session.write(data);
-    else if (/[\r\n]/.test(data)) connect();
-  };
-  const onResize = (e, cols, rows) => {
-    if (!mine(e)) return;
-    size = { cols, rows };
-    session?.resize(cols, rows);
-  };
-  const onCopy = (e, data) => {
-    if (!mine(e)) return;
-    const text = term.osc52Text(data);
-    if (text !== null) clipboard.writeText(text);
-  };
-  // A clicked link opens as a WebForge tab in this process: no second
-  // WebForge.exe, no OS hand-off, none of #148's blank-page path.
-  const onLink = (e, url) => {
-    if (!mine(e) || !/^https?:\/\//i.test(String(url))) return;
-    opts.openUrl?.(String(url));
-  };
-  ipcMain.on('terminal:link', onLink);
-  ipcMain.on('terminal:start', onStart);
-  ipcMain.on('terminal:write', onWrite);
-  ipcMain.on('terminal:resize', onResize);
-  // #212: the window has no menu, so paste and copy-selection go through main.
-  const onPaste = (e) => { if (mine(e)) send('terminal:paste-text', clipboard.readText()); };
-  const onCopyText = (e, text) => { if (mine(e) && typeof text === 'string' && text) clipboard.writeText(text); };
-  ipcMain.on('terminal:paste', onPaste);
-  ipcMain.on('terminal:copy-text', onCopyText);
-  ipcMain.on('terminal:copy', onCopy);
-
-  w.once('ready-to-show', () => {
-    w.show();
-    w.focus();
-    w.moveTop();
-  });
-  w.on('closed', () => {
-    ipcMain.removeListener('terminal:start', onStart);
-    ipcMain.removeListener('terminal:write', onWrite);
-    ipcMain.removeListener('terminal:resize', onResize);
-    ipcMain.removeListener('terminal:copy', onCopy);
-    ipcMain.removeListener('terminal:paste', onPaste);
-    ipcMain.removeListener('terminal:copy-text', onCopyText);
-    ipcMain.removeListener('terminal:link', onLink);
-    session?.end();
-    session = null;
-    termWin = null;
-  });
-  w.loadFile(path.join(__dirname, 'ui', 'terminal.html')).catch(() => {});
-  return w;
+    if (!Array.isArray(hostsCache.favorites)) hostsCache.favorites = [];
+    if (!hostsCache.uses || typeof hostsCache.uses !== 'object') hostsCache.uses = {};
+  }
+  return hostsCache;
+}
+function saveHosts() {
+  try {
+    fs.writeFileSync(hostsFile(), JSON.stringify(hostsCache));
+  } catch {}
+}
+function connections() {
+  const h = loadHosts();
+  const cfg = termhosts.configHosts(termhosts.parseSshConfig(sshConfigText()));
+  return termhosts.connectionGroups({ favorites: h.favorites, uses: h.uses, configHosts: cfg });
+}
+function toggleFavorite(target) {
+  const t = String(target || '').trim();
+  if (!t) return;
+  const h = loadHosts();
+  h.favorites = h.favorites.includes(t) ? h.favorites.filter((f) => f !== t) : [...h.favorites, t];
+  saveHosts();
+}
+function recordUse(target) {
+  const h = loadHosts();
+  h.uses[target] = (h.uses[target] || 0) + 1;
+  saveHosts();
 }
 
-module.exports = { openTerminalWindow, openSession, buildConfig, DEFAULT_TARGET };
+// --- #214: one session per terminal tab ------------------------------------
+// webContents id -> { wc, target, session, size, hold, prefix, answer }
+//   hold    Ctrl+Space pressed; the next key decides (see term.holdDecision)
+//   prefix  the next write from the page goes out behind Ctrl+Space
+//   answer  a pending y/N question; the next key answers it
+const tabs = new Map();
+let hooks = {};
+
+function stateFor(e) {
+  return tabs.get(e.sender.id) || null;
+}
+
+function send(st, channel, payload) {
+  if (!st.wc.isDestroyed()) st.wc.send(channel, payload);
+}
+
+function connect(st) {
+  if (!st.target) return;
+  let mine = null; // onClose can run before openSession returns (a sync connect failure)
+  mine = openSession(st.target, {
+    ...st.size,
+    onData: (buf) => send(st, 'terminal:data', buf),
+    onStatus: (kind, text) => send(st, 'terminal:status', { kind, text }),
+    onReady: () => {
+      recordUse(st.target);
+      hooks.onConnectionsChanged?.();
+    },
+    ask: (question, cb) => {
+      send(st, 'terminal:prompt', question);
+      st.answer = cb;
+    },
+    onClose: () => {
+      if (st.session !== mine) return;
+      st.session = null;
+      st.answer = null;
+      send(st, 'terminal:status', { kind: 'info', text: '[disconnected — press Enter to reconnect]' });
+    },
+  });
+  st.session = mine;
+}
+
+// Called by main.js for every terminal tab it creates.
+function attach(wc) {
+  const st = { wc, target: null, session: null, size: { cols: 80, rows: 24 }, hold: false, prefix: false, answer: null };
+  const wid = wc.id; // read now: a destroyed webContents may not answer
+  tabs.set(wid, st);
+  // Every key belongs to the shell: no menu accelerator (Ctrl+W, Ctrl+T …) may
+  // fire from a terminal tab. main.js's before-input-event still sees them.
+  wc.setIgnoreMenuShortcuts(true);
+  wc.once('destroyed', () => {
+    tabs.delete(wid);
+    st.session?.end();
+    st.session = null;
+  });
+}
+
+const isTerminal = (wc) => Boolean(wc && tabs.has(wc.id));
+const holding = (wc) => Boolean(wc && tabs.get(wc.id)?.hold);
+// A tab with no host yet is the picker: Ctrl+T reuses it rather than stacking more.
+const isPicker = (wc) => Boolean(wc && tabs.has(wc.id) && !tabs.get(wc.id).target);
+
+function clearHold(wc) {
+  const st = wc && tabs.get(wc.id);
+  if (st) st.hold = st.prefix = false;
+}
+function clearAllHolds() {
+  for (const st of tabs.values()) st.hold = st.prefix = false;
+}
+
+function setHold(wc, on) {
+  const st = wc && tabs.get(wc.id);
+  if (st) st.hold = on;
+}
+
+// The held key is not a Persona key: it goes to the session behind the prefix.
+function passHeldKey(wc) {
+  const st = wc && tabs.get(wc.id);
+  if (!st) return;
+  st.hold = false;
+  st.prefix = true;
+  // A key xterm turns into no data (Ctrl+C as copy, a lock key) must not leave
+  // the prefix waiting to land in front of something unrelated later.
+  clearTimeout(st.prefixTimer);
+  st.prefixTimer = setTimeout(() => { st.prefix = false; }, 250);
+}
+
+// Ctrl+Space twice: pass both on; forge turns them into one literal Ctrl+Space.
+function passDoublePrefix(wc) {
+  const st = wc && tabs.get(wc.id);
+  if (!st) return;
+  st.hold = false;
+  st.prefix = false;
+  st.session?.write(term.CTRL_SPACE + term.CTRL_SPACE);
+}
+
+let installed = false;
+function installIpc(h) {
+  hooks = h || {};
+  if (installed) return; // ipcMain.handle throws on a second registration
+  installed = true;
+  const { ipcMain, clipboard } = require('electron');
+  ipcMain.on('terminal:start', (e, cols, rows, target) => {
+    const st = stateFor(e);
+    if (!st) return;
+    st.size = { cols, rows };
+    if (!st.target && typeof target === 'string' && termhosts.validTarget(target)) {
+      st.target = target.trim();
+      st.prefix = false; // a Ctrl+Space pressed on the picker is not meant for the shell
+    }
+    if (st.target && !st.session) connect(st);
+  });
+  ipcMain.on('terminal:write', (e, data) => {
+    const st = stateFor(e);
+    if (!st) return;
+    if (st.answer) {
+      // Only y / n / Enter answer the host-key question; anything else waits.
+      if (!/^[yYnN\r]$/.test(data)) return;
+      const yes = /^[yY]$/.test(data);
+      const cb = st.answer;
+      st.answer = null;
+      send(st, 'terminal:status', { kind: yes ? 'info' : 'warn', text: yes ? 'trusted' : 'not trusted — disconnecting' });
+      cb(yes);
+      return;
+    }
+    if (st.prefix) {
+      st.prefix = false;
+      data = term.CTRL_SPACE + data;
+    }
+    if (st.session) st.session.write(data);
+    else if (/[\r\n]/.test(data)) connect(st);
+  });
+  ipcMain.on('terminal:resize', (e, cols, rows) => {
+    const st = stateFor(e);
+    if (!st) return;
+    st.size = { cols, rows };
+    st.session?.resize(cols, rows);
+  });
+  ipcMain.on('terminal:copy', (e, data) => {
+    if (!stateFor(e)) return;
+    const text = term.osc52Text(data);
+    if (text !== null) clipboard.writeText(text);
+  });
+  // A clicked link opens as a WebForge tab in this process: no second
+  // WebForge.exe, no OS hand-off, none of #148's blank-page path.
+  ipcMain.on('terminal:link', (e, url) => {
+    if (!stateFor(e) || !/^https?:\/\//i.test(String(url))) return;
+    hooks.openUrl?.(String(url));
+  });
+  // #212: paste and copy-selection go through main.
+  ipcMain.on('terminal:paste', (e) => {
+    const st = stateFor(e);
+    if (st) send(st, 'terminal:paste-text', clipboard.readText());
+  });
+  ipcMain.on('terminal:copy-text', (e, text) => {
+    if (stateFor(e) && typeof text === 'string' && text) clipboard.writeText(text);
+  });
+  // #214: the new-tab picker reads the same groups as the connections panel.
+  ipcMain.handle('terminal:connections', (e) => (stateFor(e) ? connections() : null));
+  ipcMain.on('terminal:favorite', (e, target) => {
+    if (!stateFor(e)) return;
+    toggleFavorite(target);
+    hooks.onConnectionsChanged?.();
+  });
+}
+
+module.exports = {
+  openSession, buildConfig, DEFAULT_TARGET,
+  attach, installIpc, isTerminal, isPicker, holding, setHold, clearHold, clearAllHolds, passHeldKey, passDoublePrefix,
+  connections, toggleFavorite,
+};

@@ -41,6 +41,11 @@ contextBridge.exposeInMainWorld('webforge', {
   reload: () => ipcRenderer.send('reload'),
   goHome: () => ipcRenderer.send('go-home'), // #174
   openTerminal: () => ipcRenderer.send('open-terminal'), // #208
+  // #214: the Terminal Persona's connections panel.
+  openConnection: (target) => ipcRenderer.send('open-connection', target),
+  favoriteConnection: (target) => ipcRenderer.send('favorite-connection', target),
+  getConnections: () => ipcRenderer.send('get-connections'),
+  onConnections: (cb) => ipcRenderer.on('terminal-connections', (_e, g) => cb(g)),
   // #126: ticket-key box — same channel Ctrl+J uses (#100).
   openTextRule: (text) => ipcRenderer.send('open-text-rule', text),
   // #127: direct-template quick boxes (Amazon). Reuses the channel

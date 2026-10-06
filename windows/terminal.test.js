@@ -61,3 +61,32 @@ eq(t.keyCandidates('/h').map((p) => path.basename(p)), ['id_ed25519', 'id_ecdsa'
 ok(t.keyCandidates('/h').every((p) => p.startsWith(path.join('/h', '.ssh'))), 'under ~/.ssh');
 
 console.log(`${n} assertions passed`);
+
+// #214
+{
+  const po = require('./personaorder');
+  let m = 0;
+  const e2 = (a, b, msg) => { assert.deepStrictEqual(a, b, msg); m++; };
+  console.log('holdDecision (#214)');
+  const key = (k, code, mods = {}) => ({ key: k, code, shift: false, control: false, alt: false, meta: false, ...mods });
+  const ordered = po.orderPersonas([{ id: 'w', name: 'Work' }, { id: 'p', name: 'Personal' }]);
+  const d = (input) => t.holdDecision(input, (i) => po.leaderPick(i, ordered));
+  e2(d(key('Shift', 'ShiftLeft', { shift: true })), { kind: 'wait' }, 'Shift on its own keeps holding');
+  e2(d(key('Control', 'ControlLeft', { control: true })), { kind: 'wait' }, 'Ctrl on its own keeps holding');
+  e2(d(key('CapsLock', 'CapsLock')), { kind: 'wait' }, 'a lock key keeps holding');
+  e2(d(key('Dead', 'Quote')), { kind: 'wait' }, 'a dead key keeps holding');
+  e2(d(key('`', 'Backquote')), { kind: 'persona', id: 'terminal' }, '` = Terminal');
+  e2(d(key('!', 'Digit1', { shift: true })), { kind: 'persona', id: 'slot-work-mattermost' }, '! = Work Mattermost');
+  e2(d(key('$', 'Digit4', { shift: true })), { kind: 'persona', id: 'p' }, '$ = Personal');
+  e2(d(key('^', 'Digit6', { shift: true })), { kind: 'persona', id: 'slot-outlook' }, '^ = Outlook');
+  e2(d(key('&', 'Digit7', { shift: true })), { kind: 'pass' }, 'Shift+7 is forge\'s');
+  e2(d(key('1', 'Digit1')), { kind: 'pass' }, 'bare 1 is a forge window jump');
+  e2(d(key('r', 'KeyR')), { kind: 'pass' }, 'a letter passes');
+  e2(d(key('Escape', 'Escape')), { kind: 'pass' }, 'Esc passes; forge cancels');
+  e2(t.CTRL_SPACE, '\x1b[32;5u', 'Ctrl+Space as kitty CSI-u');
+  const kb = Buffer.concat([Buffer.from([0, 0, 0, 11]), Buffer.from('ssh-ed25519'), Buffer.from([0, 0, 0, 1, 7])]);
+  e2(t.knownHostsLine('dockerhost', 22, kb), `dockerhost ssh-ed25519 ${kb.toString('base64')}`, 'known_hosts line, port 22');
+  e2(t.knownHostsLine('h', 2222, kb).split(' ')[0], '[h]:2222', 'known_hosts line, other port');
+  e2(t.knownHostsVerdict(t.knownHostsLine('h', 2222, kb), 'h', 2222, 'ssh-ed25519', kb.toString('base64')), 'match', 'a saved key matches next time');
+  console.log(`terminal (#214): ${m} passed`);
+}

@@ -6,8 +6,17 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { app } = require('electron');
+const personaorder = require('./personaorder');
 
 const UNASSIGNED = 'unassigned';
+// #214: built in and Windows-only. Never stored or synced: all() leaves it out,
+// get() knows it, and personaorder puts it first.
+const TERMINAL = personaorder.TERMINAL;
+// #214: app slots (Mattermost, Teams, Outlook) are built in the same way: local
+// settings, never stored here or synced. main.js hands them over via setSlots().
+let slotPersonas = [];
+const setSlots = (list) => { slotPersonas = list || []; };
+const isBuiltinView = (id) => id === TERMINAL || personaorder.isSlotId(id);
 
 let cached = null;
 const file = () => path.join(app.getPath('userData'), 'personas.json');
@@ -62,7 +71,12 @@ function save() {
 }
 
 const all = () => load().personas;
-const get = (id) => all().find((p) => p.id === id) || null;
+const get = (id) =>
+  id === TERMINAL
+    ? personaorder.TERMINAL_PERSONA
+    : personaorder.isSlotId(id)
+      ? slotPersonas.find((p) => p.id === id) || null
+      : all().find((p) => p.id === id) || null;
 
 function activeId() {
   const a = load().active;
@@ -89,7 +103,7 @@ function add(name) {
 }
 
 function remove(id) {
-  if (id === UNASSIGNED) return false; // built-in, always present
+  if (id === UNASSIGNED || isBuiltinView(id)) return false; // built-in, always present
   const list = load().personas;
   const i = list.findIndex((p) => p.id === id);
   if (i === -1) return false;
@@ -100,6 +114,7 @@ function remove(id) {
 }
 
 function update(id, fields) {
+  if (isBuiltinView(id)) return false; // #214: no name or URL rules to edit
   const p = get(id);
   if (!p) return false;
   if (typeof fields.name === 'string' && fields.name.trim() && id !== UNASSIGNED) {
@@ -192,7 +207,7 @@ function claimFor(url) {
 function assign(url, personaId, opts = {}) {
   const origin = originOf(url);
   if (!origin) return { ok: false, error: 'That URL has no usable origin.' };
-  const target = personaId === UNASSIGNED ? null : get(personaId);
+  const target = personaId === UNASSIGNED || isBuiltinView(personaId) ? null : get(personaId);
   if (personaId !== UNASSIGNED && !target) return { ok: false, error: 'No such Persona.' };
 
   const claim = claimFor(url);
@@ -246,6 +261,6 @@ function replaceAll(personaList, stamp) {
 }
 
 module.exports = {
-  UNASSIGNED, all, get, activeId, setActive, add, remove, update, forUrl, matches,
+  UNASSIGNED, TERMINAL, setSlots, isBuiltinView, all, get, activeId, setActive, add, remove, update, forUrl, matches,
   originOf, claimFor, assign, updatedAt, replaceAll,
 };
