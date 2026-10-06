@@ -938,6 +938,7 @@ function pushPersonas() {
 // modal error dialog made the app unusable. That fix guarded one callback; this
 // is the guard as a shared rule, because the next timer added would have had to
 // remember on its own, and pushState did not.
+let quitting = false; // #219
 function alive() {
   if (!win || win.isDestroyed()) return false;
   if (!chrome || chrome.webContents.isDestroyed()) return false;
@@ -1152,7 +1153,7 @@ function createTab(url = null, background = false, personaId = null, opts = {}) 
         overrideBrowserWindowOptions: { webPreferences: { ...POPUP_PREFS } },
         createWindow: (options) => {
           const tid = createTab(details.url || 'about:blank', false, home, { adopt: options, after: id });
-          return tabs.get(tid).webContents;
+          return tid === null ? undefined : tabs.get(tid).webContents; // null only if locked mid-open
         },
       };
     }
@@ -1303,6 +1304,7 @@ function createTab(url = null, background = false, personaId = null, opts = {}) 
   view.setVisible(false);
   // #219: a page that closes itself (window.close() from a popup) takes its tab with it.
   wc.once('destroyed', () => {
+    if (quitting || locked || !alive()) return;
     if (tabs.get(id) === view) closeTab(id, { gone: true });
   });
   if (!lazy && !adopt) wc.loadURL(url); // #78: lazy tabs load on first activation; #219: an adopted page is already loading
@@ -1411,7 +1413,9 @@ function closeTab(id, opts = {}) {
   pinnedIds.delete(id);
   // #57: a close is a fact other devices must learn about — unless we're only
   // applying someone else's close, which must not echo back.
-  if (!opts.remote) {
+  // #219: a page that closed itself is already destroyed (getURL would throw),
+  // and a popup closing itself isn't a close worth syncing or reopening.
+  if (!opts.remote && !opts.gone) {
     const url = tabUrlOf(id);
     // #214: an app slot is reopened by its key, and the phone must not lose its own Teams tab.
     if (shareable(url) && !isViewTab(id)) {
@@ -2251,7 +2255,7 @@ function tabUrlOf(id) {
 function shareable(url) {
   // #176: adult tabs never reach the other device, the close tombstones, or
   // Ctrl+Shift+T — every path that remembers a tab goes through here.
-  return Boolean(url) && !isNewTabUrl(url) && !isInternalUrl(url) && !isTerminalUrl(url) && !ytdlp.isAdult(url); // #214
+  return Boolean(url) && url !== 'about:blank' && !isNewTabUrl(url) && !isInternalUrl(url) && !isTerminalUrl(url) && !ytdlp.isAdult(url); // #214
 }
 
 function localTabPayload() {
@@ -4242,6 +4246,7 @@ app.whenReady().then(() => {
 });
 
 app.on('before-quit', () => {
+  quitting = true; // #219: tabs dying at shutdown are not pages closing themselves
   clearInterval(fsPollTimer); // #20: never let the poll outlive the window
   fsPollTimer = null;
   // #147: #20 cleared the one timer that existed then. Everything deferred
