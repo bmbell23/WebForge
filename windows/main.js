@@ -173,6 +173,10 @@ const lazyTabs = new Map(); // tabId -> { url, title }
 // re-homes the tab but must not drag the active Persona along with it.
 const firstLoad = new Set();
 const lastActiveAt = new Map(); // #79: tabId -> ms, for inactivity expiry
+// #226: tabId -> ms of the last time you actually LOOKED at it. Unlike
+// lastActiveAt it is never set at creation, so a tab synced in the background
+// from the phone can't hijack Ctrl+Tab.
+const lastVisitAt = new Map();
 // #148: which views have actually produced a frame. A view created while the
 // window was hidden (external link into a minimised WebForge) never paints, and
 // showing it is not enough to make it — hence forceRepaint below.
@@ -1335,6 +1339,7 @@ function activateTab(id, opts = {}) {
   activeId = id;
   const view = tabs.get(id);
   lastActiveAt.set(id, Date.now()); // #79: expiry is measured from last use
+  lastVisitAt.set(id, Date.now()); // #226
   const pending = lazyTabs.get(id); // #78
   if (pending) {
     lazyTabs.delete(id);
@@ -1436,6 +1441,7 @@ function closeTab(id, opts = {}) {
   personaByTab.delete(id);
   lazyTabs.delete(id);
   lastActiveAt.delete(id);
+  lastVisitAt.delete(id); // #226
   everPainted.delete(id); // #148
   lastBounds.delete(id); // #148
   openedAt.delete(id);
@@ -1602,12 +1608,14 @@ function cycleTab(dir) {
 // in the sidebar. Resolves by identity rather than position, so it is immune to
 // the list shifting (#114).
 function flipTab() {
-  // visibleTabs() keeps this inside the active Persona (#75). lastActiveAt is
-  // already maintained for idle-tab expiry (#79) and updated on every
-  // activation, so it is an accurate most-recently-used ordering for free.
-  const target = tabnav.mostRecent(visibleTabs(), activeId, lastActiveAt);
+  // #226: across EVERY Persona (terminal and app slots too), so Ctrl+Tab flips
+  // between, say, a terminal and Mattermost. Was inside the active Persona
+  // only (#75); Ctrl+PageUp/PageDown still are.
+  const target = tabnav.mostRecent(tabOrder, activeId, lastVisitAt);
   if (target === null) return;
-  activateTab(target, { cycling: true });
+  const before = personas.activeId();
+  activateTab(target, { cycling: true }); // switches Persona when the tab lives elsewhere (#25)
+  if (personas.activeId() !== before) broadcastHotkeys(); // badges follow the Persona, as in switchPersona
 }
 
 // #22: navigation-critical chords intercepted at the input level on every

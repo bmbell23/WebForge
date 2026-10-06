@@ -5,9 +5,9 @@
 // only verifiable by running the app on Windows, which this build host does not
 // have — the same trick that let #55's vault crypto be proven without a device.
 //
-// Both functions take the candidate list ALREADY filtered to the active Persona
-// (#75: navigation must never leave the current workspace) and return a tab id,
-// or null when there is nowhere to go.
+// Both take the candidate list and return a tab id, or null when there is
+// nowhere to go. nextInOrder (Ctrl+PageUp/PageDown) gets the active Persona's
+// tabs (#75); mostRecent (Ctrl+Tab) gets every tab in every Persona (#226).
 
 /**
  * Step `dir` places through `list` from `activeId`, wrapping at the ends.

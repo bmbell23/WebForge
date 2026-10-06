@@ -79,6 +79,15 @@ test('flips between the two most recent, repeatedly', () => {
   assert.strictEqual(mostRecent(list, 1, stamps(t)), 2, 'and back again');
 });
 
+test('#226: across Personas, a never-viewed background tab never wins', () => {
+  // Every tab in every Persona: 10 terminal, 20 Mattermost slot, 30 synced from the phone, never looked at.
+  const list = [30, 10, 20];
+  const visited = { 10: 500, 20: 400 };
+  assert.strictEqual(mostRecent(list, 10, stamps(visited)), 20, 'terminal → Mattermost');
+  visited[20] = 600;
+  assert.strictEqual(mostRecent(list, 20, stamps(visited)), 10, 'and back to the terminal');
+});
+
 test('a third tab becomes the flip target once used', () => {
   const list = [1, 2, 3];
   const t = { 1: 500, 2: 400, 3: 600 }; // just came from 3
