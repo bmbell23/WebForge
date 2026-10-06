@@ -946,6 +946,7 @@
       <table>
         <tr><td>Ctrl+T</td><td>New tab</td></tr>
         <tr><td>Ctrl+W / Ctrl+F4</td><td>Close tab</td></tr>
+        <tr><td>Double-click a tab / F2</td><td>Rename it (empty = page title)</td></tr>
         <tr><td>Ctrl+Tab</td><td>Flip to the tab you were just on, in any Persona (terminal ↔ Mattermost)</td></tr>
         <tr><td>Ctrl+Shift+T</td><td>Terminal Persona; inside it, a new terminal tab (Ctrl+Shift+Tab too)</td></tr>
         <tr><td>Ctrl+` / Ctrl+1–6</td><td>Straight to: ` Terminal, 1 Work Mattermost, 2 Work, 3 Mattermost, 4 Personal, 5 Teams, 6 Outlook (from any page or terminal)</td></tr>
@@ -1046,7 +1047,8 @@
   function makeTab(t) {
     const el = document.createElement('div');
     el.className = 'tab' + (t.active ? ' active' : '') + (t.pinned ? ' pinned' : '');
-    el.title = t.url;
+    el.title = t.pageTitle && t.pageTitle !== t.title ? `${t.pageTitle}\n${t.url}`.trim() : t.url; // #236: real title when renamed
+    el.dataset.tabId = t.id;
 
     if (t.hotkey) {
       const k = document.createElement('span');
@@ -1087,11 +1089,13 @@
     el.appendChild(close);
 
     el.onclick = () => webforge.activateTab(t.id);
+    el.ondblclick = (e) => { e.preventDefault(); startRename(t.id); }; // #236
     // #131: reachable by keyboard. There was no tabindex anywhere in this file,
     // so the sidebar was mouse-only — Tab could not land on a tab row at all.
     el.tabIndex = 0;
     el.setAttribute('role', 'option');
     el.onkeydown = (e) => {
+      if (e.target !== el) return; // #236: keys typed in the rename input are not the row's
       // Enter/Space activate, matching every other list widget. Delete closes,
       // because reaching a tab by keyboard and then needing the mouse to shut it
       // would only half-solve the problem.
@@ -1112,6 +1116,48 @@
     el.oncontextmenu = (e) => { e.preventDefault(); webforge.togglePin(t.id); };
     return el;
   }
+
+  // #236: inline rename. The title text becomes an <input>; Enter or blur saves,
+  // Esc cancels, empty clears the custom name. renderTabs is paused while editing
+  // (a loading page pushes state constantly and would wipe the input).
+  let renamingId = null;
+  function startRename(id) {
+    if (renamingId !== null) return;
+    const row = [...document.querySelectorAll('.tab')].find((r) => r.dataset.tabId === String(id));
+    const span = row && row.querySelector('.title');
+    const t = lastTabsState && lastTabsState.find((x) => x.id === id);
+    if (!span || !t) return;
+    renamingId = id;
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'title';
+    input.maxLength = 120;
+    input.spellcheck = false;
+    input.value = t.title;
+    input.style.cssText = 'flex:1;min-width:0;font:inherit;color:inherit;background:transparent;border:1px solid currentColor;border-radius:3px;padding:0 2px';
+    span.replaceWith(input);
+    let done = false;
+    const finish = (save) => {
+      if (done) return;
+      done = true;
+      renamingId = null;
+      if (save) webforge.renameTab(id, input.value);
+      renderTabs(lastTabsState); // also repaints anything skipped while editing
+    };
+    input.onkeydown = (e) => {
+      e.stopPropagation(); // not the row's Enter/Delete/activate handlers
+      if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+      else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+    };
+    input.onkeyup = (e) => e.stopPropagation();
+    input.onclick = (e) => e.stopPropagation();
+    input.ondblclick = (e) => e.stopPropagation();
+    input.onmousedown = (e) => e.stopPropagation();
+    input.onblur = () => finish(true);
+    input.focus();
+    input.select();
+  }
+  webforge.onRenameTabStart((id) => startRename(id));
 
   function dot() { // #45: neutral placeholder when a site has no favicon
     const d = document.createElement('span');
@@ -1202,6 +1248,7 @@
   });
 
   function renderTabs(state) {
+    if (renamingId !== null) return; // #236: don't wipe the rename input mid-edit
     // #16: sidebar sections — Hotkeys, Pinned, then normal tabs.
     // #107: `state` already arrives in display order from main (taborder.js),
     // which is the same order the cycling chords walk. The bucketing below
