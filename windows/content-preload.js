@@ -99,6 +99,36 @@ installGuardedKeys({
   s: hintsStart,
 });
 
+// #243: Esc takes focus out of a text field, so the keys above (and the site's
+// own shortcuts) work again. The page goes first: if it used the Esc itself
+// (preventDefault, e.g. closing an autocomplete or a dialog), focus stays put,
+// but a second Esc within a second always leaves the field. Checked after the
+// event has finished dispatching, so every page listener still gets its say.
+let lastEsc = 0;
+window.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape' || e.ctrlKey || e.altKey || e.metaKey || e.shiftKey || e.isComposing) return;
+  const now = Date.now();
+  const again = now - lastEsc < 1000;
+  lastEsc = now;
+  setTimeout(() => {
+    let el = document.activeElement;
+    while (el && el.shadowRoot && el.shadowRoot.activeElement) el = el.shadowRoot.activeElement;
+    if (!el || el === document.body) return;
+    const tag = el.tagName;
+    const field =
+      el.isContentEditable ||
+      tag === 'TEXTAREA' ||
+      tag === 'SELECT' ||
+      (tag === 'INPUT' &&
+        !['button', 'submit', 'reset', 'checkbox', 'radio', 'file', 'image', 'range', 'color'].includes(
+          (el.type || 'text').toLowerCase()
+        ));
+    if (!field) return;
+    if (e.defaultPrevented && !again) return; // the page's Esc; the next one is ours
+    el.blur();
+  }, 0);
+}, true); // capture: a site that stops the event's propagation can't hide it from us
+
 // #100: Ctrl+J opens the current selection through the URL rules. Read here
 // because before-input-event in the main process is synchronous and cannot ask
 // the page what is selected. Main stays silent when nothing matches.
