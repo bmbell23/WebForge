@@ -104,7 +104,8 @@ function openSession(target, { cols, rows, onData, onStatus, onClose }) {
 
 let termWin = null;
 
-// opts.focusMain focuses the browser window (the Ctrl+Shift+Tab escape).
+// opts.focusMain focuses the browser window (the Ctrl+Shift+Tab escape);
+// opts.openUrl opens a clicked link as a tab there.
 function openTerminalWindow(opts = {}) {
   if (termWin && !termWin.isDestroyed()) {
     if (termWin.isMinimized()) termWin.restore();
@@ -180,6 +181,13 @@ function openTerminalWindow(opts = {}) {
     const text = term.osc52Text(data);
     if (text !== null) clipboard.writeText(text);
   };
+  // A clicked link opens as a WebForge tab in this process: no second
+  // WebForge.exe, no OS hand-off, none of #148's blank-page path.
+  const onLink = (e, url) => {
+    if (!mine(e) || !/^https?:\/\//i.test(String(url))) return;
+    opts.openUrl?.(String(url));
+  };
+  ipcMain.on('terminal:link', onLink);
   ipcMain.on('terminal:start', onStart);
   ipcMain.on('terminal:write', onWrite);
   ipcMain.on('terminal:resize', onResize);
@@ -195,6 +203,7 @@ function openTerminalWindow(opts = {}) {
     ipcMain.removeListener('terminal:write', onWrite);
     ipcMain.removeListener('terminal:resize', onResize);
     ipcMain.removeListener('terminal:copy', onCopy);
+    ipcMain.removeListener('terminal:link', onLink);
     session?.end();
     session = null;
     termWin = null;

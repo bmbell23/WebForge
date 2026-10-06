@@ -1514,7 +1514,10 @@ function reopenClosedTab() {
 // #206: opens or focuses the terminal spike window. Ctrl+Shift+Tab in it comes back here.
 function openTerminal() {
   if (locked) return;
-  terminalMain.openTerminalWindow({ focusMain: () => win.focus() });
+  terminalMain.openTerminalWindow({
+    focusMain: () => win.focus(),
+    openUrl: (url) => { openExternalUrl(url); win.focus(); }, // #206: links from the terminal
+  });
 }
 
 function cycleTab(dir) {
