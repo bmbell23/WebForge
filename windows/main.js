@@ -3075,8 +3075,8 @@ function menuTemplate() {
           // #101: the basics that were missing.
           { label: 'Hard Reload', accelerator: 'CmdOrCtrl+Shift+R', click: () => hardReload() },
           { label: 'Find in Page', accelerator: 'CmdOrCtrl+F', click: () => openFind() },
-          { label: 'Reopen Closed Tab', accelerator: 'CmdOrCtrl+Shift+T', click: () => reopenClosedTab() },
-          { label: 'Terminal (preview)', accelerator: 'Control+Shift+Tab', click: () => openTerminal() }, // #206
+          { label: 'Reopen Closed Tab', accelerator: 'CmdOrCtrl+Alt+T', click: () => reopenClosedTab() }, // #208: Ctrl+Shift+T is the terminal now
+          { label: 'Terminal', accelerator: 'Control+Shift+T', click: () => openTerminal() }, // #206/#208 (Ctrl+Shift+Tab too)
           { label: 'Zoom In', accelerator: 'CmdOrCtrl+=', click: () => zoomBy(1) },
           { label: 'Zoom In', accelerator: 'CmdOrCtrl+Plus', visible: false, click: () => zoomBy(1) },
           { label: 'Zoom Out', accelerator: 'CmdOrCtrl+-', click: () => zoomBy(-1) },

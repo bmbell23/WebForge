@@ -134,7 +134,7 @@ function openTerminalWindow(opts = {}) {
   // main.js registers it on the browser window's focus and drops it on blur.
   w.webContents.setIgnoreMenuShortcuts(true);
   w.webContents.on('before-input-event', (event, input) => {
-    if (input.type === 'keyDown' && input.control && input.shift && !input.alt && input.key === 'Tab') {
+    if (input.type === 'keyDown' && input.control && input.shift && !input.alt && (input.key === 'Tab' || input.key.toLowerCase() === 't')) { // #208: Ctrl+Shift+T toggles back too
       event.preventDefault();
       opts.focusMain?.();
     }
