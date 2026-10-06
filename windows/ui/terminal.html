@@ -35,6 +35,34 @@
   fit.fit();
 
   // OSC 52 set only; main decodes, caps and ignores "?" and bad base64.
+  // #212: Windows Terminal's habits. Ctrl+V / Ctrl+Shift+V paste, Ctrl+Shift+C
+  // copies the selection, right click copies a selection or else pastes. Right
+  // click is caught before xterm, so forge's mouse capture never sees it.
+  // term.paste() wraps in bracketed paste when the app asked for it.
+  window.terminal.onPasteText((text) => { if (text) term.paste(text); });
+  const copySelection = () => {
+    const sel = term.getSelection();
+    if (!sel) return false;
+    window.terminal.copyText(sel);
+    term.clearSelection();
+    return true;
+  };
+  term.attachCustomKeyEventHandler((e) => {
+    if (e.type !== 'keydown' || !e.ctrlKey || e.altKey || e.metaKey) return true;
+    if (e.code === 'KeyV') { e.preventDefault(); window.terminal.paste(); return false; }
+    if (e.code === 'KeyC' && e.shiftKey) { e.preventDefault(); copySelection(); return false; }
+    return true;
+  });
+  const host = document.getElementById('term');
+  host.addEventListener('mousedown', (e) => {
+    if (e.button !== 2) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (!copySelection()) window.terminal.paste();
+  }, true);
+  host.addEventListener('mouseup', (e) => { if (e.button === 2) { e.preventDefault(); e.stopPropagation(); } }, true);
+  host.addEventListener('contextmenu', (e) => e.preventDefault(), true);
+
   term.parser.registerOscHandler(52, (data) => {
     window.terminal.copy(data);
     return true;

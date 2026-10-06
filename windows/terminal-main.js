@@ -195,6 +195,11 @@ function openTerminalWindow(opts = {}) {
   ipcMain.on('terminal:start', onStart);
   ipcMain.on('terminal:write', onWrite);
   ipcMain.on('terminal:resize', onResize);
+  // #212: the window has no menu, so paste and copy-selection go through main.
+  const onPaste = (e) => { if (mine(e)) send('terminal:paste-text', clipboard.readText()); };
+  const onCopyText = (e, text) => { if (mine(e) && typeof text === 'string' && text) clipboard.writeText(text); };
+  ipcMain.on('terminal:paste', onPaste);
+  ipcMain.on('terminal:copy-text', onCopyText);
   ipcMain.on('terminal:copy', onCopy);
 
   w.once('ready-to-show', () => {
@@ -207,6 +212,8 @@ function openTerminalWindow(opts = {}) {
     ipcMain.removeListener('terminal:write', onWrite);
     ipcMain.removeListener('terminal:resize', onResize);
     ipcMain.removeListener('terminal:copy', onCopy);
+    ipcMain.removeListener('terminal:paste', onPaste);
+    ipcMain.removeListener('terminal:copy-text', onCopyText);
     ipcMain.removeListener('terminal:link', onLink);
     session?.end();
     session = null;
