@@ -33,6 +33,7 @@ const taborder = require('./taborder'); // #107 — ditto
 const ctxmenu = require('./ctxmenu'); // #133 — ditto
 const stickytab = require('./stickytab'); // #117 — ditto
 const popuprule = require('./popuprule'); // #125 — ditto
+const reader = require('./reader'); // #232 — ditto
 const useragent = require('./useragent'); // #134 — ditto
 const credmatch = require('./credmatch'); // #136 — ditto
 const credsave = require('./credsave'); // #145 — ditto
@@ -236,7 +237,7 @@ function sessionSnapshot() {
   return {
     tabs: kept
       .map((id) => ({
-        url: lazyTabs.get(id)?.url || tabs.get(id).webContents.getURL(),
+        url: realUrl(id, lazyTabs.get(id)?.url || tabs.get(id).webContents.getURL()), // #232: never a reader data: URL
         title: lazyTabs.get(id)?.title || tabs.get(id).webContents.getTitle(), // #78
         pinned: pinnedIds.has(id),
         pinHome: pinnedHome.get(id) || null, // #117: or stickiness dies on restart
@@ -868,7 +869,7 @@ function tabState() {
   return displayOrderedIds().map((id) => {
     const wc = tabs.get(id).webContents;
     const pending = lazyTabs.get(id); // #78: not loaded yet — use saved values
-    const rawUrl = pending ? pending.url : wc.getURL();
+    const rawUrl = realUrl(id, pending ? pending.url : wc.getURL()); // #232: the address bar shows the article, not the reader's data: URL
     const isNew = isNewTabUrl(rawUrl); // #43: don't surface the file:// path
     const internal = isInternalUrl(rawUrl)
       ? rawUrl.includes('settings.html') ? 'Settings'
@@ -887,7 +888,7 @@ function tabState() {
       pinned: pinnedIds.has(id),
       hotkey: hotkeyByTab.get(id) || null,
       favicon: faviconByTab.get(id) || null, // #45
-      starred: bookmarks.has(wc.getURL()),
+      starred: bookmarks.has(rawUrl), // #232
       canGoBack: wc.navigationHistory.canGoBack(),
       canGoForward: wc.navigationHistory.canGoForward(),
     };
@@ -1274,6 +1275,7 @@ function createTab(url = null, background = false, personaId = null, opts = {}) 
     }
   });
   wc.on('did-navigate', (_e2, navUrl) => {
+    if (!String(navUrl).startsWith('data:')) readerTabs.delete(id); // #232: back/forward/link out of the reader view
     if (outfitReturn && outfitReturn.tabId === id && museforge.isDone(navUrl)) finishOutfit(); // #191
     settleLogin(id, wc, navUrl); // #145: did a submitted login just succeed?
     // Re-home the tab if it navigated into another persona's territory (#25).
@@ -1469,6 +1471,7 @@ function closeTab(id, opts = {}) {
   pinnedHome.delete(id); // #117: no stale homes for dead tabs
   faviconByTab.delete(id);
   personaByTab.delete(id);
+  readerTabs.delete(id); // #232
   lazyTabs.delete(id);
   lastActiveAt.delete(id);
   lastVisitAt.delete(id); // #226
@@ -1552,6 +1555,63 @@ function duplicateActiveTab() {
 function hardReload() {
   if (locked) return;
   activeWc()?.reloadIgnoringCache();
+}
+
+// #232: reader mode (Ctrl+Alt+R, the 📖 button). The article is extracted in the
+// page with Mozilla's Readability and shown in the SAME tab as a data: URL with
+// baseURLForDataURL = the article, so relative images resolve and Back returns
+// to the page. readerTabs remembers which tabs show one (tabId -> article URL);
+// realUrl() keeps that data: URL out of the address bar, session, sync and bookmarks.
+const readerTabs = new Map();
+const realUrl = (id, url) => (readerTabs.has(id) && String(url).startsWith('data:') ? readerTabs.get(id) : url);
+let readerLibs = null;
+function readerSources() {
+  if (!readerLibs) {
+    readerLibs = [
+      fs.readFileSync(require.resolve('@mozilla/readability/Readability.js'), 'utf8'),
+      fs.readFileSync(require.resolve('@mozilla/readability/Readability-readerable.js'), 'utf8'),
+    ];
+  }
+  return readerLibs;
+}
+// No generic toast exists in the chrome, so failures are an OS notification
+// (as yt-dlp/Stash use) plus an errorlog line.
+function readerNotice(message) {
+  errorlog.record('reader', message);
+  if (Notification.isSupported()) new Notification({ title: 'Reader mode', body: message }).show();
+}
+async function toggleReader() {
+  if (locked) return;
+  const id = activeId;
+  const wc = activeWc();
+  if (!wc || wc.isDestroyed()) return;
+  if (readerTabs.has(id) && wc.getURL().startsWith('data:')) {
+    const original = readerTabs.get(id);
+    if (wc.navigationHistory.canGoBack()) wc.navigationHistory.goBack();
+    else wc.loadURL(original);
+    return;
+  }
+  const url = tabUrlOf(id);
+  if (lazyTabs.has(id) || isViewTab(id) || isInternalUrl(url) || isNewTabUrl(url) || !/^https?:\/\//i.test(url)) {
+    readerNotice('Reader mode only works on web pages.');
+    return;
+  }
+  try {
+    const [readability, readerable] = readerSources();
+    const article = await wc.executeJavaScript(reader.readerScript(readability, readerable));
+    if (!article || !article.ok) {
+      readerNotice((article && article.reason) || 'Could not find an article on this page.');
+      return;
+    }
+    if (wc.isDestroyed() || activeId !== id || tabUrlOf(id) !== url) return; // navigated away while extracting
+    readerTabs.set(id, article.url);
+    wc.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(reader.readerHtml(article, nativeTheme.shouldUseDarkColors ? 'dark' : 'light')), {
+      baseURLForDataURL: article.url,
+    });
+  } catch (err) {
+    errorlog.record('reader', err);
+    readerNotice('Reader mode failed on this page.');
+  }
 }
 
 // Ctrl+= / Ctrl+- / Ctrl+0. Electron zoom levels are 1.2^level, so ±1 a step
@@ -1851,6 +1911,12 @@ function wireChords(wc) {
         event.preventDefault();
         activeWc()?.navigationHistory.goForward();
       }
+      return;
+    }
+    // #232: Ctrl+Alt+R — reader mode. isChord rejects Alt, so it is matched before that gate.
+    if (modifier.isChord({ ...input, alt: false }) && input.alt && !input.shift && rawKey.toLowerCase() === 'r') {
+      event.preventDefault();
+      toggleReader();
       return;
     }
     if (!modifier.isChord(input)) return; // #150: Ctrl on Windows, ⌘ on macOS
@@ -2317,13 +2383,14 @@ const TOMBSTONE_TTL = 30 * 24 * 3600 * 1000;
 
 function tabUrlOf(id) {
   const pending = lazyTabs.get(id);
-  return pending ? pending.url : tabs.get(id)?.webContents.getURL() || '';
+  return pending ? pending.url : realUrl(id, tabs.get(id)?.webContents.getURL() || '');
 }
 
 function shareable(url) {
   // #176: adult tabs never reach the other device, the close tombstones, or
   // Ctrl+Shift+T — every path that remembers a tab goes through here.
-  return Boolean(url) && url !== 'about:blank' && !isNewTabUrl(url) && !isInternalUrl(url) && !isTerminalUrl(url) && !ytdlp.isAdult(url); // #214
+  // #232: a reader view is a data: URL — it must never be synced, restored or reopened.
+  return Boolean(url) && url !== 'about:blank' && !String(url).startsWith('data:') && !isNewTabUrl(url) && !isInternalUrl(url) && !isTerminalUrl(url) && !ytdlp.isAdult(url); // #214
 }
 
 function localTabPayload() {
@@ -3266,6 +3333,7 @@ function menuTemplate() {
           { label: 'Reload', accelerator: 'F5', visible: false, click: () => activeWc()?.reload() },
           // #101: the basics that were missing.
           { label: 'Hard Reload', accelerator: 'CmdOrCtrl+Shift+R', click: () => hardReload() },
+          { label: 'Reader Mode', accelerator: 'CmdOrCtrl+Alt+R', click: () => toggleReader() }, // #232
           { label: 'Find in Page', accelerator: 'CmdOrCtrl+F', click: () => openFind() },
           { label: 'Reopen Closed Tab', accelerator: 'CmdOrCtrl+Alt+T', click: () => reopenClosedTab() }, // #208: Ctrl+Shift+T is the terminal now
           { label: 'Terminal', accelerator: 'Control+Shift+T', click: () => openTerminal() }, // #214: the Terminal Persona (Ctrl+Shift+Tab too)
@@ -3290,6 +3358,7 @@ ipcMain.on('navigate', (_e, input) => {
   else activeWc()?.loadURL(url);
 });
 ipcMain.on('go-back', () => activeWc()?.navigationHistory.goBack());
+ipcMain.on('toggle-reader', () => toggleReader()); // #232
 ipcMain.on('go-forward', () => activeWc()?.navigationHistory.goForward());
 ipcMain.on('reload', () => { if (!isTerminalTab(activeId)) activeWc()?.reload(); }); // #214: would orphan the session
 // #174: home takes the CURRENT tab to the home page, so Back returns you to
