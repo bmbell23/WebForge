@@ -1969,7 +1969,7 @@ class MainActivity : Activity() {
         header(col, "ABOUT")
         val about = card(col)
         action(about, "Version ${BuildConfig.VERSION_NAME}", "Tap to check for updates") {
-            UpdateManager(this).checkForUpdate()
+            UpdateManager(this).checkForUpdate(manual = true) // #197
         }
         action(about, "How WebForge is built", "Engines, dependencies, build process") { showAbout() }
         // #155: evidence for "it's laggy". Stalls are UI-thread frame gaps.

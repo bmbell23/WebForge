@@ -1,6 +1,7 @@
 package com.webforge.browser
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -84,5 +85,34 @@ class UpdateCheckTest {
     @Test
     fun an_unknown_failure_still_reports_its_code() {
         assertTrue(UpdateCheck.downloadFailureText(9999).contains("9999"))
+    }
+
+    // --- #197: the resume after the installer hand-off ------------------------
+
+    @Test
+    fun the_resume_after_handing_off_does_not_offer_the_same_version_again() {
+        assertFalse(UpdateCheck.shouldOffer("0.1.186", "0.1.185", null, "0.1.186", manual = false))
+    }
+
+    @Test
+    fun a_newer_release_than_the_one_handed_off_is_still_offered() {
+        assertTrue(UpdateCheck.shouldOffer("0.1.187", "0.1.185", null, "0.1.186", manual = false))
+    }
+
+    @Test
+    fun the_settings_tap_offers_a_handed_off_or_declined_version() {
+        assertTrue(UpdateCheck.shouldOffer("0.1.186", "0.1.185", "0.1.186", "0.1.186", manual = true))
+    }
+
+    @Test
+    fun later_still_silences_automatic_checks() {
+        assertFalse(UpdateCheck.shouldOffer("0.1.186", "0.1.185", "0.1.186", null, manual = false))
+    }
+
+    @Test
+    fun nothing_is_offered_when_up_to_date_or_offline_even_by_hand() {
+        assertFalse(UpdateCheck.shouldOffer("0.1.186", "0.1.186", null, null, manual = true))
+        assertFalse(UpdateCheck.shouldOffer(null, "0.1.186", null, null, manual = true))
+        assertTrue(UpdateCheck.shouldOffer("0.1.186", "0.1.185", null, null, manual = false))
     }
 }

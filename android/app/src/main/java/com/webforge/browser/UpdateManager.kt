@@ -54,20 +54,31 @@ class UpdateManager(private val activity: Activity) {
         // version from re-prompting on every app switch (until next cold start).
         @Volatile private var busy = false
         @Volatile private var dismissedVersion: String? = null
+        // #197: the version last handed to the system installer. The resume
+        // that follows the hand-off must not offer it again.
+        @Volatile private var handedOffVersion: String? = null
     }
 
-    fun checkForUpdate() {
+    /** @param manual the Settings › Version tap: offers even a declined or handed-off version. */
+    fun checkForUpdate(manual: Boolean = false) {
         if (busy) return
         busy = true
         Thread {
             val remote = fetchRemoteVersion()
-            if (remote == null || remote == dismissedVersion ||
-                !UpdateCheck.isNewer(remote, BuildConfig.VERSION_NAME)
-            ) {
+            if (!UpdateCheck.shouldOffer(remote, BuildConfig.VERSION_NAME, dismissedVersion, handedOffVersion, manual)) {
                 busy = false
+                if (manual) activity.runOnUiThread {
+                    Toast.makeText(
+                        activity,
+                        if (remote == null) "Couldn't reach dockerhost to check for updates"
+                        else "WebForge v${BuildConfig.VERSION_NAME} is up to date",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
                 return@Thread
             }
-            activity.runOnUiThread { offerUpdate(remote) }
+            val offer = remote ?: return@Thread // shouldOffer is false for null
+            activity.runOnUiThread { offerUpdate(offer) }
         }.start()
     }
 
@@ -196,7 +207,7 @@ class UpdateManager(private val activity: Activity) {
                     .setPositiveButton("OK", null)
                     .show()
             }
-            is UpdateCheck.Verdict.Install -> install(dm, id)
+            is UpdateCheck.Verdict.Install -> install(dm, id, remote)
         }
     }
 
@@ -208,12 +219,13 @@ class UpdateManager(private val activity: Activity) {
         null
     }
 
-    private fun install(dm: DownloadManager, id: Long) {
+    private fun install(dm: DownloadManager, id: Long, remote: String) {
         val apkUri = dm.getUriForDownloadedFile(id)
         if (apkUri == null) {
             fail("Update downloaded but could not be opened for install")
             return
         }
+        handedOffVersion = remote // #197: before startActivity, which pauses and resumes us
         activity.startActivity(
             Intent(Intent.ACTION_VIEW).apply {
                 setDataAndType(apkUri, "application/vnd.android.package-archive")
