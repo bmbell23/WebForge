@@ -55,4 +55,15 @@ eq(po.leaderPick(k('Digit1', { alt: true }), ordered), null, 'Alt+Shift+1 is not
 eq(po.leaderPick(k('Numpad1'), ordered), null, 'numpad is not');
 eq(po.leaderPick({ key: '!', shift: true }, ordered), null, 'matched on code, not key');
 
+console.log('slotFor (#221)');
+eq(po.slotFor('http://co-sf-pe-042.colorado.datadirectnet.com:8065/team/channels/town-square'), 'slot-work-mattermost', 'another Work Mattermost page');
+eq(po.slotFor('http://100.69.184.113:8065/agents/pl/abc'), 'slot-personal-mattermost', 'another personal Mattermost page');
+eq(po.slotFor('https://outlook.cloud.microsoft/calendar/view/week'), 'slot-outlook', 'the whole Outlook site, not just /mail/');
+eq(po.slotFor('https://teams.cloud.microsoft/v2/?meetingjoin=true'), 'slot-teams', 'a Teams meeting link');
+eq(po.slotFor('http://100.69.184.113:8005/'), null, 'same host, other port is not the slot');
+eq(po.slotFor('https://co-sf-pe-042.colorado.datadirectnet.com:8065/'), null, 'other scheme is not the slot');
+eq(po.slotFor('https://login.microsoftonline.com/x'), null, 'sign-in pages are nobody\'s');
+eq(po.slotFor('not a url'), null, 'junk');
+eq(po.slotFor('https://chat.example.com/x', po.slots({ 'work-mattermost': 'https://chat.example.com/' })), 'slot-work-mattermost', 'follows an edited slot URL');
+
 console.log(`personaorder: ${n} passed`);
