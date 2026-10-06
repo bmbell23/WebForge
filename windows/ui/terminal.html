@@ -22,6 +22,14 @@
   .host button.go:hover, .host button.go:focus { background: #23324a; border-color: #3d6bb3; outline: none; }
   .host button.star { background: none; border: none; color: #c9a227; font-size: 16px; cursor: pointer; }
   .empty { color: #666; }
+  /* #228: the inline Favorite editor */
+  .host button.edit { background: none; border: none; color: #888; font-size: 14px; cursor: pointer; }
+  .host button.edit:hover { color: #ddd; }
+  .hostedit { display: flex; flex-direction: column; gap: 4px; max-width: 480px; margin: 4px 0; }
+  .hostedit input { padding: 6px 10px; font: 14px 'Cascadia Mono', Consolas, monospace;
+                    background: #1a1a1a; color: #eee; border: 1px solid #444; border-radius: 4px; }
+  .hostedit .btns { display: flex; gap: 8px; }
+  .hostedit .err { color: #e5534b; font-size: 12px; }
 </style>
 </head>
 <body>
@@ -116,8 +124,47 @@
     input.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && input.value.trim()) begin(input.value.trim());
     });
+    // #228: user@host:port as parts (same rules as termhosts.splitTarget).
+    const splitTarget = (t) => {
+      const m = /^(?:([^@]+)@)?(\[[^\]]*\]|[^:]+)(?::(\d+))?$/.exec(t);
+      return m ? { user: m[1] || '', host: m[2].replace(/^\[(.*)\]$/, '$1'), port: m[3] || '' } : { user: '', host: t, port: '' };
+    };
+    // #228: swaps a Favorite's row for Name / User / Host / Port. Enter saves, Esc cancels.
+    const editRow = (t, label, row) => {
+      const p = splitTarget(t);
+      const form = Object.assign(document.createElement('div'), { className: 'hostedit' });
+      form.onclick = (e) => e.stopPropagation();
+      const field = (placeholder, value) => Object.assign(document.createElement('input'), {
+        type: 'text', placeholder, value, spellcheck: false,
+      });
+      const fName = field('Name (optional)', label === t ? '' : label);
+      const fUser = field('User', p.user);
+      const fHost = field('Host or IP', p.host);
+      const fPort = field('Port (optional)', p.port);
+      const err = Object.assign(document.createElement('div'), { className: 'err' });
+      const save = async () => {
+        const r = await window.terminal.editFavorite(t, { name: fName.value, user: fUser.value, host: fHost.value, port: fPort.value });
+        if (r && r.ok) render();
+        else err.textContent = (r && r.error) || 'Could not save.';
+      };
+      const saveBtn = Object.assign(document.createElement('button'), { textContent: 'Save' });
+      const cancelBtn = Object.assign(document.createElement('button'), { textContent: 'Cancel' });
+      saveBtn.onclick = save;
+      cancelBtn.onclick = () => render();
+      const btns = Object.assign(document.createElement('div'), { className: 'btns' });
+      btns.append(saveBtn, cancelBtn);
+      form.onkeydown = (e) => {
+        e.stopPropagation();
+        if (e.key === 'Enter') { e.preventDefault(); save(); }
+        else if (e.key === 'Escape') { e.preventDefault(); render(); }
+      };
+      form.append(fName, fUser, fHost, fPort, err, btns);
+      row.replaceWith(form);
+      fName.focus();
+    };
     const render = async () => {
-      const g = (await window.terminal.connections()) || { favorites: [], frequent: [], config: [] };
+      const g = (await window.terminal.connections()) || { favorites: [], frequent: [], config: [], names: {} };
+      const names = g.names || {};
       const groups = document.getElementById('groups');
       groups.replaceChildren();
       for (const [title, list, fav] of [['★ Favorites', g.favorites, true], ['Frequent', g.frequent, false], ['~/.ssh/config', g.config, false]]) {
@@ -131,13 +178,20 @@
         for (const t of list) {
           const row = document.createElement('div');
           row.className = 'host';
-          const go = Object.assign(document.createElement('button'), { className: 'go', textContent: t });
+          const label = (fav && names[t]) || t;
+          const go = Object.assign(document.createElement('button'), { className: 'go', textContent: label, title: t });
           go.onclick = () => begin(t);
           const star = Object.assign(document.createElement('button'), {
             className: 'star', textContent: fav ? '★' : '☆', title: fav ? 'Remove from Favorites' : 'Add to Favorites',
           });
           star.onclick = () => { window.terminal.favorite(t); setTimeout(render, 50); };
-          row.append(go, star);
+          if (fav) {
+            const ed = Object.assign(document.createElement('button'), { className: 'edit', textContent: '✎', title: 'Edit this favorite' });
+            ed.onclick = (e) => { e.stopPropagation(); editRow(t, label, row); };
+            row.append(go, ed, star);
+          } else {
+            row.append(go, star);
+          }
           groups.appendChild(row);
         }
       }

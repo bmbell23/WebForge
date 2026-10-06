@@ -161,10 +161,11 @@ function loadHosts() {
     try {
       hostsCache = JSON.parse(fs.readFileSync(hostsFile(), 'utf8'));
     } catch {
-      hostsCache = { favorites: [DEFAULT_TARGET], uses: {} }; // forge is one click away on day one
+      hostsCache = { favorites: [DEFAULT_TARGET], uses: {}, names: {} }; // forge is one click away on day one
     }
     if (!Array.isArray(hostsCache.favorites)) hostsCache.favorites = [];
     if (!hostsCache.uses || typeof hostsCache.uses !== 'object') hostsCache.uses = {};
+    if (!hostsCache.names || typeof hostsCache.names !== 'object' || Array.isArray(hostsCache.names)) hostsCache.names = {}; // #228
   }
   return hostsCache;
 }
@@ -176,14 +177,23 @@ function saveHosts() {
 function connections() {
   const h = loadHosts();
   const cfg = termhosts.configHosts(termhosts.parseSshConfig(sshConfigText()));
-  return termhosts.connectionGroups({ favorites: h.favorites, uses: h.uses, configHosts: cfg });
+  return termhosts.connectionGroups({ favorites: h.favorites, uses: h.uses, names: h.names, configHosts: cfg });
 }
 function toggleFavorite(target) {
   const t = String(target || '').trim();
   if (!t) return;
   const h = loadHosts();
   h.favorites = h.favorites.includes(t) ? h.favorites.filter((f) => f !== t) : [...h.favorites, t];
+  if (!h.favorites.includes(t)) delete h.names[t]; // #228: an unstarred host forgets its name
   saveHosts();
+}
+// #228: edit a Favorite's name / user / host / port. Returns { ok, error? , target? }.
+function editFavorite(oldTarget, fields) {
+  const r = termhosts.renameFavorite(loadHosts(), String(oldTarget || ''), fields || {});
+  if (!r.ok) return { ok: false, error: r.error };
+  hostsCache = r.hosts;
+  saveHosts();
+  return { ok: true, target: r.target };
 }
 function recordUse(target) {
   const h = loadHosts();
@@ -354,10 +364,17 @@ function installIpc(h) {
     toggleFavorite(target);
     hooks.onConnectionsChanged?.();
   });
+  // #228: edit a Favorite from the picker.
+  ipcMain.handle('terminal:edit-favorite', (e, { target, fields } = {}) => {
+    if (!stateFor(e)) return { ok: false, error: 'Not available here.' };
+    const r = editFavorite(target, fields);
+    if (r.ok) hooks.onConnectionsChanged?.();
+    return r;
+  });
 }
 
 module.exports = {
   openSession, buildConfig, DEFAULT_TARGET,
   attach, installIpc, isTerminal, isPicker, holding, setHold, clearHold, clearAllHolds, passHeldKey, passDoublePrefix,
-  connections, toggleFavorite,
+  connections, toggleFavorite, editFavorite,
 };

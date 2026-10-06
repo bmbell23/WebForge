@@ -3232,6 +3232,12 @@ ipcMain.on('favorite-connection', (_e, target) => {
   terminalMain.toggleFavorite(target);
   pushConnections();
 });
+// #228: edit a Favorite (name / user / host / port) from the panel.
+ipcMain.handle('edit-connection', (_e, { target, fields } = {}) => {
+  const r = terminalMain.editFavorite(target, fields);
+  pushConnections();
+  return r;
+});
 ipcMain.on('get-connections', () => pushConnections());
 ipcMain.on('go-home', () => {
   const wc = activeWc();

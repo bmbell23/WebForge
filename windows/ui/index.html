@@ -334,6 +334,11 @@
   #connlist h4 { margin: 10px 10px 4px; font-size: 11px; text-transform: uppercase; letter-spacing: .08em; opacity: .6; }
   #connlist input { box-sizing: border-box; width: calc(100% - 20px); margin: 8px 10px; }
   #connlist .connempty { margin: 0 10px; opacity: .5; font-size: 12px; }
+  /* #228: the inline Favorite editor */
+  #connlist .connedit { display: flex; flex-direction: column; gap: 4px; margin: 4px 10px; }
+  #connlist .connedit input { width: 100%; margin: 0; }
+  #connlist .connedit .btns { display: flex; gap: 6px; }
+  #connlist .connedit .err { color: #e5534b; font-size: 12px; }
   /* #27: bookmark search */
   #bmsearch {
     margin: 0 8px 6px; height: 26px;
@@ -1308,7 +1313,49 @@
       connInput.value = '';
     }
   };
-  webforge.onConnections((g) => {
+  // #228: user@host:port as parts (same rules as termhosts.splitTarget).
+  const splitTarget = (t) => {
+    const m = /^(?:([^@]+)@)?(\[[^\]]*\]|[^:]+)(?::(\d+))?$/.exec(t);
+    return m ? { user: m[1] || '', host: m[2].replace(/^\[(.*)\]$/, '$1'), port: m[3] || '' } : { user: '', host: t, port: '' };
+  };
+  // #228: swaps a Favorite's row for Name / User / Host / Port. Enter saves, Esc cancels.
+  const editRow = (t, label, row) => {
+    const p = splitTarget(t);
+    const form = Object.assign(document.createElement('div'), { className: 'connedit' });
+    form.onclick = (e) => e.stopPropagation();
+    const field = (placeholder, value) => Object.assign(document.createElement('input'), {
+      type: 'text', placeholder, value, spellcheck: false,
+    });
+    const fName = field('Name (optional)', label === t ? '' : label);
+    const fUser = field('User', p.user);
+    const fHost = field('Host or IP', p.host);
+    const fPort = field('Port (optional)', p.port);
+    const err = Object.assign(document.createElement('div'), { className: 'err' });
+    const save = async () => {
+      const r = await webforge.editConnection(t, { name: fName.value, user: fUser.value, host: fHost.value, port: fPort.value });
+      if (!r || !r.ok) err.textContent = (r && r.error) || 'Could not save.';
+      // on success main pushes fresh connections, which redraws the list
+    };
+    const cancel = () => renderConns(lastConns);
+    const save_ = Object.assign(document.createElement('button'), { textContent: 'Save' });
+    const cancel_ = Object.assign(document.createElement('button'), { textContent: 'Cancel' });
+    save_.onclick = save;
+    cancel_.onclick = cancel;
+    const btns = Object.assign(document.createElement('div'), { className: 'btns' });
+    btns.append(save_, cancel_);
+    form.onkeydown = (e) => {
+      e.stopPropagation();
+      if (e.key === 'Enter') { e.preventDefault(); save(); }
+      else if (e.key === 'Escape') { e.preventDefault(); cancel(); }
+    };
+    form.append(fName, fUser, fHost, fPort, err, btns);
+    row.replaceWith(form);
+    fName.focus();
+  };
+  let lastConns = { favorites: [], frequent: [], config: [], names: {} };
+  const renderConns = (g) => {
+    lastConns = g;
+    const names = g.names || {};
     const nodes = [connInput];
     for (const [title, list, fav] of [['★ Favorites', g.favorites, true], ['Frequent', g.frequent, false], ['~/.ssh/config', g.config, false]]) {
       nodes.push(Object.assign(document.createElement('h4'), { textContent: title }));
@@ -1317,20 +1364,28 @@
         const el = document.createElement('div');
         el.className = 'bm';
         el.tabIndex = 0;
-        el.title = `Open a terminal on ${t}`;
-        const name = Object.assign(document.createElement('span'), { className: 'title', textContent: t });
+        el.title = fav ? t : `Open a terminal on ${t}`;
+        const label = (fav && names[t]) || t;
+        const name = Object.assign(document.createElement('span'), { className: 'title', textContent: label });
         const st = Object.assign(document.createElement('button'), {
           className: 'rm', textContent: fav ? '★' : '☆', title: fav ? 'Remove from Favorites' : 'Add to Favorites',
         });
         st.onclick = (e) => { e.stopPropagation(); webforge.favoriteConnection(t); };
-        el.append(name, st);
+        if (fav) {
+          const ed = Object.assign(document.createElement('button'), { className: 'rm', textContent: '✎', title: 'Edit this favorite' });
+          ed.onclick = (e) => { e.stopPropagation(); editRow(t, label, el); };
+          el.append(name, ed, st);
+        } else {
+          el.append(name, st);
+        }
         el.onclick = () => webforge.openConnection(t);
-        el.onkeydown = (e) => { if (e.key === 'Enter') webforge.openConnection(t); };
+        el.onkeydown = (e) => { if (e.key === 'Enter' && e.target === el) webforge.openConnection(t); };
         nodes.push(el);
       }
     }
     connlist.replaceChildren(...nodes);
-  });
+  };
+  webforge.onConnections(renderConns);
 
   // --- passwords panel (#26) ---
   const pwpanel = document.getElementById('pwpanel');

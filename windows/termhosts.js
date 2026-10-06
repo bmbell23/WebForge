@@ -85,7 +85,7 @@ function rankFrequent(uses, limit = 8) {
 
 // The three groups the panel and the new-tab picker show. A host appears in
 // one group only: Favorites beat Frequent beat ssh config.
-function connectionGroups({ favorites = [], uses = {}, configHosts: cfg = [] } = {}) {
+function connectionGroups({ favorites = [], uses = {}, configHosts: cfg = [], names = {} } = {}) {
   const seen = new Set(favorites);
   const frequent = rankFrequent(uses).filter((t) => !seen.has(t));
   for (const t of frequent) seen.add(t);
@@ -93,6 +93,7 @@ function connectionGroups({ favorites = [], uses = {}, configHosts: cfg = [] } =
     favorites: [...favorites],
     frequent,
     config: cfg.filter((t) => !seen.has(t)),
+    names: Object.fromEntries(favorites.filter((t) => names[t]).map((t) => [t, names[t]])), // #228
   };
 }
 
@@ -101,4 +102,56 @@ function validTarget(s) {
   return /^(?:[A-Za-z0-9._-]+@)?(?:[A-Za-z0-9._-]+|\[[0-9A-Fa-f:.]+\])(?::\d{1,5})?$/.test(String(s || '').trim());
 }
 
-module.exports = { parseSshConfig, configHosts, resolveHost, rankFrequent, connectionGroups, validTarget };
+// #228: a target as its parts. user and port are null when absent; an IPv6
+// host comes back without its brackets.
+function splitTarget(t) {
+  const m = /^(?:([^@]+)@)?(\[[^\]]*\]|[^:]+)(?::(\d+))?$/.exec(String(t || '').trim());
+  if (!m) return { user: null, host: '', port: null };
+  return {
+    user: m[1] || null,
+    host: m[2].replace(/^\[(.*)\]$/, '$1'),
+    port: m[3] ? Number(m[3]) : null,
+  };
+}
+
+// #228: the parts back into a target, or null if it would not be valid. An IPv6
+// host is always bracketed (validTarget has no other form for it).
+function joinTarget({ user, host, port } = {}) {
+  const h = String(host || '').trim();
+  const u = String(user || '').trim();
+  if (!h) return null;
+  let p = null;
+  if (port !== null && port !== undefined && String(port).trim() !== '') {
+    p = Number(port);
+    if (!Number.isInteger(p) || p < 1 || p > 65535) return null;
+  }
+  const t = (u ? u + '@' : '') + (h.includes(':') ? `[${h.replace(/^\[|\]$/g, '')}]` : h) + (p ? ':' + p : '');
+  return validTarget(t) ? t : null;
+}
+
+// #228: edit a Favorite in place. Pure: returns new hosts, never touches the input.
+function renameFavorite(hosts, oldTarget, { name, user, host, port } = {}) {
+  const favorites = (hosts && hosts.favorites) || [];
+  const at = favorites.indexOf(oldTarget);
+  if (at < 0) return { ok: false, error: 'That favorite no longer exists.' };
+  const target = joinTarget({ user, host, port });
+  if (!target) return { ok: false, error: 'Enter a valid host, user and port (1-65535).' };
+  if (target !== oldTarget && favorites.includes(target)) return { ok: false, error: `${target} is already a favorite.` };
+  const uses = { ...(hosts.uses || {}) };
+  const names = { ...(hosts.names || {}) };
+  if (target !== oldTarget) {
+    if (oldTarget in uses) {
+      uses[target] = (uses[target] || 0) + uses[oldTarget];
+      delete uses[oldTarget];
+    }
+    delete names[oldTarget];
+  }
+  const label = String(name || '').trim();
+  if (label && label !== target) names[target] = label;
+  else delete names[target];
+  const next = [...favorites];
+  next[at] = target;
+  return { ok: true, hosts: { ...hosts, favorites: next, uses, names }, target };
+}
+
+module.exports = { parseSshConfig, configHosts, resolveHost, rankFrequent, connectionGroups, validTarget, splitTarget, joinTarget, renameFavorite };
