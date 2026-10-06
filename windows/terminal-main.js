@@ -137,6 +137,10 @@ function openTerminalWindow(opts = {}) {
   w.webContents.on('before-input-event', (event, input) => {
     if (input.type === 'keyDown' && input.control && input.shift && !input.alt && (input.key === 'Tab' || input.key.toLowerCase() === 't')) { // #208: Ctrl+Shift+T toggles back too
       event.preventDefault();
+      // #210: hide, don't just focus the browser: both windows are fullscreen and
+      // this one was moveTop()ed, so focusing the browser left it buried behind.
+      // The session stays connected; opening the terminal again shows it.
+      w.hide();
       opts.focusMain?.();
     }
   });

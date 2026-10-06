@@ -1515,7 +1515,7 @@ function reopenClosedTab() {
 function openTerminal() {
   if (locked) return;
   terminalMain.openTerminalWindow({
-    focusMain: () => win.focus(),
+    focusMain: () => { win.show(); win.moveTop(); win.focus(); }, // #210
     openUrl: (url) => { openExternalUrl(url); win.focus(); }, // #206: links from the terminal
   });
 }
