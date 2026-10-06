@@ -1,0 +1,96 @@
+// #206: the terminal spike's pure half — target parsing, known_hosts matching,
+// OSC 52 decoding. Electron-free and unit-tested (terminal.test.js).
+const path = require('path');
+const crypto = require('crypto');
+
+const OSC52_MAX_BASE64 = 1400000; // ~1 MB once decoded
+
+function parseTarget(s) {
+  let rest = String(s || '').trim();
+  let username = null;
+  const at = rest.lastIndexOf('@');
+  if (at >= 0) {
+    username = rest.slice(0, at) || null;
+    rest = rest.slice(at + 1);
+  }
+  let host = rest;
+  let port = 22;
+  const m = /^\[(.+)\](?::(\d+))?$/.exec(rest) || /^([^:]+):(\d+)$/.exec(rest);
+  if (m) {
+    host = m[1];
+    if (m[2]) port = Number(m[2]);
+  }
+  return { username, host, port };
+}
+
+// OpenSSH host patterns: `*` and `?` wildcards, a leading `!` negates.
+function patternMatches(pattern, name) {
+  const re = new RegExp('^' + pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.') + '$', 'i');
+  return re.test(name);
+}
+
+function hostListMatches(list, host, port) {
+  const name = port === 22 ? host : `[${host}]:${port}`;
+  let hit = false;
+  for (const p of list.split(',')) {
+    if (!p) continue;
+    if (p.startsWith('!')) {
+      if (patternMatches(p.slice(1), name)) return false;
+    } else if (patternMatches(p, name) || (port === 22 && patternMatches(p, `[${host}]:22`))) {
+      hit = true;
+    }
+  }
+  return hit;
+}
+
+// 'match' — the host is listed with exactly this key.
+// 'mismatch' — the host is listed with a DIFFERENT key of the same type.
+// 'unknown' — not listed, only hashed entries, or listed only under other key
+//   types (we cannot tell those from a legitimate second key).
+function knownHostsVerdict(text, host, port, keyType, keyBase64) {
+  let mismatch = false;
+  for (const raw of String(text || '').split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || line.startsWith('#')) continue;
+    const f = line.split(/\s+/);
+    if (f[0].startsWith('@')) continue; // @revoked / @cert-authority
+    if (f.length < 3 || f[0].startsWith('|1|')) continue;
+    if (!hostListMatches(f[0], host, port)) continue;
+    if (f[1] !== keyType) continue;
+    if (f[2] === keyBase64) return 'match';
+    mismatch = true;
+  }
+  return mismatch ? 'mismatch' : 'unknown';
+}
+
+// The SSH wire format starts with a length-prefixed key type string.
+function keyTypeOf(keyBuf) {
+  const n = keyBuf.readUInt32BE(0);
+  return keyBuf.toString('latin1', 4, 4 + n);
+}
+
+function fingerprint(keyBuf) {
+  return 'SHA256:' + crypto.createHash('sha256').update(keyBuf).digest('base64').replace(/=+$/, '');
+}
+
+// `data` is the OSC 52 payload: "<selection>;<base64>". "?" asks to READ the
+// clipboard — never answered.
+function osc52Text(data) {
+  const s = String(data || '');
+  const i = s.indexOf(';');
+  if (i < 0) return null;
+  const b64 = s.slice(i + 1).replace(/\s+/g, '');
+  if (!b64 || b64 === '?' || b64.length > OSC52_MAX_BASE64) return null;
+  if (b64.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(b64)) return null;
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(Buffer.from(b64, 'base64'));
+  } catch {
+    return null;
+  }
+}
+
+function keyCandidates(homeDir) {
+  return ['id_ed25519', 'id_ecdsa', 'id_rsa'].map((n) => path.join(homeDir, '.ssh', n));
+}
+
+module.exports = { parseTarget, knownHostsVerdict, keyTypeOf, fingerprint, osc52Text, keyCandidates, OSC52_MAX_BASE64 };
