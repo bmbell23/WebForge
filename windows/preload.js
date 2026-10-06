@@ -39,6 +39,7 @@ contextBridge.exposeInMainWorld('webforge', {
   goBack: () => ipcRenderer.send('go-back'),
   goForward: () => ipcRenderer.send('go-forward'),
   reload: () => ipcRenderer.send('reload'),
+  toggleReader: () => ipcRenderer.send('toggle-reader'), // #232
   goHome: () => ipcRenderer.send('go-home'), // #174
   openTerminal: () => ipcRenderer.send('open-terminal'), // #208
   // #214: the Terminal Persona's connections panel.

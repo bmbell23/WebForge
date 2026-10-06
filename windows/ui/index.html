@@ -790,6 +790,7 @@
     <button id="reloadstop" title="Reload">⟳</button>
     <button id="home" title="Home">⌂</button>
     <button id="termbtn" title="Terminal (Ctrl+Shift+T)">&gt;_</button>
+    <button id="readerbtn" title="Reader mode (Ctrl+Alt+R)">📖</button> <!-- #232 -->
     <input id="url" type="text" spellcheck="false"
            placeholder="Search or enter address">
     <!-- #126/#127: quick boxes. The Jira one resolves through the shared text
@@ -963,6 +964,7 @@
         <tr><td>Ctrl+Shift+D</td><td>Detach hotkey tab to a normal tab</td></tr>
         <tr><td>Ctrl+L</td><td>Focus address bar</td></tr>
         <tr><td>Ctrl+R / F5</td><td>Reload</td></tr>
+        <tr><td>Ctrl+Alt+R</td><td>Reader mode: the article without the clutter; again (or Back) returns to the page</td></tr>
         <tr><td>F11</td><td>True fullscreen (hover edges reveal UI)</td></tr>
         <tr><td>Ctrl+B</td><td>Bookmarks panel</td></tr>
         <tr><td>Ctrl+D</td><td>Bookmark / unbookmark this page</td></tr>
@@ -1005,6 +1007,7 @@
   reloadstop.onclick = () => (activeLoading ? webforge.stop() : webforge.reload());
   document.getElementById('home').onclick = () => webforge.goHome(); // #174
   document.getElementById('termbtn').onclick = () => webforge.openTerminal(); // #208
+  document.getElementById('readerbtn').onclick = () => webforge.toggleReader(); // #232
   url.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') { urlEditing = false; webforge.navigate(url.value); url.blur(); }
   });
