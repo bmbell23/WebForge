@@ -30,6 +30,7 @@ const tabnav = require('./tabnav'); // #113/#114 — unit-tested, Electron-free
 const textrules = require('./textrules'); // #100 — ditto
 const taburl = require('./taburl'); // #107 — ditto
 const taborder = require('./taborder'); // #107 — ditto
+const { cleanTabName } = require('./tabname'); // #236 — ditto
 const ctxmenu = require('./ctxmenu'); // #133 — ditto
 const stickytab = require('./stickytab'); // #117 — ditto
 const popuprule = require('./popuprule'); // #125 — ditto
@@ -173,6 +174,7 @@ const lazyTabs = new Map(); // tabId -> { url, title }
 // re-homes the tab but must not drag the active Persona along with it.
 const firstLoad = new Set();
 const lastActiveAt = new Map(); // #79: tabId -> ms, for inactivity expiry
+const customTitles = new Map(); // #236: tabId -> user-chosen name (display only; sync and unread use the page title)
 // #226: tabId -> ms of the last time you actually LOOKED at it. Unlike
 // lastActiveAt it is never set at creation, so a tab synced in the background
 // from the phone can't hijack Ctrl+Tab.
@@ -243,6 +245,7 @@ function sessionSnapshot() {
         hotkey: hotkeyByTab.get(id) || null,
         persona: personaByTab.get(id) || personas.UNASSIGNED, // #25
         lastActiveAt: lastActiveAt.get(id) || Date.now(), // #79
+        customTitle: customTitles.get(id) || null, // #236
       }))
       .filter((t) => t.url),
     active: Math.max(0, kept.indexOf(activeId)),
@@ -255,7 +258,7 @@ function sessionSnapshot() {
 // ride along with the next one, and quit always writes.
 let savedSessionKey = null;
 function sessionKey(snap) {
-  return JSON.stringify([snap.active, snap.tabs.map((t) => [t.url, t.pinned, t.pinHome, t.hotkey, t.persona])]);
+  return JSON.stringify([snap.active, snap.tabs.map((t) => [t.url, t.pinned, t.pinHome, t.hotkey, t.persona, t.customTitle])]); // #236: a rename must reach disk
 }
 function saveSessionSoon() {
   if (locked) return;
@@ -876,11 +879,13 @@ function tabState() {
         : rawUrl.includes('passwords.html') ? 'Saved logins'
         : 'Bookmarks'
       : null;
+    const pageTitle =
+      internal ||
+      (isNew ? 'New tab' : (pending ? pending.title : wc.getTitle()) || rawUrl || 'New tab');
     return {
       id,
-      title:
-        internal ||
-        (isNew ? 'New tab' : (pending ? pending.title : wc.getTitle()) || rawUrl || 'New tab'),
+      title: customTitles.get(id) || pageTitle, // #236: the user's name wins in the sidebar
+      pageTitle, // #236: the real title, shown as the row tooltip
       url: isNew || internal ? '' : rawUrl,
       loading: wc.isLoading(),
       active: id === activeId,
@@ -998,7 +1003,7 @@ function pushStateNow() {
   sendIfChanged('tabs-updated', tabState()); // #216
   sendIfChanged('remote-tabs', remoteTabsForActive()); // #57
   const wc = activeWc();
-  const title = wc?.getTitle();
+  const title = customTitles.get(activeId) || wc?.getTitle(); // #236
   win.setTitle(title ? `${title} — WebForge` : 'WebForge');
   saveSessionSoon();
 }
@@ -1471,6 +1476,7 @@ function closeTab(id, opts = {}) {
   personaByTab.delete(id);
   lazyTabs.delete(id);
   lastActiveAt.delete(id);
+  customTitles.delete(id); // #236
   lastVisitAt.delete(id); // #226
   everPainted.delete(id); // #148
   hiddenAt.delete(id); // #216
@@ -1832,6 +1838,12 @@ function wireChords(wc) {
     }
     if (rawKey.toLowerCase() === 'escape' && modifier.isBare(input)) {
       if (!locked) handleEscape(); // #42 — don't preventDefault: pages use Esc too
+      return;
+    }
+    // #236: F2 renames the active tab, inline in the sidebar.
+    if (rawKey.toLowerCase() === 'f2' && modifier.isBare(input)) {
+      event.preventDefault();
+      if (!locked && activeId != null && alive()) chrome.webContents.send('rename-tab-start', activeId);
       return;
     }
     // #38: Alt+Left/Right — the browser-standard back/forward I never wired.
@@ -2784,6 +2796,8 @@ function onUnlocked() {
         lastActiveAt: t.lastActiveAt, // #79: age survives the restart
       });
       if (id === null) continue;
+      const custom = cleanTabName(t.customTitle); // #236
+      if (custom) customTitles.set(id, custom);
       if (t.pinned) {
         pinnedIds.add(id);
         // #117: fall back to the tab's own URL for pins made before this shipped,
@@ -3320,6 +3334,14 @@ ipcMain.on('find-close', () => closeFind());
 ipcMain.on('stop', () => activeWc()?.stop());
 ipcMain.on('new-tab', () => openNewTab()); // #82
 ipcMain.on('close-tab', (_e, id) => closeTab(id));
+// #236: rename a tab (empty/whitespace clears it back to the page title).
+ipcMain.on('rename-tab', (_e, id, name) => {
+  if (!tabs.has(id)) return;
+  const clean = cleanTabName(name);
+  if (clean) customTitles.set(id, clean);
+  else customTitles.delete(id);
+  pushState();
+});
 // #115: Ctrl+X from any renderer that decided the user was not typing. The
 // editable-field check lives in the preloads, where focus is known exactly.
 ipcMain.on('close-active-tab', () => {
