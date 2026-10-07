@@ -63,6 +63,28 @@ function knownHostsVerdict(text, host, port, keyType, keyBase64) {
   return mismatch ? 'mismatch' : 'unknown';
 }
 
+// #249: known_hosts text without the entry for host:port and this key type,
+// the way `ssh-keygen -R` cleans up before a changed key is re-saved. Only
+// literal names are dropped (a wildcard line also covers other hosts, and the
+// re-saved exact line wins anyway: a match beats a mismatch). On a shared line
+// like "host,1.2.3.4" just that name goes. Hashed and @marker lines are kept.
+function knownHostsWithout(text, host, port, keyType) {
+  const out = [];
+  for (const raw of String(text || '').split(/\r?\n/)) {
+    const line = raw.trim();
+    const f = line.split(/\s+/);
+    if (!line || line.startsWith('#') || f[0].startsWith('@') || f[0].startsWith('|1|') || f.length < 3 || f[1] !== keyType) {
+      out.push(raw);
+      continue;
+    }
+    const names = f[0].split(',');
+    const kept = names.filter((p) => !p || p.startsWith('!') || /[*?]/.test(p) || !hostListMatches(p, host, port));
+    if (kept.length === names.length) out.push(raw);
+    else if (kept.some((p) => p && !p.startsWith('!'))) out.push([kept.join(','), ...f.slice(1)].join(' '));
+  }
+  return out.join('\n');
+}
+
 // The SSH wire format starts with a length-prefixed key type string.
 function keyTypeOf(keyBuf) {
   const n = keyBuf.readUInt32BE(0);
@@ -122,5 +144,5 @@ function holdDecision(input, pick) {
 
 module.exports = {
   parseTarget, knownHostsVerdict, keyTypeOf, fingerprint, osc52Text, keyCandidates, OSC52_MAX_BASE64,
-  knownHostsLine, CTRL_SPACE, holdDecision,
+  knownHostsLine, CTRL_SPACE, holdDecision, knownHostsWithout,
 };
