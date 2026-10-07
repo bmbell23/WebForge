@@ -110,14 +110,15 @@ const INTERNAL_PAGES = {
   neterror: path.join(__dirname, 'ui', 'neterror.html'), // #108
   auth: path.join(__dirname, 'ui', 'auth.html'), // #111
 };
-const fileUrl = (p) => `file://${p.replace(/\\/g, '/')}`;
-const isInternalUrl = (u) =>
-  typeof u === 'string' && Object.values(INTERNAL_PAGES).some((p) => u.startsWith(fileUrl(p)));
+// #319: pathToFileURL, not `file://${path}`. On Windows the hand-built form
+// had two slashes (file://C:/…) and never matched what getURL() reports.
+const { fileUrl, isFileUrlOf } = require('./fileurl');
+const isInternalUrl = (u) => Object.values(INTERNAL_PAGES).some((p) => isFileUrlOf(u, p));
 // #214: a terminal tab. `?host=` connects straight away; without it the page is
 // the host picker. Never synced, saved, or offered to Ctrl+Shift+T.
 const TERMINAL_FILE = path.join(__dirname, 'ui', 'terminal.html');
 const terminalUrl = (target) => fileUrl(TERMINAL_FILE) + (target ? `?host=${encodeURIComponent(target)}` : '');
-const isTerminalUrl = (u) => typeof u === 'string' && u.startsWith(fileUrl(TERMINAL_FILE));
+const isTerminalUrl = (u) => isFileUrlOf(u, TERMINAL_FILE); // #319
 const isTerminalTab = (id) => personaByTab.get(id) === personas.TERMINAL;
 // #214: an app slot's tab (Mattermost, Teams, Outlook): one pinned page that
 // never re-homes, syncs or restores. View tabs = terminal or app slot.
