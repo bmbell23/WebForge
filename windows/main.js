@@ -1348,6 +1348,9 @@ function createTab(url = null, background = false, personaId = null, opts = {}) 
     // #117: pinned tabs are sticky too, and get their home from the pin.
     const home = stickyHomeUrl(id);
     if (!home) return;
+    // Our own pages (the net-error page above all) are not "leaving home": a failed
+    // load swapped in neterror.html and the re-home bounced you to another tab.
+    if (isInternalUrl(navUrl) || isNewTabUrl(navUrl)) return;
     // #78: only enforce across ORIGINS — comparing full URLs livelocked the app.
     // The rule and the reasoning now live in stickytab.js, under test.
     if (!stickytab.shouldRehome(navUrl, home, stickyScope(id))) return; // #311: scope, when set
