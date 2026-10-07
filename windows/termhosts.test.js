@@ -106,4 +106,14 @@ eq(th.removeConnection({ favorites: [], uses: {}, names: {} }, 'c', 'config').hi
 eq(th.removeConnection(pre280, 'a', 'bogus').favorites, ['a', 'b'], 'unknown group changes nothing');
 eq(pre280, snap280, 'input not mutated');
 
+console.log('local shells (#276)');
+eq(th.connectionGroups({ platform: 'win32' }).local, [{ target: 'local:powershell', label: 'PowerShell' }, { target: 'local:cmd', label: 'Command Prompt' }], 'win32 local group');
+eq(th.connectionGroups({ platform: 'darwin' }).local, [{ target: 'local:shell', label: 'Terminal' }], 'darwin local group');
+eq(th.connectionGroups({ platform: 'linux' }).local, [{ target: 'local:shell', label: 'Terminal' }], 'linux local group');
+eq(Object.keys(th.connectionGroups({ platform: 'linux' }))[0], 'local', 'local group comes first');
+eq('local' in th.connectionGroups({}), false, 'no platform, no local group');
+eq(th.validTarget('local:powershell') && th.validTarget('local:shell') && th.validTarget('local:cmd'), true, 'local targets are valid');
+eq(th.validTarget('local:'), false, 'bare local: is not');
+eq(th.validTarget('local:Power Shell'), false, 'junk after local: is not');
+
 console.log(`termhosts:${n} passed`);
