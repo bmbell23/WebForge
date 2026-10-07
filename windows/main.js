@@ -35,6 +35,7 @@ const credentials = require('./credentials');
 const hotkeys = require('./hotkeys');
 const personas = require('./personas'); // #25
 const errorlog = require('./errorlog'); // #75
+const defineterm = require('./defineterm'); // #286
 const logship = require('./logship'); // #171 — Electron-free, ships errorlog to :8013
 const { ensurePreloadRegistration } = require('./preloadshim'); // #21
 const navloop = require('./navloop'); // #238
@@ -1065,6 +1066,8 @@ function contextMenuFor(wc, params) {
   const fromId = [...tabs].find(([, v]) => v.webContents === wc)?.[0];
   const home = personaorder.openerHome(personaByTab.get(fromId), orderedPersonas());
 
+  const defineTerm = selection && !params.isEditable ? defineterm.cleanTerm(selection) : null; // #286
+
   const actions = {
     'link.open': () => openOrFocus(params.linkURL, false, undefined, home),
     'link.openBackground': () => openOrFocus(params.linkURL, true, undefined, home),
@@ -1080,6 +1083,18 @@ function contextMenuFor(wc, params) {
     'selection.copy': () => wc.copy(),
     'selection.search': () =>
       openOrFocus(ENGINES[searchEngine()] + encodeURIComponent(selection), false),
+    // #286: Daphne's page in a foreground tab (same Persona a link would get),
+    // and the term to the sync server for the agent-bus !define trigger.
+    'selection.define': () => {
+      openOrFocus(DICTIONARY_URL + encodeURIComponent(defineTerm), false, undefined, home);
+      fetch(DEFINE_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        // An adult page's address never goes to chat (#176): the word alone is sent.
+        body: JSON.stringify({ term: defineTerm, url: ytdlp.isAdult(wc.getURL()) ? undefined : wc.getURL() }),
+        signal: AbortSignal.timeout(5000),
+      }).catch((err) => errorlog.record('define', err));
+    },
     'edit.undo': () => wc.undo(),
     'edit.redo': () => wc.redo(),
     'edit.cut': () => wc.cut(),
@@ -1104,6 +1119,7 @@ function contextMenuFor(wc, params) {
   const items = ctxmenu.build(params, {
     ruleLabel: hit ? (hit.rule.name ? `Open ${hit.matched} in ${hit.rule.name}` : `Open ${hit.matched}`) : null,
     engineName: ENGINE_NAMES[searchEngine()] || 'the web',
+    defineTerm, // #286
     canGoBack: nav.canGoBack(),
     canGoForward: nav.canGoForward(),
     pageYtdlp: ytdlp.downloadable(wc.getURL()), // #156
@@ -2314,6 +2330,8 @@ const SYNC_URL = 'http://100.69.184.113:8013/store/bookmarks';
 const PERSONA_SYNC_URL = 'http://100.69.184.113:8013/store/personas'; // #88
 const TABS_SYNC_URL = 'http://100.69.184.113:8013/store/tabs'; // #57
 const ADULT_SYNC_URL = 'http://100.69.184.113:8013/store/adult'; // #203
+const DEFINE_URL = 'http://100.69.184.113:8013/define'; // #286: term -> agent-bus !define trigger
+const DICTIONARY_URL = 'http://100.69.184.113:8098/'; // #286: Daphne's dictionary, term appended
 let syncTimer = null;
 let syncing = false;
 

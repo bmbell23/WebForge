@@ -205,4 +205,27 @@ test('a web page offers video and all-images, after Download content', () => {
   assert.deepStrictEqual(ids(build({}, { pageStash: false })), ALWAYS);
 });
 
+console.log('define (#286)');
+
+test('a definable selection offers Define right after Search', () => {
+  const items = build({ selectionText: 'ephemeral' }, { defineTerm: 'ephemeral' });
+  assert.strictEqual(find(items, 'selection.define').label, 'Define "ephemeral"');
+  const got = ids(items);
+  assert.strictEqual(got.indexOf('selection.define'), got.indexOf('selection.search') + 1);
+});
+
+test('a long sentence has no Define item (main passes no term)', () => {
+  const items = build({ selectionText: 'The quick brown fox jumps over the lazy dog, again and again.' }, {});
+  assert.ok(!ids(items).includes('selection.define'));
+});
+
+test('a selection in a text box has no Define item', () => {
+  const items = build({ selectionText: 'ephemeral', isEditable: true }, { defineTerm: 'ephemeral' });
+  assert.ok(!ids(items).includes('selection.define'));
+});
+
+test('no selection has no Define item', () => {
+  assert.ok(!ids(build({}, { defineTerm: 'ephemeral' })).includes('selection.define'));
+});
+
 console.log(`\n${run} tests passed`);

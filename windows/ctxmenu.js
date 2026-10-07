@@ -7,7 +7,8 @@
 //
 // `params` is Electron's context-menu payload; `ctx` supplies the two things
 // only main knows — whether the selection matches a text rule (#100), and the
-// current search engine's name.
+// current search engine's name. #286: `defineTerm` is the cleaned selection
+// when it is definable.
 
 const MAX_LABEL = 30;
 
@@ -86,6 +87,9 @@ function build(params = {}, ctx = {}) {
       { id: 'selection.copy', label: 'Copy', enabled: flags.canCopy !== false },
       { id: 'selection.search', label: `Search ${ctx.engineName || 'the web'} for "${shorten(selection)}"` }
     );
+    // #286: main passes the CLEANED term (defineterm.cleanTerm) only when the
+    // selection is a word or short phrase, so a sentence never offers Define.
+    if (ctx.defineTerm) items.push({ id: 'selection.define', label: `Define "${ctx.defineTerm}"` });
   }
 
   if (params.isEditable) {

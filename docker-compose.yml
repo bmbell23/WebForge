@@ -23,3 +23,5 @@ services:
     volumes:
       - ./server:/app:ro
       - ./data:/data
+      # #286: agent-bus thread 025, the !define drop folder (only this folder)
+      - /home/brandon/projects/agent-bus/data/triggers/webforge:/triggers

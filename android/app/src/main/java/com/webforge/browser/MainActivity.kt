@@ -8,6 +8,7 @@ import android.net.http.SslError
 import android.os.Build
 import android.os.Bundle
 import android.os.Message
+import android.view.ActionMode
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
@@ -210,6 +211,37 @@ class MainActivity : Activity() {
             }
         }
         dialog.show()
+    }
+
+    // --- #286: "Define" in the text-selection menu ---
+    override fun onActionModeStarted(mode: ActionMode) {
+        super.onActionModeStarted(mode)
+        val tab = active ?: return
+        // Only the page's own selection menu (floating), not an EditText's or find bar's.
+        if (mode.type != ActionMode.TYPE_FLOATING || !tab.webView.hasFocus()) return
+        mode.menu.add(0, View.generateViewId(), 100, "Define").setOnMenuItemClickListener {
+            defineSelection(tab, mode)
+            true
+        }
+    }
+
+    private fun defineSelection(tab: Tab, mode: ActionMode) {
+        // An adult page's address never goes to chat (#176): the word alone is sent.
+        val pageUrl = if (isAdultTab(tab)) null else tab.url
+        tab.webView.evaluateJavascript("window.getSelection().toString()") { raw ->
+            val selected = try {
+                org.json.JSONTokener(raw ?: "null").nextValue() as? String
+            } catch (e: Exception) { null }
+            val term = DefineTerm.clean(selected)
+            if (term == null) {
+                android.widget.Toast.makeText(this, "Select a single word or short phrase to define", android.widget.Toast.LENGTH_SHORT).show()
+            } else {
+                // Same Persona as the page it was selected on (a URL rule may still claim it).
+                newTab(DefineTerm.dictionaryUrl(term), persona = tab.persona)
+                DefineTerm.send(term, pageUrl)
+            }
+            mode.finish()
+        }
     }
 
     // --- #181: long-press menu on images ---
