@@ -3,7 +3,8 @@
 // Electron 34 the call threw a TypeError before any webRequest listener was
 // attached, so ad blocking silently did nothing at all. Electron 34 has the
 // older `setPreloads`/`getPreloads` pair; this fills the newer API in on top of
-// it. A no-op once Electron is bumped past 34.
+// it. A no-op on Electron 35+ (we are on 44, where the native API exists; the
+// deprecated setPreloads/getPreloads fallback below is dead code kept only as a guard).
 
 /** Give `ses` registerPreloadScript/unregisterPreloadScript if it lacks them. Returns true if shimmed. */
 function ensurePreloadRegistration(ses) {
