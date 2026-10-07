@@ -2143,7 +2143,20 @@ function createWindow() {
   });
   wireLeaderShortcut(); // #41
   // #214: terminal tabs' IPC, once. Links from a session open as browser tabs.
-  terminalMain.installIpc({ openUrl: (url) => openExternalUrl(url), onConnectionsChanged: pushConnections });
+  terminalMain.installIpc({
+    openUrl: (url) => openExternalUrl(url),
+    onConnectionsChanged: pushConnections,
+    // #262: terminal passwords live in the vault with the website logins.
+    passwords: {
+      get: (user, host, port) => (locked ? null : credentials.sshPassword(user, host, port)),
+      save: (user, host, port, pw) => {
+        if (locked) return false;
+        const ok = credentials.saveSshPassword(user, host, port, pw);
+        if (ok) pushCreds();
+        return ok;
+      },
+    },
+  });
   win.on('blur', () => closeStrayNewTabs()); // #82: Alt+Tab away disposes of it
   win.on('blur', () => terminalMain.clearAllHolds()); // #214: a held Ctrl+Space doesn't survive leaving
   // #176: leaving the window closes every adult tab — alt-tab, clicking another
