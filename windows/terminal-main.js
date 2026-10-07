@@ -61,7 +61,9 @@ function sshConfigText(home = os.homedir()) {
 
 // `say(kind, text)` surfaces notices in the terminal; kind is info | warn | error.
 // `ask(question, cb)` asks a y/N question in the terminal (#214's host-key prompt).
-function buildConfig(target, say, ask = (_q, cb) => cb(false), askText = (_q, _echo, cb) => cb(null)) {
+// #262: `pw` (optional) is filled with { user, host, port, saved, typed } so the
+// caller can save a typed password once the login succeeds.
+function buildConfig(target, say, ask = (_q, cb) => cb(false), askText = (_q, _echo, cb) => cb(null), pw = {}) {
   const home = os.homedir();
   const t = term.parseTarget(target);
   // #214: a ~/.ssh/config alias resolves the way OpenSSH would resolve it.
@@ -131,6 +133,20 @@ function buildConfig(target, say, ask = (_q, cb) => cb(false), askText = (_q, _e
   // #256: OpenSSH's order: agent, key, then the server's own prompts
   // (keyboard-interactive, usually "Password:"), then a plain password.
   const user = config.username;
+  Object.assign(pw, { user, host, port, typed: null, savedTried: false });
+  // #262: a saved password answers the first password prompt; a typed one is
+  // remembered so it can be saved once the login succeeds.
+  const password = (question, cb) => {
+    if (pw.saved && !pw.savedTried) {
+      pw.savedTried = true;
+      say('info', 'using saved password');
+      return cb(pw.saved);
+    }
+    askText(question, false, (text) => {
+      if (text !== null) pw.typed = text;
+      cb(text);
+    });
+  };
   const methods = [];
   if (agent) methods.push({ type: 'agent', username: user, agent });
   if (privateKey) methods.push({ type: 'publickey', username: user, key: privateKey });
@@ -140,6 +156,10 @@ function buildConfig(target, say, ask = (_q, cb) => cb(false), askText = (_q, _e
     prompt: (_name, instructions, _lang, prompts, finish) => {
       if (instructions) say('info', instructions);
       const answers = [];
+      // #262: a lone hidden prompt is the password.
+      if (prompts.length === 1 && !prompts[0].echo) {
+        return password(prompts[0].prompt || 'Password: ', (text) => finish(text === null ? [] : [text]));
+      }
       const next = () => {
         if (answers.length === prompts.length) return finish(answers);
         const p = prompts[answers.length];
@@ -154,11 +174,18 @@ function buildConfig(target, say, ask = (_q, cb) => cb(false), askText = (_q, _e
   });
   methods.push('password');
   config.authHandler = (methodsLeft, _partial, cb) => {
-    const m = methods.shift();
+    // Skip methods the server has said it won't take (methodsLeft is null on the
+    // first call, before the server has listed any).
+    const allowed = (x) => !methodsLeft || methodsLeft.includes(x === 'password' ? 'password' : x.type === 'agent' ? 'publickey' : x.type);
+    let m = methods.shift();
+    while (m && !allowed(m)) m = methods.shift();
     if (!m) return cb(false);
+    // #262: if this attempt will spend the saved password, queue the same method
+    // again so a wrong saved password falls back to asking you.
+    const pwMethod = m === 'password' || m.type === 'keyboard-interactive';
+    if (pwMethod && pw.saved && !pw.savedTried) methods.unshift(m);
     if (m !== 'password') return cb(m);
-    if (methodsLeft && !methodsLeft.includes('password')) return cb(false);
-    askText(`${user}@${host}'s password: `, false, (text) => (text === null ? cb(false) : cb({ type: 'password', username: user, password: text })));
+    password(`${user}@${host}'s password: `, (text) => (text === null ? cb(false) : cb({ type: 'password', username: user, password: text })));
     return undefined;
   };
   return config;
@@ -166,8 +193,9 @@ function buildConfig(target, say, ask = (_q, cb) => cb(false), askText = (_q, _e
 
 // Opens a shell. Hooks: onData(Buffer), onStatus(kind, text), onClose(),
 // onReady(), ask(question, cb). Returns { write, resize, end }.
-function openSession(target, { cols, rows, onData, onStatus, onClose, onReady = () => {}, ask, askText }) {
+function openSession(target, { cols, rows, onData, onStatus, onClose, onReady = () => {}, ask, askText, passwords }) {
   const conn = new (ssh2().Client)();
+  const pw = {}; // #262: filled by buildConfig
   let stream = null;
   let closed = false;
   const close = () => {
@@ -176,6 +204,12 @@ function openSession(target, { cols, rows, onData, onStatus, onClose, onReady = 
     onClose();
   };
   conn.on('ready', () => {
+    // #262: a password typed for this login worked: remember it (MobaXterm-style).
+    if (pw.typed && passwords) {
+      try {
+        if (passwords.save(pw.user, pw.host, pw.port, pw.typed)) onStatus('info', 'password saved');
+      } catch {}
+    }
     conn.shell({ term: 'xterm-256color', cols, rows }, { env: { COLORTERM: 'truecolor' } }, (err, s) => {
       if (err) {
         onStatus('error', `could not start a shell: ${err.message}`);
@@ -200,7 +234,11 @@ function openSession(target, { cols, rows, onData, onStatus, onClose, onReady = 
   conn.on('close', close);
   onStatus('info', `connecting to ${target}…`);
   try {
-    conn.connect(buildConfig(target, onStatus, ask, askText));
+    // buildConfig resolves user/host/port into pw; the saved password is looked
+    // up from those before connecting (#262).
+    const config = buildConfig(target, onStatus, ask, askText, pw);
+    pw.saved = passwords ? passwords.get(pw.user, pw.host, pw.port) : null;
+    conn.connect(config);
   } catch (err) {
     onStatus('error', `connection error: ${err.message}`);
     setImmediate(close); // after the caller has the handle, so its onClose can recognise it
@@ -291,6 +329,7 @@ function connect(st) {
   // #216: one IPC message per ~8 ms of ssh output, not one per ssh2 chunk.
   const batch = createBatcher((buf) => send(st, 'terminal:data', buf));
   mine = openSession(st.target, {
+    passwords: hooks.passwords, // #262: the vault, via main (null while locked)
     ...st.size,
     onData: (buf) => batch.push(buf),
     onStatus: (kind, text) => {

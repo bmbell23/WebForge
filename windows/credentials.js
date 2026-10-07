@@ -121,13 +121,23 @@ function list() {
 // With an id: update that entry; without: add a new one. Origin is normalized
 // to a real origin so entries stay comparable; #136's matcher is tolerant of
 // looser values but the store should not be the thing producing them.
+// #262: terminal logins are stored as ssh://host:port. URL().origin is "null"
+// for non-web schemes, so they're normalized here; credmatch only ever matches
+// http(s), so website autofill never offers one.
+const sshOrigin = (host, port) => `ssh://${String(host || '').toLowerCase()}:${Number(port) || 22}`;
+const SSH_ORIGIN = /^ssh:\/\/[a-z0-9._\-[\]:]+:\d{1,5}$/;
+
 function upsert({ id, origin, username, password }) {
   if (!vault.isUnlocked()) return false;
   let normOrigin;
-  try {
-    normOrigin = new URL(origin).origin;
-  } catch {
-    return false;
+  if (SSH_ORIGIN.test(String(origin || '').toLowerCase())) {
+    normOrigin = String(origin).toLowerCase();
+  } else {
+    try {
+      normOrigin = new URL(origin).origin;
+    } catch {
+      return false;
+    }
   }
   if (!password) return false;
   const creds = load();
@@ -151,4 +161,21 @@ function removeById(id) {
   return save(creds);
 }
 
-module.exports = { count, importCsv, list, upsert, removeById };
+// #262: the saved password for user@host:port in the terminal, or null.
+function sshPassword(user, host, port) {
+  if (!vault.isUnlocked()) return null;
+  const o = sshOrigin(host, port);
+  const hit = load().find((c) => c.origin === o && c.username === String(user || ''));
+  return hit ? hit.password : null;
+}
+
+// #262: save (or replace) it after a login with it succeeded.
+function saveSshPassword(user, host, port, password) {
+  if (!vault.isUnlocked() || !password) return false;
+  const o = sshOrigin(host, port);
+  const existing = load().find((c) => c.origin === o && c.username === String(user || ''));
+  if (existing && existing.password === password) return false; // nothing new to say
+  return upsert({ id: existing?.id, origin: o, username: String(user || ''), password });
+}
+
+module.exports = { count, importCsv, list, upsert, removeById, sshOrigin, sshPassword, saveSshPassword };
