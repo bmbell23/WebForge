@@ -90,4 +90,20 @@ eq(th.connectionGroups({ favorites: ['a', 'b'], names: { a: 'Alpha', z: 'Stray' 
 eq(th.connectionGroups({ favorites: ['root@pve01'], uses: { pve01: 3, 'brandon@pve01': 2 }, configHosts: ['pve01', 'dh'] }),
   { favorites: ['root@pve01'], frequent: ['brandon@pve01'], config: ['dh'], names: {} },
   '#241: a Favorite hides its bare host, not another user on it');
+// #280: delete connections
+eq(th.connectionGroups({ favorites: ['a'], uses: { f1: 3, f2: 2 }, configHosts: ['c1', 'c2'], hidden: ['f1', 'c2'] }),
+  { favorites: ['a'], frequent: ['f2'], config: ['c1'], names: {} }, 'hidden leaves frequent and config');
+eq(th.connectionGroups({ favorites: ['a'], hidden: ['a'] }).favorites, ['a'], 'favorites never hidden');
+eq(th.connectionGroups({ favorites: ['a'], uses: { f: 1 } }).frequent, ['f'], 'hidden defaults to none');
+const pre280 = { favorites: ['a', 'b'], uses: { a: 2, f: 1 }, names: { a: 'Alpha' }, hidden: ['h'] };
+const snap280 = JSON.parse(JSON.stringify(pre280));
+const rf280 = th.removeConnection(pre280, 'a', 'favorites');
+eq(rf280, { favorites: ['b'], uses: { f: 1 }, names: {}, hidden: ['h'] }, 'favorites: drops star, name and uses');
+eq(th.removeConnection(pre280, 'f', 'frequent'), { favorites: ['a', 'b'], uses: { a: 2 }, names: { a: 'Alpha' }, hidden: ['h'] }, 'frequent: forgets uses only');
+eq(th.removeConnection(pre280, 'c', 'config').hidden, ['h', 'c'], 'config: hides');
+eq(th.removeConnection(pre280, 'h', 'config').hidden, ['h'], 'config: hidden deduped');
+eq(th.removeConnection({ favorites: [], uses: {}, names: {} }, 'c', 'config').hidden, ['c'], 'hidden created when missing');
+eq(th.removeConnection(pre280, 'a', 'bogus').favorites, ['a', 'b'], 'unknown group changes nothing');
+eq(pre280, snap280, 'input not mutated');
+
 console.log(`termhosts:${n} passed`);

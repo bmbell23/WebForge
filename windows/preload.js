@@ -46,6 +46,7 @@ contextBridge.exposeInMainWorld('webforge', {
   openConnection: (target) => ipcRenderer.send('open-connection', target),
   favoriteConnection: (target) => ipcRenderer.send('favorite-connection', target),
   editConnection: (target, fields) => ipcRenderer.invoke('edit-connection', { target, fields }), // #228
+  deleteConnection: (target, group) => ipcRenderer.send('delete-connection', { target, group }), // #280
   getConnections: () => ipcRenderer.send('get-connections'),
   onConnections: (cb) => ipcRenderer.on('terminal-connections', (_e, g) => cb(g)),
   // #126: ticket-key box — same channel Ctrl+J uses (#100).

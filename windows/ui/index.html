@@ -1503,7 +1503,14 @@
           className: 'rm', textContent: '✎', title: fav ? 'Edit this favorite' : 'Edit (saves it as a Favorite)',
         });
         ed.onclick = (e) => { e.stopPropagation(); editRow(t, label, el); };
-        el.append(name, ed, st);
+        // #280: remove the row from its group; main pushes the new list back.
+        const group = fav ? 'favorites' : list === g.frequent ? 'frequent' : 'config';
+        const del = Object.assign(document.createElement('button'), {
+          className: 'rm', textContent: '✕',
+          title: fav ? 'Remove from Favorites' : group === 'frequent' ? 'Forget this host' : 'Hide this ssh-config host',
+        });
+        del.onclick = (e) => { e.stopPropagation(); webforge.deleteConnection(t, group); };
+        el.append(name, ed, st, del);
         el.onclick = () => webforge.openConnection(t);
         el.onkeydown = (e) => { if (e.key === 'Enter' && e.target === el) webforge.openConnection(t); };
         nodes.push(el);

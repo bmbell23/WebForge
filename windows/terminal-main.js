@@ -263,11 +263,12 @@ function loadHosts() {
     try {
       hostsCache = JSON.parse(fs.readFileSync(hostsFile(), 'utf8'));
     } catch {
-      hostsCache = { favorites: [DEFAULT_TARGET], uses: {}, names: {} }; // forge is one click away on day one
+      hostsCache = { favorites: [DEFAULT_TARGET], uses: {}, names: {}, hidden: [] }; // forge is one click away on day one
     }
     if (!Array.isArray(hostsCache.favorites)) hostsCache.favorites = [];
     if (!hostsCache.uses || typeof hostsCache.uses !== 'object') hostsCache.uses = {};
     if (!hostsCache.names || typeof hostsCache.names !== 'object' || Array.isArray(hostsCache.names)) hostsCache.names = {}; // #228
+    if (!Array.isArray(hostsCache.hidden)) hostsCache.hidden = []; // #280: ssh-config hosts the user removed
   }
   return hostsCache;
 }
@@ -279,7 +280,15 @@ function saveHosts() {
 function connections() {
   const h = loadHosts();
   const cfg = termhosts.configHosts(termhosts.parseSshConfig(sshConfigText()));
-  return termhosts.connectionGroups({ favorites: h.favorites, uses: h.uses, names: h.names, configHosts: cfg });
+  return termhosts.connectionGroups({ favorites: h.favorites, uses: h.uses, names: h.names, configHosts: cfg, hidden: h.hidden });
+}
+// #280: remove a connection from its group (see termhosts.removeConnection).
+function deleteConnection(target, group) {
+  const t = String(target || '').trim();
+  if (!t || !['favorites', 'frequent', 'config'].includes(group)) return false;
+  hostsCache = termhosts.removeConnection(loadHosts(), t, group);
+  saveHosts();
+  return true;
 }
 function toggleFavorite(target) {
   const t = String(target || '').trim();
@@ -287,6 +296,7 @@ function toggleFavorite(target) {
   const h = loadHosts();
   h.favorites = h.favorites.includes(t) ? h.favorites.filter((f) => f !== t) : [...h.favorites, t];
   if (!h.favorites.includes(t)) delete h.names[t]; // #228: an unstarred host forgets its name
+  else h.hidden = h.hidden.filter((x) => x !== t); // #280: starring un-hides
   saveHosts();
 }
 // #228: edit a Favorite's name / user / host / port. Returns { ok, error? , target? }.
@@ -297,7 +307,8 @@ function editFavorite(oldTarget, fields) {
   const base = h.favorites.includes(old) || !termhosts.validTarget(old) ? h : { ...h, favorites: [...h.favorites, old] };
   const r = termhosts.renameFavorite(base, old, fields || {});
   if (!r.ok) return { ok: false, error: r.error };
-  hostsCache = r.hosts;
+  // #280: an edited host is a Favorite now, so it is no longer hidden.
+  hostsCache = { ...r.hosts, hidden: (r.hosts.hidden || []).filter((x) => x !== old && x !== r.target) };
   saveHosts();
   return { ok: true, target: r.target };
 }
@@ -507,10 +518,17 @@ function installIpc(h) {
     if (r.ok) hooks.onConnectionsChanged?.();
     return r;
   });
+  // #280: remove a connection from the picker.
+  ipcMain.handle('terminal:delete-connection', (e, { target, group } = {}) => {
+    if (!stateFor(e)) return { ok: false, error: 'Not available here.' };
+    const ok = deleteConnection(target, group);
+    if (ok) hooks.onConnectionsChanged?.();
+    return { ok };
+  });
 }
 
 module.exports = {
   openSession, buildConfig, DEFAULT_TARGET,
   attach, installIpc, isTerminal, isPicker, holding, setHold, clearHold, clearAllHolds, passHeldKey, passDoublePrefix,
-  connections, toggleFavorite, editFavorite, targetOf,
+  connections, toggleFavorite, editFavorite, deleteConnection, targetOf,
 };
