@@ -247,12 +247,20 @@ function sortTabOrder() {
 let saveSessionTimer = null;
 function sessionSnapshot() {
   // #176: adult tabs are never written to the session, so a restart can't bring one back.
-  // #214: terminal sessions don't restore. #221: app slot tabs do, now that a slot holds several.
-  const kept = tabOrder.filter((id) => !isAdultTab(id) && !isTerminalTab(id));
+  // #221: app slot tabs restore, now that a slot holds several.
+  // #272: terminal tabs restore too, as their host: updates restart the app
+  // several times a day and each restart used to drop every one. A bare host
+  // picker (no host chosen yet) is not worth bringing back.
+  const termUrl = (id) => {
+    if (lazyTabs.has(id)) return lazyTabs.get(id).url;
+    const target = terminalMain.targetOf(tabs.get(id).webContents);
+    return target ? terminalUrl(target) : null;
+  };
+  const kept = tabOrder.filter((id) => !isAdultTab(id) && (!isTerminalTab(id) || termUrl(id)));
   return {
     tabs: kept
       .map((id) => ({
-        url: realUrl(id, lazyTabs.get(id)?.url || tabs.get(id).webContents.getURL()), // #232: never a reader data: URL
+        url: isTerminalTab(id) ? termUrl(id) : realUrl(id, lazyTabs.get(id)?.url || tabs.get(id).webContents.getURL()), // #232: never a reader data: URL
         title: lazyTabs.get(id)?.title || tabs.get(id).webContents.getTitle(), // #78
         pinned: pinnedIds.has(id),
         pinHome: pinnedHome.get(id) || null, // #117: or stickiness dies on restart
