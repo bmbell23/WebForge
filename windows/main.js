@@ -2027,6 +2027,12 @@ function wireChords(wc) {
     } else if (key === 'f4') {
       event.preventDefault();
       closeTab(activeId);
+    } else if (input.shift && (key === 'arrowdown' || key === 'arrowup')) {
+      // #274: Ctrl+Shift+Up/Down step through the Persona's tabs from ANY page,
+      // text box or not. #247 yielded to text fields, and the app slots keep one
+      // focused nearly all the time, so it almost never fired.
+      event.preventDefault();
+      cycleTab(key === 'arrowdown' ? 1 : -1);
     } else if (key === 'pagedown') {
       event.preventDefault();
       cycleTab(1);
