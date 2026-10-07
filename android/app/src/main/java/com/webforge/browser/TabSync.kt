@@ -6,8 +6,11 @@ import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 
-data class RemoteTab(val title: String, val url: String)
-data class RemoteDevice(val name: String, val tabs: List<RemoteTab>)
+// #298: another device's open tab, and one device's worth of them for the
+// "From other devices" list (all Personas flattened; `at` is when it was opened).
+data class OtherTab(val title: String, val url: String, val at: Long)
+data class DeviceFacts(val name: String, val at: Long, val open: List<OtherTab>)
+data class OtherDeviceGroup(val device: String, val at: Long, val tabs: List<OtherTab>)
 
 /**
  * Cross-device tabs (#57), phase 1.
@@ -21,13 +24,16 @@ data class RemoteDevice(val name: String, val tabs: List<RemoteTab>)
  */
 object TabSync {
     private const val URL_STR = "http://100.69.184.113:8013/store/tabs"
-    private var devices: Map<String, Map<String, List<RemoteTab>>> = emptyMap()
-    private var names: Map<String, String> = emptyMap()
-    // #57 phase 2: merged facts per persona — open[url]=(title, at, device),
-    // closed[url]=at. #95: REBUILT from scratch on every sync. These used to
-    // accumulate forever, so a URL that had once been open was re-adopted on
-    // every cycle long after every device had stopped publishing it.
-    var mergedOpen: MutableMap<String, MutableMap<String, Triple<String, Long, String>>> = HashMap()
+    // #298: a device silent this long is forgotten; close facts keep their own TTL.
+    // Mirrors windows/tabsync.js — the two must agree.
+    const val STALE_MS = 3L * 24 * 3600 * 1000
+    const val TOMBSTONE_TTL = 30L * 24 * 3600 * 1000
+
+    // #298: other devices' open tabs, kept only to be LISTED. This device no
+    // longer adopts them (it used to carry the union of every device's tabs).
+    private var otherDevices: Map<String, DeviceFacts> = emptyMap()
+    // #57 phase 2: merged close facts per persona — closed[url]=at.
+    // #95: REBUILT from scratch on every sync. These used to accumulate forever.
     var mergedClosed: MutableMap<String, MutableMap<String, Long>> = HashMap()
     private val tombstones = HashMap<String, Long>() // url -> when WE closed it
 
@@ -70,12 +76,49 @@ object TabSync {
         return id
     }
 
-    /** Other devices' tabs in [personaId]. */
-    fun remoteFor(personaId: String): List<RemoteDevice> =
-        devices.mapNotNull { (id, byPersona) ->
-            val list = byPersona[personaId].orEmpty()
-            if (list.isEmpty()) null else RemoteDevice(names[id] ?: id, list)
+    /** #298: ids of OTHER devices silent for more than [maxAgeMs]; [me] is never stale. */
+    fun staleDeviceIds(ats: Map<String, Long>, now: Long, me: String, maxAgeMs: Long = STALE_MS): Set<String> =
+        ats.filter { (id, at) -> id != me && now - at > maxAgeMs }.keys
+
+    /**
+     * #298: the close facts a silent device keeps. They live inside its entry and a
+     * live device that was offline may not have applied them yet, so they stay for
+     * their normal TTL; its open facts are what get shed.
+     */
+    fun liveClosed(closed: Map<String, Long>, now: Long): Map<String, Long> =
+        closed.filter { now - it.value <= TOMBSTONE_TTL }
+
+    /**
+     * #298: the "From other devices" list — groups and tabs newest first. Skips this
+     * device, silent devices (when [now] is given), adult URLs and URLs already open
+     * here (canonical compare, #152). Same-named devices merge; a URL lists once.
+     */
+    fun otherDeviceTabs(
+        devices: Map<String, DeviceFacts>, me: String, openUrls: List<String>,
+        isAdult: (String) -> Boolean, now: Long? = null, maxAgeMs: Long = STALE_MS
+    ): List<OtherDeviceGroup> {
+        val open = openUrls.map { TabUrl.canonical(it) }.toSet()
+        val groups = LinkedHashMap<String, LinkedHashMap<String, OtherTab>>()
+        for ((id, dev) in devices) {
+            if (id == me) continue
+            if (now != null && now - dev.at > maxAgeMs) continue
+            for (t in dev.open) {
+                val key = TabUrl.canonical(t.url)
+                if (key in open || isAdult(t.url)) continue
+                val g = groups.getOrPut(dev.name) { LinkedHashMap() }
+                val prev = g[key]
+                if (prev == null || t.at > prev.at) g[key] = t
+            }
         }
+        return groups.map { (name, byUrl) ->
+            val tabs = byUrl.values.sortedByDescending { it.at }
+            OtherDeviceGroup(name, tabs.first().at, tabs)
+        }.sortedByDescending { it.at }
+    }
+
+    /** #298: what this device would list right now. */
+    fun otherDeviceList(c: Context, openUrls: List<String>, isAdult: (String) -> Boolean): List<OtherDeviceGroup> =
+        otherDeviceTabs(otherDevices, deviceId(c), openUrls, isAdult, System.currentTimeMillis())
 
     /**
      * Publish [local] (personaId -> tabs) and refresh what other devices show.
@@ -94,29 +137,27 @@ object TabSync {
                 val root = JSONObject(body).optJSONObject("data") ?: JSONObject()
                 val devs = root.optJSONObject("devices") ?: JSONObject()
 
-                // #95: merge facts from EVERY device, this one included — our own
-                // tombstones have to be in the merged view or we re-adopt the tab
-                // we just closed. Only the *display* list ("On Windows") skips us.
-                val parsedDevices = HashMap<String, Map<String, List<RemoteTab>>>()
-                val parsedNames = HashMap<String, String>()
-                val open = HashMap<String, MutableMap<String, Triple<String, Long, String>>>()
+                // #95: merge close facts from EVERY device, this one included — our own
+                // tombstones have to be in the merged view or we re-open the tab we
+                // just closed. #298: open facts only feed the display list, and only
+                // for OTHER devices that are still live.
+                val now = System.currentTimeMillis()
+                val ats = HashMap<String, Long>()
+                for (id in devs.keys()) ats[id] = devs.optJSONObject(id)?.optLong("at", 0) ?: 0L
+                val stale = staleDeviceIds(ats, now, me)
+                val parsed = HashMap<String, DeviceFacts>()
                 val closed = HashMap<String, MutableMap<String, Long>>()
                 for (id in devs.keys()) {
                     val d = devs.optJSONObject(id) ?: continue
-                    val byPersona = HashMap<String, List<RemoteTab>>()
+                    val tabsOf = ArrayList<OtherTab>()
                     val ps = d.optJSONObject("personas") ?: JSONObject()
                     for (pid in ps.keys()) {
                         val block = ps.optJSONObject(pid) ?: continue
-                        val openObj = block.optJSONObject("open") ?: JSONObject()
-                        val list = ArrayList<RemoteTab>()
-                        for (u in openObj.keys()) {
-                            val o = openObj.optJSONObject(u) ?: continue
-                            val title = o.optString("title", u)
-                            list.add(RemoteTab(title, u))
-                            val m = open.getOrPut(pid) { HashMap() }
-                            val at = o.optLong("at", 0)
-                            if (at > (m[u]?.second ?: 0)) {
-                                m[u] = Triple(title, at, o.optString("dev", id))
+                        if (id != me && id !in stale) {
+                            val openObj = block.optJSONObject("open") ?: JSONObject()
+                            for (u in openObj.keys()) {
+                                val o = openObj.optJSONObject(u) ?: continue
+                                tabsOf.add(OtherTab(o.optString("title", u), u, o.optLong("at", 0)))
                             }
                         }
                         val closedObj = block.optJSONObject("closed") ?: JSONObject()
@@ -125,17 +166,31 @@ object TabSync {
                             val at = closedObj.optLong(u, 0)
                             if (at > (m[u] ?: 0)) m[u] = at
                         }
-                        byPersona[pid] = list
                     }
-                    if (id != me) {
-                        parsedNames[id] = d.optString("name", id)
-                        parsedDevices[id] = byPersona
-                    }
+                    if (id != me && id !in stale) parsed[id] = DeviceFacts(d.optString("name", id), ats[id] ?: 0L, tabsOf)
                 }
-                mergedOpen = open
                 mergedClosed = closed
-                devices = parsedDevices
-                names = parsedNames
+                otherDevices = parsed
+
+                // #298: shed silent devices from what we write back — open facts go,
+                // close facts inside their TTL stay, and an entry with none is dropped.
+                for (id in stale) {
+                    val d = devs.optJSONObject(id) ?: continue
+                    val ps = d.optJSONObject("personas") ?: JSONObject()
+                    val kept = JSONObject()
+                    for (pid in ps.keys()) {
+                        val co = ps.optJSONObject(pid)?.optJSONObject("closed") ?: continue
+                        val cm = HashMap<String, Long>()
+                        for (u in co.keys()) cm[u] = co.optLong(u, 0)
+                        val live = liveClosed(cm, now)
+                        if (live.isNotEmpty()) {
+                            val lo = JSONObject()
+                            for ((u, t) in live) lo.put(u, t)
+                            kept.put(pid, JSONObject().put("closed", lo))
+                        }
+                    }
+                    if (kept.length() == 0) devs.remove(id) else d.put("personas", kept)
+                }
 
                 // Publish ours alongside, leaving other devices' entries intact.
                 // Publish facts: what we have open (with when) and what we closed.

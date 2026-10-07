@@ -1001,50 +1001,9 @@ class MainActivity : Activity() {
             for (i in doomed.sortedDescending()) closeTab(i, remote = true)
         }
 
-        // #94: adopt across EVERY Persona, not just the active one — otherwise
-        // the desktop's other workspaces never appear. A Persona id this device
-        // doesn't know yet (definitions still converging) falls back to
-        // Unassigned so the tabs are at least visible rather than silently lost.
-        val known = Personas.all(this).map { it.id }.toSet()
-        val me = TabSync.deviceId(this)
-        for ((remotePid, open) in TabSync.mergedOpen) {
-            val target = if (remotePid in known) remotePid else Personas.UNASSIGNED
-            for ((url, info) in open) {
-                val (title, at, dev) = info
-                if (dev == me) continue                  // #95: our own echo
-                if (YtDlp.isAdult(YtDlp.sites(this), url)) continue // #176: an older build may still send one
-                if (TabSync.closedAt(url) > at) continue // closed more recently anywhere
-                // #152: CANONICAL comparison. This line used to be
-                // `tabs.any { it.url == url }` — exact string equality — so the
-                // same page arriving with a trailing slash, a fragment or a
-                // rotated query param was adopted as a brand-new tab on every
-                // sync cycle. That produced 16 copies of Charles Schwab.
-                if (TabUrl.indexOf(tabs.map { it.url }, url) >= 0) continue
-                // #152: and a ceiling, because a bug that creates tabs faster
-                // than they expire should never again be able to consume the
-                // device. Oldest-first, never touching pinned or quick tabs.
-                if (tabs.size >= MAX_TABS) {
-                    val victim = tabs.indices
-                        .filter { it != activeIndex && !tabs[it].pinned && !tabs[it].quick }
-                        .minByOrNull { tabs[it].lastActiveAt }
-                    if (victim == null) continue // nothing evictable — stop adopting
-                    closeTab(victim, remote = true)
-                }
-                val t = newTab(url, background = true, lazy = true)
-                // #96: match locally first — don't trust the other device's
-                // persona id, which may not have converged yet.
-                val local = Personas.forUrl(this, url)
-                t.persona = if (local != Personas.UNASSIGNED) local else target
-                t.openedAt = at
-                // #152: inherit the remote age. Without this, lastActiveAt kept
-                // its construction default of "now", so an adopted tab was
-                // permanently zero seconds old and sweepStaleTabs could never
-                // reach it — the duplication defeated the expiry. openedAt was
-                // already carried; the field expiry actually reads was not.
-                t.lastActiveAt = at
-                t.pendingTitle = title
-            }
-        }
+        // #298: tabs opened on other devices are NOT created here any more (each
+        // device used to carry the union). They are listed on demand from the tab
+        // sheet — see showOtherDevices. Only closes cross over, above.
         syncChrome()
     }
 
@@ -1500,6 +1459,39 @@ class MainActivity : Activity() {
             textSize = 15f
         })
         col.addView(addRow)
+
+        // #298: other devices' tabs, on demand.
+        val fromRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(8), dp(13), dp(8), dp(13))
+            isClickable = true
+            setOnClickListener { showOtherDevices() }
+        }
+        fromRow.addView(TextView(this).apply {
+            text = "From other devices"
+            setTextColor(0xFF7C7C82.toInt())
+            textSize = 15f
+        })
+        col.addView(fromRow)
+    }
+
+    /** #298: tabs open on your other devices; tap one to open it here. */
+    private fun showOtherDevices(): Unit = openPanel("tabs") { col ->
+        title(col, "From other devices")
+        val groups = TabSync.otherDeviceList(this, tabs.map { it.url }) { YtDlp.isAdult(YtDlp.sites(this), it) }
+        if (groups.isEmpty()) caption(col, "Nothing open on your other devices that isn't already open here.")
+        for (g in groups) {
+            header(col, g.device.uppercase())
+            val c = card(col)
+            for (t in g.tabs.take(40)) {
+                action(c, t.title.ifBlank { t.url }, t.url) {
+                    closePanel()
+                    newTab(t.url) // normal Persona rules decide where it lands (#96)
+                }
+            }
+        }
+        action(card(col), "Back to tabs") { showTabSheet() }
     }
 
     /** #86: name a new tab folder (never window.prompt — inline, as everywhere). */
