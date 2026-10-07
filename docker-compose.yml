@@ -25,3 +25,16 @@ services:
       - ./data:/data
       # #286: agent-bus thread 025, the !define drop folder (only this folder)
       - /home/brandon/projects/agent-bus/data/triggers/webforge:/triggers
+
+  # #315: copies the macOS .dmg/.zip that GitHub Actions builds (#270) into
+  # ./releases/mac, so :8012/mac/latest-mac.yml is what the Mac app checks.
+  # Polls GitHub every 10 min; runs as brandon so the files aren't root-owned.
+  webforge_macmirror:
+    image: python:3.12-alpine
+    container_name: webforge_macmirror
+    restart: unless-stopped
+    user: "1000:1000"
+    command: python -u /app/mac_mirror.py
+    volumes:
+      - ./server:/app:ro
+      - ./releases:/releases

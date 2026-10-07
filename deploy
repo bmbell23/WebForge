@@ -9,6 +9,10 @@ cd "$(dirname "$0")"
 # webforge_releases is stock nginx over the ./releases bind mount: nothing to rebuild.
 docker compose up -d webforge_releases
 
+# #315: the macOS mirror. Python from a live mount like webforge_sync, so recreate it
+# to load a new mac_mirror.py. It holds no state of its own: releases/mac/ is the state.
+docker compose up -d --force-recreate -t 3 webforge_macmirror
+
 # webforge_sync runs ./server from a live mount without reload, so new sync.py only loads in a
 # fresh process. Its PID 1 ignores SIGTERM, so -t 3 lets the daemon SIGKILL it after 3 s.
 OLD=$(docker inspect webforge_sync --format '{{.Id}}' 2>/dev/null || echo none)

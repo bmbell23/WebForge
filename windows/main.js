@@ -53,6 +53,7 @@ const useragent = require('./useragent'); // #134 — ditto
 const credmatch = require('./credmatch'); // #136 — ditto
 const credsave = require('./credsave'); // #145 — ditto
 const modifier = require('./modifier'); // #150 — ditto (Ctrl on Windows, ⌘ on macOS)
+const macupdate = require('./macupdate'); // #315 — ditto (unsigned Mac: announce, don't install)
 const syncdecide = require('./syncdecide'); // #151 — ditto (nothing never overwrites something)
 const repaint = require('./repaint'); // #148 — ditto (when to force a frame)
 const focusring = require('./focusring'); // #131 — ditto (chrome surface vs page view)
@@ -4384,6 +4385,18 @@ ipcMain.handle('int:update-restart', () => {
   }
 });
 
+// #315: the unsigned Mac app can't install its own update; open the .dmg instead.
+ipcMain.handle('int:update-download', async () => {
+  if (!updateState.url) return false;
+  try {
+    await require('electron').shell.openExternal(updateState.url);
+    return true;
+  } catch (err) {
+    errorlog.record('update-download', err);
+    return false;
+  }
+});
+
 // #106: report, don't pretend to set — the switch is the user's to make.
 ipcMain.handle('int:default-browser-status', () => ({ isDefault: isDefaultBrowser() }));
 ipcMain.handle('int:open-default-apps', async () => {
@@ -4632,7 +4645,10 @@ ipcMain.handle('import-bookmarks', async () => {
 function setupAutoUpdate() {
   if (!app.isPackaged) return;
   const { autoUpdater } = require('electron-updater');
-  autoUpdater.autoDownload = true;
+  // #315: on macOS (unsigned) only check; Squirrel.Mac would refuse the install.
+  const manual = macupdate.isManual(process.platform);
+  autoUpdater.autoDownload = !manual;
+  autoUpdater.autoInstallOnAppQuit = !manual;
 
   // #123: this used to be `on('error', () => {})` and `.catch(() => {})` — every
   // failure was swallowed, so a broken update check was indistinguishable from
@@ -4651,27 +4667,10 @@ function setupAutoUpdate() {
     errorlog.record('update', `up to date (${info?.version || 'unknown'})`);
     setUpdateState('current', { version: info?.version });
   });
-  autoUpdater.on('update-available', (info) => {
-    errorlog.record('update', `available: ${info?.version} — downloading`);
-    setUpdateState('downloading', { version: info?.version, percent: 0 });
-  });
-  autoUpdater.on('download-progress', (p) => {
-    setUpdateState('downloading', { percent: Math.round(p?.percent || 0) });
-  });
-
-  // #5: don't re-prompt a version the user already declined — the downloaded
-  // update still applies on next quit (electron-updater's autoInstallOnAppQuit).
-  let promptedVersion = null;
-  autoUpdater.on('update-downloaded', (info) => {
-    errorlog.record('update', `downloaded ${info?.version} — prompting`);
-    // #123: the state persists even if the dialog is dismissed, so Settings can
-    // still offer "Restart to apply" afterwards.
-    setUpdateState('ready', { version: info?.version });
-    if (info.version === promptedVersion) return;
-    promptedVersion = info.version;
-    // #123: the app is ALWAYS fullscreen (#37), and a dialog that opens behind
-    // the window is indistinguishable from no dialog — the #111 round-2 failure.
-    // Raise and focus before asking.
+  // #123: the app is ALWAYS fullscreen (#37), and a dialog that opens behind
+  // the window is indistinguishable from no dialog — the #111 round-2 failure.
+  // Raise and focus before asking.
+  const raise = () => {
     try {
       if (win.isMinimized()) win.restore();
       win.show();
@@ -4679,6 +4678,53 @@ function setupAutoUpdate() {
     } catch (err) {
       errorlog.record('update-focus', err);
     }
+  };
+
+  // #5: don't re-prompt a version the user already declined — the downloaded
+  // update still applies on next quit (electron-updater's autoInstallOnAppQuit).
+  let promptedVersion = null;
+  autoUpdater.on('update-available', (info) => {
+    if (!manual) {
+      errorlog.record('update', `available: ${info?.version} — downloading`);
+      setUpdateState('downloading', { version: info?.version, percent: 0 });
+      return;
+    }
+    // #315: macOS: offer the .dmg for this chip; Settings keeps a Download button.
+    const url = macupdate.dmgUrl(info, process.arch);
+    errorlog.record('update', `available: ${info?.version} — ${url || 'no .dmg listed'}`);
+    if (!url) {
+      setUpdateState('error', { message: `v${info?.version} lists no .dmg for this Mac` });
+      return;
+    }
+    setUpdateState('available', { version: info?.version, url });
+    if (info.version === promptedVersion) return;
+    promptedVersion = info.version;
+    raise();
+    dialog
+      .showMessageBox(win, {
+        type: 'info',
+        title: 'Update available',
+        message: `WebForge v${info.version} is available.`,
+        detail: 'Download it, quit WebForge, then drag the new WebForge into Applications.',
+        buttons: ['Download', 'Later'],
+        defaultId: 0,
+      })
+      .then(({ response }) => {
+        if (response === 0) require('electron').shell.openExternal(url);
+      });
+  });
+  autoUpdater.on('download-progress', (p) => {
+    setUpdateState('downloading', { percent: Math.round(p?.percent || 0) });
+  });
+
+  autoUpdater.on('update-downloaded', (info) => {
+    errorlog.record('update', `downloaded ${info?.version} — prompting`);
+    // #123: the state persists even if the dialog is dismissed, so Settings can
+    // still offer "Restart to apply" afterwards.
+    setUpdateState('ready', { version: info?.version });
+    if (info.version === promptedVersion) return;
+    promptedVersion = info.version;
+    raise();
     dialog
       .showMessageBox(win, {
         type: 'info',
