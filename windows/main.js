@@ -42,6 +42,7 @@ const navloop = require('./navloop'); // #238
 const tabnav = require('./tabnav'); // #113/#114 — unit-tested, Electron-free
 const textrules = require('./textrules'); // #100 — ditto
 const taburl = require('./taburl'); // #107 — ditto
+const tabsync = require('./tabsync'); // #298 — which devices still count, and the other-devices list
 const taborder = require('./taborder'); // #107 — ditto
 const { cleanTabName } = require('./tabname'); // #236 — ditto
 const ctxmenu = require('./ctxmenu'); // #133 — ditto
@@ -968,15 +969,12 @@ function saveSlots(urls) {
   return appSlots();
 }
 
-// #57: other devices' tabs in the Persona we're currently looking at.
+// #57: other devices' tabs. #298: every Persona at once, newest first, minus
+// what is already open here and adult URLs; the sidebar shows it collapsed.
 function remoteTabsForActive() {
-  const active = personas.activeId();
-  const out = [];
-  for (const [id, dev] of Object.entries(remoteDevices)) {
-    const list = (dev.personas || {})[active] || [];
-    if (list.length) out.push({ device: dev.name || id, at: dev.at || 0, tabs: list.slice(0, 40) });
-  }
-  return out;
+  return tabsync.otherDeviceTabs(
+    remoteDevices, deviceId(), tabOrder.map(tabUrlOf), (u) => ytdlp.isAdult(u), Date.now()
+  ).map((g) => ({ ...g, tabs: g.tabs.slice(0, 40) }));
 }
 
 // #216: the sidebar re-renders on every message, and most pushes change
@@ -2602,24 +2600,9 @@ function applyRemoteTabState(merged) {
     closeTab(id, { remote: true }); // don't re-broadcast someone else's close
   }
 
-  // Tabs opened elsewhere and still alive appear here too.
-  const known = new Set(personas.all().map((p) => p.id));
-  for (const [pid, block] of Object.entries(merged)) {
-    for (const [url, info] of Object.entries(block.open || {})) {
-      if ((closedAnywhere.get(url) || 0) > info.at) continue;
-      if (info.dev === deviceId()) continue; // our own echo
-      if (ytdlp.isAdult(url)) continue; // #176: an older build on the other device may still send one
-      if (findTabByUrl(url) !== null) continue;
-      // #96: our own URL rules decide where it lands; the publisher's Persona
-      // id is only the fallback, and only if we recognize it at all.
-      const claimed = personas.forUrl(url);
-      const target = claimed !== personas.UNASSIGNED
-        ? claimed
-        : (known.has(pid) ? pid : personas.UNASSIGNED);
-      const id = createTab(url, true, target, { lazy: true, title: info.title, openedAt: info.at });
-      if (id !== null) openedAt.set(id, info.at);
-    }
-  }
+  // #298: tabs opened elsewhere are NO LONGER created here (each device used to
+  // carry the union of all of them). They are listed on demand — see
+  // remoteTabsForActive. Only closes cross over, above.
 }
 
 async function syncTabs() {
@@ -2628,8 +2611,10 @@ async function syncTabs() {
   try {
     const res = await fetch(TABS_SYNC_URL, { signal: AbortSignal.timeout(5000) });
     const remote = await res.json();
-    const devices = (remote.data && remote.data.devices) || {};
     const me = deviceId();
+    // #298: devices silent for 3 days are forgotten — never listed, and shed
+    // from the store by what we write back below (their close facts are kept).
+    const devices = tabsync.pruneStaleDevices((remote.data && remote.data.devices) || {}, Date.now(), tabsync.STALE_MS, me);
     remoteDevices = Object.fromEntries(Object.entries(devices).filter(([k]) => k !== me));
 
     // #57: merge every device's facts per Persona, latest stamp wins per URL.

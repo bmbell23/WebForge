@@ -1295,8 +1295,9 @@
     renderTabs(state);
   });
 
-  // #57: tabs open on your other devices, in this Persona.
+  // #57: tabs open on your other devices (#298: all Personas, on demand).
   let remoteTabs = [];
+  let remoteOpen = false; // #298: the "From other devices" section starts collapsed
   webforge.onRemoteTabs((list) => {
     remoteTabs = list || [];
     renderTabs(lastTabsState);
@@ -1387,18 +1388,26 @@
       if (nodes.length) nodes.push(groupHdr('Other'));
       nodes.push(...singles.map(makeTab));
     }
-    for (const dev of remoteTabs) {
-      nodes.push(groupHdr(`On ${dev.device}`));
-      for (const rt of dev.tabs) {
-        const el = document.createElement('div');
-        el.className = 'tab remote';
-        el.title = rt.url;
-        el.appendChild(Object.assign(document.createElement('span'), { className: 'favdot' }));
-        el.appendChild(Object.assign(document.createElement('span'), {
-          className: 'title', textContent: rt.title || rt.url,
-        }));
-        el.onclick = () => webforge.openBookmark(rt.url, false); // open it here
-        nodes.push(el);
+    // #298: other devices' tabs are a collapsed-by-default list, not tabs we carry.
+    const remoteCount = remoteTabs.reduce((n, d) => n + d.tabs.length, 0);
+    if (remoteCount) {
+      const rh = groupHdr(`${remoteOpen ? '▾' : '▸'} From other devices (${remoteCount})`);
+      rh.style.cursor = 'pointer';
+      rh.onclick = () => { remoteOpen = !remoteOpen; renderTabs(lastTabsState); };
+      nodes.push(rh);
+      for (const dev of remoteOpen ? remoteTabs : []) {
+        nodes.push(groupHdr(dev.device));
+        for (const rt of dev.tabs) {
+          const el = document.createElement('div');
+          el.className = 'tab remote';
+          el.title = rt.url;
+          el.appendChild(Object.assign(document.createElement('span'), { className: 'favdot' }));
+          el.appendChild(Object.assign(document.createElement('span'), {
+            className: 'title', textContent: rt.title || rt.url,
+          }));
+          el.onclick = () => webforge.openBookmark(rt.url, false); // open it here
+          nodes.push(el);
+        }
       }
     }
     tablist.replaceChildren(...nodes);
