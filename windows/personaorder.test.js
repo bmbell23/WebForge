@@ -14,12 +14,12 @@ const stored = [
 ];
 const ordered = po.orderPersonas(stored);
 eq(ordered.map((p) => p.name),
-  ['Terminal', 'Work Mattermost', 'Work', 'Mattermost', 'Personal', 'Teams', 'Outlook', 'Discord', 'Finance', 'Unassigned'],
+  ['Terminal', 'Work Mattermost', 'Work', 'Mattermost', 'Personal', 'Teams', 'Outlook', 'Discord', 'Slack', 'Finance', 'Unassigned'],
   'key order, then your other Personas, then Unassigned');
-eq(ordered.map((p) => p.key || ''), ['`', '!', '@', '#', '$', '%', '^', '&', '', ''], 'Unassigned and Finance have no key');
+eq(ordered.map((p) => p.key || ''), ['`', '!', '@', '#', '$', '%', '^', '&', '', '', ''], 'Slack (#301), Finance and Unassigned have no key');
 eq(ordered.filter((p) => !p.slot && p.id !== 'terminal').map((p) => p.id), ['w', 'p', 'f', 'unassigned'], 'stored ids are unchanged');
-eq(po.orderPersonas([...stored, { id: 'terminal', name: 'Imposter' }, { id: 'slot-teams', name: 'X' }]).length, 10, 'a stored "terminal" or slot id never doubles up');
-eq(po.orderPersonas([]).map((p) => p.key), ['`', '!', '@', '#', '$', '%'], '#297: no Work or Personal: the keys close up, they follow the position');
+eq(po.orderPersonas([...stored, { id: 'terminal', name: 'Imposter' }, { id: 'slot-teams', name: 'X' }]).length, 11, 'a stored "terminal" or slot id never doubles up');
+eq(po.orderPersonas([]).map((p) => p.key), ['`', '!', '@', '#', '$', '%', '^'], '#297: no Work or Personal: the keys close up, they follow the position');
 eq(po.orderPersonas([{ id: 'x', name: ' work ' }]).find((p) => p.key === '@').id, 'x', 'Work found by name, any case');
 eq(stored.length, 4, 'input not mutated');
 
@@ -30,7 +30,8 @@ eq(po.slots().map((s) => s.url), [
   'https://teams.cloud.microsoft/',
   'https://outlook.cloud.microsoft/mail/',
   'https://discord.com/channels/276238974421434368/276238974421434368',
-], 'defaults');
+  'https://app.slack.com/client',
+], 'defaults (#301: Slack too)');
 const edited = po.slots({ 'work-mattermost': 'https://chat.example.com', teams: 'javascript:alert(1)', outlook: '  ' });
 eq(edited[0].url, 'https://chat.example.com/', 'an edited URL wins');
 eq(edited[2].url, 'https://teams.cloud.microsoft/', 'a non-http edit keeps the default');
@@ -167,7 +168,7 @@ eq(ids(po.orderPersonas(stored, po.slots(), ['unassigned', 'w'])).slice(-1), ['u
 eq(po.orderPersonas(stored, po.slots(), ['unassigned', 'w'])[0].id, 'w', 'and does not lead');
 const few = po.orderPersonas([{ id: 'unassigned', name: 'Unassigned' }], po.slots(), null);
 eq(few[few.length - 1].id, 'unassigned', 'few Personas: Unassigned still last');
-eq(few[few.length - 1].key, '^', '... and may take the key of its position');
+eq(few[few.length - 1].key, '&', '... and may take the key of its position');
 const nine = po.orderPersonas(stored, po.slots(), ['f', ...saved.filter((i) => i !== 'f')]);
 eq(nine[0].key, '`', 'any Persona can take position 1');
 eq(nine.find((p) => p.id === 'slot-outlook').key, '&', 'position 8 is &');
@@ -180,15 +181,86 @@ eq(po.movePersona(base, 'terminal', -1), null, 'no wrap at the left end');
 eq(po.movePersona(base, 'f', 1), null, 'nothing moves past Unassigned');
 eq(po.movePersona(base, 'unassigned', -1), null, 'Unassigned cannot move');
 eq(po.movePersona(base, 'nope', 1), null, 'unknown id');
-eq(po.movePersona(base, 'f', -1).slice(-3), ['f', 'slot-discord', 'unassigned'], 'moves left into the keyed block');
-eq(ids(base).length, 10, 'input not mutated');
+eq(po.movePersona(base, 'f', -1).slice(-3), ['f', 'slot-slack', 'unassigned'], 'moves left into the keyed block');
+eq(ids(base).length, 11, 'input not mutated');
 eq(ids(po.orderPersonas(stored, po.slots(), po.movePersona(base, 'slot-teams', -1))).indexOf('slot-teams'), 4, 'a move round-trips through orderPersonas');
 
-console.log(`personaorder: ${n} passed`);
 
 console.log('keyLabel (#297)');
 eq(po.keyLabel(base[0]), 'F1 · Ctrl+`', 'position 1');
 eq(po.keyLabel(base[2]), 'F3 · Ctrl+2', 'position 3');
 eq(po.keyLabel(base[7]), 'F8 · Ctrl+7', 'position 8');
 eq(po.keyLabel(base[8]), '', 'no key');
-console.log(`personaorder (keyLabel): ${n} passed`);
+
+
+console.log('apps (#301)');
+const P = [{ id: 'unassigned', name: 'Unassigned' }, { id: 'p', name: 'Personal' }, { id: 'w', name: 'Work' }, { id: 'f', name: 'Finance' }];
+const seeded = po.seedApps({});
+eq(seeded.map((a) => a.id), ['work-mattermost', 'personal-mattermost', 'teams', 'outlook', 'discord', 'slack'], 'absent: defaults, Slack last');
+eq(seeded[5], { id: 'slack', name: 'Slack', url: 'https://app.slack.com/client', home: 'work' }, 'Slack default');
+eq(po.seedApps(undefined).length, 6, 'no settings at all seeds too');
+const sOver = po.seedApps({ appSlots: { teams: 'https://t.example.com', outlook: 'nope' } });
+eq(sOver[2].url, 'https://t.example.com/', 'absent: old URL edits carry over');
+eq(sOver[3].url, 'https://outlook.cloud.microsoft/mail/', 'absent: a bad edit keeps the default');
+const mine = [{ id: 'a', name: ' A ', url: 'https://a.example.com', home: 'p' }, { id: 'bad', name: 'X', url: 'file:///c:/x', home: '' }, { id: 'a', name: 'dup', url: 'https://d.example.com' }];
+eq(po.seedApps({ apps: mine, appSlots: { teams: 'https://t.example.com' } }), [{ id: 'a', name: 'A', url: 'https://a.example.com/', home: 'p' }], 'present: kept, normalized, junk and duplicate ids dropped, no Slack forced');
+eq(po.seedApps({ apps: [] }), [], 'present but empty: you removed them all, stays empty');
+eq(po.slots(seeded).length, 6, 'slots() takes an apps list');
+eq(po.slots([{ id: 'z', name: 'Z', url: 'https://z.example.com' }]).map((a) => a.id), ['z'], 'slots() of a list is that list');
+
+console.log('validateApp');
+eq(po.validateApp({ name: 'Zulip', url: 'https://z.example.com' }, seeded), null, 'ok');
+eq(po.validateApp({ name: '  ', url: 'https://z.example.com' }, seeded), 'Name must be 1 to 40 characters', 'empty name');
+eq(po.validateApp({ name: 'x'.repeat(41), url: 'https://z.example.com' }, seeded), 'Name must be 1 to 40 characters', '41 chars');
+eq(po.validateApp({ name: 'x'.repeat(40), url: 'https://z.example.com' }, seeded), null, '40 chars');
+for (const bad of ['', 'zulip', 'file:///c:/x.html', 'javascript:1', 'webforge://settings', 'about:blank']) {
+  eq(po.validateApp({ name: 'Z', url: bad }, seeded), 'URL must be a web address (http or https)', `bad URL ${bad}`);
+}
+eq(po.validateApp({ name: 'Other', url: 'https://app.slack.com/other' }, seeded), 'Another app already uses https://app.slack.com', 'duplicate origin');
+eq(po.validateApp({ name: 'Other', url: 'http://app.slack.com/' }, seeded), null, 'a different scheme is a different origin');
+eq(po.validateApp({ id: 'slack', name: 'Slack', url: 'https://app.slack.com/client2' }, seeded), null, 'an edit is not compared with itself');
+eq(po.validateApp({ id: 'teams', name: 'Teams', url: 'https://app.slack.com/' }, seeded), 'Another app already uses https://app.slack.com', 'an edit onto another app\'s origin');
+
+console.log('addApp / editApp / removeApp');
+const a1 = po.addApp(seeded, { name: 'Slack', url: 'https://slack.example.com', home: 'personal' });
+eq(a1.length, 7, 'added');
+eq(a1[6], { id: 'slack-2', name: 'Slack', url: 'https://slack.example.com/', home: 'personal' }, 'unique id: slack-2');
+eq(po.addApp(a1, { name: 'Slack', url: 'https://s3.example.com' })[7].id, 'slack-3', 'slack-3');
+eq(po.addApp(seeded, { name: 'My  Cool App!', url: 'https://m.example.com' })[6].id, 'my-cool-app', 'slug');
+eq(po.addApp(seeded, { name: '!!!', url: 'https://m.example.com' })[6].id, 'app', 'slug fallback');
+eq(po.addApp(seeded, { name: 'Z', url: 'nope' }), seeded, 'junk adds nothing');
+eq(seeded.length, 6, 'input not mutated');
+const e1 = po.editApp(seeded, 'teams', { name: 'MS Teams', url: 'https://t.example.com', home: 'unassigned', id: 'hacked' });
+eq(e1[2], { id: 'teams', name: 'MS Teams', url: 'https://t.example.com/', home: 'unassigned' }, 'edited, id permanent');
+eq(po.editApp(seeded, 'teams', { name: ' ', url: 'bad' })[2], seeded[2], 'blank name and bad URL keep the old values');
+eq(po.editApp(seeded, 'nope', { name: 'Q' }), seeded, 'unknown id');
+const r1 = po.removeApp(seeded, 'teams');
+eq(r1.map((a) => a.id), ['work-mattermost', 'personal-mattermost', 'outlook', 'discord', 'slack'], 'removed');
+eq(po.removeApp(seeded, 'nope').length, 6, 'unknown id removes nothing');
+eq(po.addApp(r1, { name: 'Teams', url: 'https://teams.cloud.microsoft/' })[5].id, 'teams', 'a freed id can come back');
+
+console.log('slotFor / openerHome / order with apps');
+const withZ = po.addApp(seeded, { name: 'Zulip', url: 'https://chat.z.example.com/#narrow', home: 'f' });
+eq(po.slotFor('https://chat.z.example.com/other', withZ), 'slot-zulip', 'a user-added app claims its origin');
+eq(po.slotFor('https://chat.z.example.com/other', r1), null, 'nobody claims it without the app');
+eq(po.slotFor('https://teams.cloud.microsoft/x', r1), null, 'a removed app no longer claims');
+eq(po.slotFor('https://app.slack.com/client/T1/C2', seeded), 'slot-slack', 'Slack claims its site');
+const oz = po.orderPersonas(P, withZ);
+eq(oz.map((p) => p.id), ['terminal', 'slot-work-mattermost', 'w', 'slot-personal-mattermost', 'p', 'slot-teams', 'slot-outlook', 'slot-discord', 'slot-slack', 'slot-zulip', 'f', 'unassigned'],
+  'Slack at 9 and a new app after the defaults, before your other Personas');
+eq(oz.find((p) => p.id === 'slot-slack').key, undefined, 'Slack has no key by default');
+eq(oz.find((p) => p.id === 'slot-zulip').url, 'https://chat.z.example.com/#narrow', 'the new slot persona has its URL');
+const oneMove = po.movePersona(oz, 'slot-slack', -1);
+const oz2 = po.orderPersonas(P, withZ, oneMove);
+eq(oz2.find((p) => p.id === 'slot-slack').key, '&', 'Slack moved up one: it takes position 8, key &');
+eq(oz2.find((p) => p.id === 'slot-discord').key, undefined, 'and Discord gives its key up');
+eq(po.orderPersonas(P, r1, oneMove).some((p) => p.id === 'slot-teams'), false, 'a removed app vanishes from the order');
+eq(po.orderPersonas(P, po.removeApp(withZ, 'zulip'), ['slot-zulip', 'w']).map((p) => p.id).includes('slot-zulip'), false, 'a saved id of a removed app is ignored');
+eq(po.openerHome('slot-zulip', oz, withZ), 'f', 'home as a Persona id');
+eq(po.openerHome('slot-slack', oz, withZ), 'w', 'home as the name work');
+eq(po.openerHome('slot-slack', po.orderPersonas([]), withZ), 'unassigned', 'home missing: Unassigned');
+eq(po.openerHome('slot-teams', oz, e1), 'unassigned', 'home unassigned');
+eq(po.openerHome('slot-gone', oz, withZ), 'unassigned', 'unknown slot: Unassigned');
+eq(po.openerHome('slot-teams', oz), 'w', 'default list still works with two args');
+
+console.log(`personaorder: ${n} passed`);
