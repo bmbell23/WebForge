@@ -1,7 +1,7 @@
 {
   "name": "webforge",
   "productName": "WebForge",
-  "description": "WebForge browser — Windows shell",
+  "description": "WebForge browser \u2014 Windows shell",
   "version": "0.1.40",
   "main": "main.js",
   "author": "Brandon Bell",
@@ -51,6 +51,19 @@
     "publish": {
       "provider": "generic",
       "url": "http://100.69.184.113:8012/windows"
+    },
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "category": "public.app-category.productivity",
+      "identity": null,
+      "artifactName": "WebForge-${version}-${arch}.${ext}",
+      "publish": {
+        "provider": "generic",
+        "url": "http://100.69.184.113:8012/mac"
+      }
     }
   }
 }
