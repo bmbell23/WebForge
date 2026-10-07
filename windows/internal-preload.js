@@ -25,6 +25,7 @@ contextBridge.exposeInMainWorld('wf', {
   setEngine: (e) => ipcRenderer.invoke('int:set-engine', e),
   setTabExpiry: (c) => ipcRenderer.invoke('int:set-tab-expiry', c), // #79
   setDirectComposition: (on) => ipcRenderer.invoke('int:set-direct-composition', on), // #238
+  setGpu: (mode) => ipcRenderer.invoke('int:set-gpu', mode), // #291
   saveTabGroups: (list) => ipcRenderer.invoke('int:save-tab-groups', list),
   syncStatus: () => ipcRenderer.invoke('int:sync-status'),
   // update visibility (#123)

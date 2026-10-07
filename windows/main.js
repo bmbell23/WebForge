@@ -23,12 +23,17 @@ app.commandLine.appendSwitch(
 // on the same PC never flickered. So WebForge applies that switch itself, on by
 // default, with a Settings toggle. Read straight from settings.json because
 // the switch must be set before app ready, ahead of getSettings() below.
+// #291: when that isn't enough, Settings › Graphics "No GPU" (settings.gpu =
+// 'off') or launching with --no-gpu turns GPU acceleration off entirely.
+let gpuOff = process.argv.includes('--no-gpu');
 try {
   const s = JSON.parse(fs.readFileSync(path.join(app.getPath('userData'), 'settings.json'), 'utf8'));
   if (s.directComposition !== true) app.commandLine.appendSwitch('disable-direct-composition');
+  if (s.gpu === 'off') gpuOff = true;
 } catch {
   app.commandLine.appendSwitch('disable-direct-composition'); // no settings yet: the default
 }
+if (gpuOff) app.disableHardwareAcceleration();
 const bookmarks = require('./bookmarks');
 const vault = require('./vault');
 const credentials = require('./credentials');
@@ -4109,6 +4114,12 @@ ipcMain.handle('int:set-direct-composition', (_e, on) => {
   saveSettings();
   return true;
 });
+// #291: also next start. 'off' disables GPU acceleration; anything else is the default.
+ipcMain.handle('int:set-gpu', (_e, mode) => {
+  getSettings().gpu = mode === 'off' ? 'off' : 'on';
+  saveSettings();
+  return true;
+});
 ipcMain.handle('int:set-engine', (_e, engine) => {
   if (!ENGINES[engine]) return false;
   getSettings().searchEngine = engine;
@@ -4559,6 +4570,7 @@ app.whenReady().then(() => {
       `electron=${process.versions.electron} chrome=${process.versions.chrome}` +
       ` disableDirectComposition=${app.commandLine.hasSwitch('disable-direct-composition')}` +
       ` setting=${JSON.stringify(getSettings().directComposition)}` +
+      ` gpuOff=${gpuOff}` + // #291
       ` features=${JSON.stringify(app.getGPUFeatureStatus())}`
     ));
   } catch (err) {

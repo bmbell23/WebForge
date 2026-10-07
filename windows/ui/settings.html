@@ -140,11 +140,13 @@
   <h2>Graphics</h2>
   <div class="sub" style="margin-bottom:8px">
     <b>Flicker fix</b> stops Outlook and other heavy pages flashing white as the mouse moves, by turning
-    off Windows DirectComposition. Takes effect after a restart.
+    off Windows DirectComposition. <b>No GPU</b> goes further and draws everything in software: no
+    compositor flicker at all, at some CPU cost on video. Takes effect after a restart.
   </div>
   <div class="row" id="dcomp">
     <button class="choice" data-dcomp="fix">Flicker fix on</button>
     <button class="choice" data-dcomp="off">Off (Chromium default)</button>
+    <button class="choice" data-dcomp="nogpu">No GPU</button>
   </div>
   <div class="sub" id="dcompmsg" style="margin-top:6px"></div>
 
@@ -328,7 +330,8 @@
     const expiry = settings.tabExpiry || '24h'; // #79
     document.querySelectorAll('#expiry .choice').forEach((b) =>
       b.classList.toggle('sel', b.dataset.expiry === expiry));
-    const dcomp = settings.directComposition === true ? 'off' : 'fix'; // #238
+    // #238, #291: No GPU wins over the DirectComposition choice.
+    const dcomp = settings.gpu === 'off' ? 'nogpu' : settings.directComposition === true ? 'off' : 'fix';
     document.querySelectorAll('#dcomp .choice').forEach((b) =>
       b.classList.toggle('sel', b.dataset.dcomp === dcomp));
     renderGroups();
@@ -366,7 +369,9 @@
   document.querySelectorAll('#dcomp .choice').forEach((b) => { // #238
     b.onclick = async () => {
       settings.directComposition = b.dataset.dcomp === 'off';
+      settings.gpu = b.dataset.dcomp === 'nogpu' ? 'off' : 'on'; // #291 (keeps the flicker fix on underneath)
       await wf.setDirectComposition(settings.directComposition);
+      await wf.setGpu(settings.gpu);
       document.getElementById('dcompmsg').textContent = 'Restart WebForge for this to take effect.';
       paint();
     };
