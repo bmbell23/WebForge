@@ -3457,6 +3457,11 @@ ipcMain.on('favorite-connection', (_e, target) => {
   terminalMain.toggleFavorite(target);
   pushConnections();
 });
+// #280: remove a connection from its group.
+ipcMain.on('delete-connection', (_e, { target, group } = {}) => {
+  terminalMain.deleteConnection(target, group);
+  pushConnections();
+});
 // #228: edit a Favorite (name / user / host / port) from the panel.
 ipcMain.handle('edit-connection', (_e, { target, fields } = {}) => {
   const r = terminalMain.editFavorite(target, fields);

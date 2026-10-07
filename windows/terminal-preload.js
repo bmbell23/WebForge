@@ -16,4 +16,5 @@ contextBridge.exposeInMainWorld('terminal', {
   connections: () => ipcRenderer.invoke('terminal:connections'), // #214: the new-tab picker
   favorite: (target) => ipcRenderer.send('terminal:favorite', target),
   editFavorite: (target, fields) => ipcRenderer.invoke('terminal:edit-favorite', { target, fields }), // #228
+  deleteConnection: (target, group) => ipcRenderer.invoke('terminal:delete-connection', { target, group }), // #280
 });
