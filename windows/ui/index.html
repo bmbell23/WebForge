@@ -1123,9 +1123,13 @@
   }
 
   // #236: inline rename. The title text becomes an <input>; Enter or blur saves,
-  // Esc cancels, empty clears the custom name. renderTabs is paused while editing
-  // (a loading page pushes state constantly and would wipe the input).
+  // Esc cancels, empty clears the custom name.
+  // #254: rendering is never paused for it (that froze the sidebar on stale tabs
+  // when an edit never ended). Each render moves the live input into the new
+  // row; if the tab is gone from the list, the rename is cancelled.
   let renamingId = null;
+  let renameInput = null;
+  let renameFinish = null;
   function startRename(id) {
     if (renamingId !== null) return;
     const row = [...document.querySelectorAll('.tab')].find((r) => r.dataset.tabId === String(id));
@@ -1146,9 +1150,21 @@
       if (done) return;
       done = true;
       renamingId = null;
+      renameInput = null;
+      renameFinish = null;
+      window.removeEventListener('mousedown', outside, true);
+      window.removeEventListener('blur', onWinBlur);
       if (save) webforge.renameTab(id, input.value);
-      renderTabs(lastTabsState); // also repaints anything skipped while editing
+      renderTabs(lastTabsState);
     };
+    // #254: a click anywhere else, or the sidebar losing focus, ends the edit,
+    // even when the input never got real focus (so its own blur never fires).
+    const outside = (e) => { if (e.target !== input) finish(true); };
+    const onWinBlur = () => finish(true);
+    window.addEventListener('mousedown', outside, true);
+    window.addEventListener('blur', onWinBlur);
+    renameInput = input;
+    renameFinish = finish;
     input.onkeydown = (e) => {
       e.stopPropagation(); // not the row's Enter/Delete/activate handlers
       if (e.key === 'Enter') { e.preventDefault(); finish(true); }
@@ -1158,7 +1174,7 @@
     input.onclick = (e) => e.stopPropagation();
     input.ondblclick = (e) => e.stopPropagation();
     input.onmousedown = (e) => e.stopPropagation();
-    input.onblur = () => finish(true);
+    input.onblur = () => { if (!moving) finish(true); }; // #254: not when a re-render moves it
     input.focus();
     input.select();
   }
@@ -1252,8 +1268,30 @@
     renderTabs(lastTabsState);
   });
 
+  // #254: moving the input between rows blurs it; that must not end the edit.
+  let moving = false;
   function renderTabs(state) {
-    if (renamingId !== null) return; // #236: don't wipe the rename input mid-edit
+    if (renamingId === null || !renameInput) return renderTabsInner(state);
+    // Read focus and selection BEFORE the rebuild detaches the input.
+    const { selectionStart, selectionEnd } = renameInput;
+    const hadFocus = document.activeElement === renameInput;
+    moving = true;
+    try {
+      renderTabsInner(state);
+      const row = [...document.querySelectorAll('.tab')].find((r) => r.dataset.tabId === String(renamingId));
+      const span = row && row.querySelector('.title');
+      if (!span) { moving = false; renameFinish(false); return; } // the tab left the list: cancel
+      span.replaceWith(renameInput);
+      if (hadFocus) {
+        renameInput.focus();
+        renameInput.setSelectionRange(selectionStart, selectionEnd);
+      }
+    } finally {
+      moving = false;
+    }
+  }
+
+  function renderTabsInner(state) {
     // #16: sidebar sections — Hotkeys, Pinned, then normal tabs.
     // #107: `state` already arrives in display order from main (taborder.js),
     // which is the same order the cycling chords walk. The bucketing below
