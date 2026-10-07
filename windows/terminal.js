@@ -85,6 +85,30 @@ function knownHostsWithout(text, host, port, keyType) {
   return out.join('\n');
 }
 
+// #256: one chunk of typing into a password / server prompt. Returns the new
+// buffer, whether Enter submitted it or Ctrl+C cancelled it, and what to echo
+// (only for prompts the server marks as echoed; passwords echo nothing).
+function lineEdit(buf, data, echo = false) {
+  let out = '';
+  // Arrow keys and other escape sequences mean nothing in a password: drop them whole.
+  const text = String(data).replace(/\x1b\[[0-9;?]*[ -\/]*[@-~]|\x1bO.|\x1b./g, '');
+  for (const ch of text) {
+    if (ch === '\r' || ch === '\n') return { buf, submit: true, cancel: false, echo: out + '\r\n' };
+    if (ch === '\x03') return { buf: '', submit: false, cancel: true, echo: out + '^C\r\n' };
+    if (ch === '\x7f' || ch === '\b') {
+      if (buf) {
+        buf = [...buf].slice(0, -1).join('');
+        if (echo) out += '\b \b';
+      }
+      continue;
+    }
+    if (ch < ' ' || ch === '\x1b') continue; // control keys and escape sequences start
+    buf += ch;
+    if (echo) out += ch;
+  }
+  return { buf, submit: false, cancel: false, echo: out };
+}
+
 // The SSH wire format starts with a length-prefixed key type string.
 function keyTypeOf(keyBuf) {
   const n = keyBuf.readUInt32BE(0);
@@ -144,5 +168,5 @@ function holdDecision(input, pick) {
 
 module.exports = {
   parseTarget, knownHostsVerdict, keyTypeOf, fingerprint, osc52Text, keyCandidates, OSC52_MAX_BASE64,
-  knownHostsLine, CTRL_SPACE, holdDecision, knownHostsWithout,
+  knownHostsLine, CTRL_SPACE, holdDecision, lineEdit, knownHostsWithout,
 };
