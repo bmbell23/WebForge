@@ -774,6 +774,20 @@
     background: var(--surface); color: var(--text); font-size: 13px; cursor: pointer;
   }
   #outfit #outfitgo { background: var(--accent); color: #fff; font-weight: 600; }
+  /* #266: Shift+Space quick search box, a sibling of #outfit, near the top third. */
+  #quick {
+    position: absolute; inset: 0; display: none; align-items: flex-start; justify-content: center;
+    padding-top: 28vh; background: rgba(0, 0, 0, 0.45); z-index: 36;
+  }
+  #quick.open { display: flex; }
+  #quick .card {
+    width: min(560px, 90vw); padding: 14px; border-radius: 12px;
+    background: var(--bg); box-shadow: 0 10px 40px rgba(0, 0, 0, 0.45);
+  }
+  #quick input {
+    width: 100%; box-sizing: border-box; height: 46px; padding: 0 14px; border-radius: 10px;
+    border: 1px solid var(--surface); background: var(--surface); color: var(--text); font-size: 20px;
+  }
 </style>
 </head>
 <body>
@@ -847,6 +861,12 @@
         <button id="outfitgo" class="dismiss">Open in Studio</button>
         <button id="outfitno" class="dismiss">Cancel</button>
       </div>
+    </div>
+  </div>
+  <!-- #266: Shift+Space quick search; Enter opens a new tab in Unassigned. -->
+  <div id="quick">
+    <div class="card">
+      <input id="quickinput" type="text" placeholder="Search or type a URL" spellcheck="false" autocomplete="off">
     </div>
   </div>
   <div id="findbar">
@@ -955,6 +975,7 @@
         <tr><td>Ctrl+Space, then ` ! @ # $ % ^</td><td>` Terminal, ! Work Mattermost, @ Work, # Mattermost, $ Personal, % Teams, ^ Outlook (works inside a terminal too). Unassigned is in the picker.</td></tr>
         <tr><td>Ctrl+PageDown</td><td>Next tab</td></tr>
         <tr><td>Ctrl+Shift+Up / Down</td><td>Previous / next tab in this Persona (not while typing in a text box; Esc first)</td></tr>
+        <tr><td>Shift+Space</td><td>Quick search box (new tab in Unassigned; not while typing in a text box)</td></tr>
         <tr><td>Ctrl+Alt+T</td><td>Reopen closed tab</td></tr>
         <tr><td>Ctrl+X</td><td>Close tab (cuts text as normal while typing)</td></tr>
         <tr><td>Ctrl+J</td><td>Open selected text via a Settings rule (e.g. a Jira key)</td></tr>
@@ -2379,6 +2400,31 @@
       box.classList.add('open');
       name.focus();
     });
+  })();
+
+  // --- #266: quick search box ---
+  // Always answers (empty = cancel) so main lowers chrome whichever way it closes.
+  (() => {
+    const box = document.getElementById('quick');
+    const input = document.getElementById('quickinput');
+    const hide = () => { box.classList.remove('open'); input.value = ''; };
+    const answer = (text) => {
+      if (!box.classList.contains('open')) return;
+      hide();
+      webforge.quickSearchAnswer(text);
+    };
+    input.addEventListener('keydown', (e) => {
+      e.stopPropagation(); // keys in the box belong to the box
+      if (e.key === 'Escape') { e.preventDefault(); answer(''); }
+      else if (e.key === 'Enter' && !e.repeat && !e.isComposing) { e.preventDefault(); answer(input.value); }
+    });
+    box.addEventListener('mousedown', (e) => { if (e.target === box) answer(''); });
+    webforge.onQuickSearch(() => {
+      input.value = '';
+      box.classList.add('open');
+      input.focus();
+    });
+    webforge.onQuickSearchClose(hide); // main's Esc path already told main
   })();
 
   // --- #145: offer to save or update a login ---

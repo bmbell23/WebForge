@@ -149,6 +149,7 @@ let findOpen = false; // #101
 let loginPromptOpen = false; // #145
 let ytdlpOpen = false; // #156: the download picker holds the window like the login prompt
 let outfitOpen = false; // #179: the MuseForge outfit dialog, same pattern
+let quickOpen = false; // #266: the Shift+Space quick search box
 let outfitReturn = null; // #191: { tabId, openerId } while a Create Outfit tab is open
 
 let win, chrome, lockView;
@@ -535,7 +536,7 @@ function layout() {
     // settings) is open — then chrome needs the full window to show it.
     view?.setBounds({ x: 0, y: 0, width, height });
     chrome.setBounds(
-      bmDialogOpen || settingsOpen || managerOpen || bmPanelOpen || pwPanelOpen || loginPromptOpen || ytdlpOpen || outfitOpen
+      bmDialogOpen || settingsOpen || managerOpen || bmPanelOpen || pwPanelOpen || loginPromptOpen || ytdlpOpen || outfitOpen || quickOpen
         ? { x: 0, y: 0, width, height }
         : fsRegionBounds()
     );
@@ -835,7 +836,7 @@ function openBookmarkDialog(prefill) {
 function closeBookmarkDialog() {
   if (!bmDialogOpen) return;
   bmDialogOpen = false;
-  if (!settingsOpen && !managerOpen && !ytdlpOpen && !outfitOpen) setChromeRaised(false);
+  if (!settingsOpen && !managerOpen && !ytdlpOpen && !outfitOpen && !quickOpen) setChromeRaised(false);
   chrome.webContents.send('bm-edit', null);
   layout(); // #32: re-collapse chrome if we're fullscreen
   activeWc()?.focus();
@@ -1437,7 +1438,7 @@ function activateTab(id, opts = {}) {
   // z-order. Now the active view is always raised above the other PAGE views,
   // and chrome is put back on top afterwards when it is meant to be showing —
   // which preserves #32's fix rather than trading one for the other.
-  const chromeOnTop = fsRevealed || bmDialogOpen || settingsOpen || managerOpen || loginPromptOpen || ytdlpOpen || outfitOpen; // #145/#156/#179
+  const chromeOnTop = fsRevealed || bmDialogOpen || settingsOpen || managerOpen || loginPromptOpen || ytdlpOpen || outfitOpen || quickOpen; // #145/#156/#179/#266
   win.contentView.addChildView(view);
   if (chromeOnTop) win.contentView.addChildView(chrome);
   // #148: boundsChangedFor runs layout() and reports whether the geometry moved.
@@ -1835,6 +1836,7 @@ function handleEscape() {
   // closing anything. Otherwise the keyboard can be trapped in the sidebar, and
   // a navigation aid you cannot leave is worse than not having it.
   if (focusring.isChromeSurface(focusSurface)) return focusTheSurface(focusring.escapeTarget());
+  if (quickOpen) return closeQuickSearch(); // #266
   if (findOpen) return closeFind(); // #101: the find bar is the topmost thing
   if (bmDialogOpen) return closeBookmarkDialog();
   if (bmPanelOpen) return toggleBookmarksPanel();
@@ -2804,7 +2806,7 @@ function offerToSave(id, held) {
 ipcMain.on('login-prompt-answer', (_e, answer) => {
   // Put the window back the way it was first, whatever the answer is.
   loginPromptOpen = false;
-  if (!bmDialogOpen && !settingsOpen && !managerOpen && !ytdlpOpen && !outfitOpen) setChromeRaised(false);
+  if (!bmDialogOpen && !settingsOpen && !managerOpen && !ytdlpOpen && !outfitOpen && !quickOpen) setChromeRaised(false);
   layout();
   activeWc()?.focus();
   if (locked || !answer || !answer.accepted) return;
@@ -2877,6 +2879,7 @@ function showLock() {
   loginPromptOpen = false;
   ytdlpOpen = false; // #156
   outfitOpen = false; // #179
+  quickOpen = false; // #266
   vault.lock();
   // Tear the whole session down — nothing sensitive stays rendered or mapped.
   for (const id of [...tabOrder]) {
@@ -3474,6 +3477,34 @@ ipcMain.on('cycle-tab', (e, dir) => {
   if (locked || activeId === null || tabs.get(activeId)?.webContents !== e.sender) return;
   cycleTab(dir > 0 ? 1 : -1);
 });
+// #266: Shift+Space from a page (the preload already yielded to text fields).
+// One dialog answers Enter at a time, like the outfit dialog (#195).
+ipcMain.on('quick-search', (e) => {
+  if (locked || activeId === null || tabs.get(activeId)?.webContents !== e.sender) return;
+  if (quickOpen || outfitOpen || bmDialogOpen || ytdlpOpen || loginPromptOpen || settingsOpen || managerOpen) return;
+  quickOpen = true;
+  clearFsReveal();
+  setChromeRaised(true);
+  layout();
+  chrome?.webContents.send('quick-search-open');
+  chrome?.webContents.focus();
+});
+function closeQuickSearch() {
+  const wasOpen = quickOpen;
+  quickOpen = false;
+  if (wasOpen) chrome?.webContents.send('quick-search-close');
+  if (!bmDialogOpen && !settingsOpen && !managerOpen && !loginPromptOpen && !ytdlpOpen && !outfitOpen) setChromeRaised(false);
+  layout();
+  activeWc()?.focus();
+  return wasOpen;
+}
+ipcMain.on('quick-search-answer', (_e, text) => {
+  if (!quickOpen) return;
+  closeQuickSearch();
+  if (locked || typeof text !== 'string' || !text.trim()) return;
+  const url = resolveInput(text.trim());
+  createTab(url, false, personas.UNASSIGNED); // URL rules still win inside createTab
+});
 // #258: Ctrl+S picked a hover-only menu header: hover it for real, so its CSS
 // :hover submenu opens. Coordinates are the page's CSS pixels.
 ipcMain.on('hint-hover', (e, x, y) => {
@@ -3705,7 +3736,7 @@ ipcMain.on('ytdlp-open', () => {
 // #260: kind is 'outfit' (default) or 'pose'; the dialog and Studio flow are the same.
 function openOutfitDialog(src, kind = 'outfit') {
   if (locked || !museforge.canSend(src)) return;
-  if (outfitOpen || bmDialogOpen || ytdlpOpen || loginPromptOpen) return; // #195: one dialog answers Enter at a time
+  if (outfitOpen || quickOpen || bmDialogOpen || ytdlpOpen || loginPromptOpen) return; // #195: one dialog answers Enter at a time
   outfitOpen = true;
   clearFsReveal();
   setChromeRaised(true);
@@ -3717,7 +3748,7 @@ function openOutfitDialog(src, kind = 'outfit') {
 ipcMain.on('outfit-answer', (_e, a) => {
   const wasOpen = outfitOpen; // #195: an answer with no dialog showing spends nothing
   outfitOpen = false;
-  if (!bmDialogOpen && !settingsOpen && !managerOpen && !loginPromptOpen && !ytdlpOpen) setChromeRaised(false);
+  if (!bmDialogOpen && !settingsOpen && !managerOpen && !loginPromptOpen && !ytdlpOpen && !quickOpen) setChromeRaised(false);
   layout();
   activeWc()?.focus();
   if (locked || !wasOpen || !a || !a.go) return;
@@ -3900,7 +3931,7 @@ async function sendToStash(kind, url, wc, meta = null) {
 
 ipcMain.on('ytdlp-answer', (_e, a) => {
   ytdlpOpen = false;
-  if (!bmDialogOpen && !settingsOpen && !managerOpen && !loginPromptOpen && !outfitOpen) setChromeRaised(false);
+  if (!bmDialogOpen && !settingsOpen && !managerOpen && !loginPromptOpen && !outfitOpen && !quickOpen) setChromeRaised(false);
   layout();
   activeWc()?.focus();
   if (locked || !a || !a.send || !ytdlp.downloadable(a.url)) return;
