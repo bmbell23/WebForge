@@ -16,7 +16,7 @@ const ordered = po.orderPersonas(stored);
 eq(ordered.map((p) => p.name),
   ['Terminal', 'Work Mattermost', 'Work', 'Mattermost', 'Personal', 'Teams', 'Outlook', 'Discord', 'Slack', 'Finance', 'Unassigned'],
   'key order, then your other Personas, then Unassigned');
-eq(ordered.map((p) => p.key || ''), ['`', '!', '@', '#', '$', '%', '^', '&', '', '', ''], 'Slack (#301), Finance and Unassigned have no key');
+eq(ordered.map((p) => p.key || ''), ['`', '!', '@', '#', '$', '%', '^', '&', '*', '(', ''], '#307: Slack and Finance get * and (; Unassigned (11th) has no key');
 eq(ordered.filter((p) => !p.slot && p.id !== 'terminal').map((p) => p.id), ['w', 'p', 'f', 'unassigned'], 'stored ids are unchanged');
 eq(po.orderPersonas([...stored, { id: 'terminal', name: 'Imposter' }, { id: 'slot-teams', name: 'X' }]).length, 11, 'a stored "terminal" or slot id never doubles up');
 eq(po.orderPersonas([]).map((p) => p.key), ['`', '!', '@', '#', '$', '%', '^'], '#297: no Work or Personal: the keys close up, they follow the position');
@@ -50,7 +50,8 @@ eq(po.leaderPick(k('Digit4'), ordered), 'p', '$ Personal');
 eq(po.leaderPick(k('Digit5'), ordered), 'slot-teams', '% Teams');
 eq(po.leaderPick(k('Digit6'), ordered), 'slot-outlook', '^ Outlook');
 eq(po.leaderPick(k('Digit7'), ordered), 'slot-discord', '& Discord (#282)');
-eq(po.leaderPick(k('Digit8'), ordered), null, 'Shift+8 is free');
+eq(po.leaderPick(k('Digit8'), ordered), 'slot-slack', '#307: * is the 9th (Slack)');
+eq(po.leaderPick(k('Digit0'), ordered), null, 'Shift+0 is free');
 eq(po.leaderPick(k('Backquote'), ordered), null, '~ is not `');
 eq(po.leaderPick(k('Digit1', { shift: false }), ordered), null, 'bare 1 is forge\'s, not a Persona key');
 eq(po.leaderPick(k('Digit1', { control: true }), ordered), null, 'Ctrl+Shift+1 is not');
@@ -69,7 +70,9 @@ eq(po.directPick(c('Digit4'), () => ordered), 'p', 'Ctrl+4 Personal (list built 
 eq(po.directPick(c('Digit5'), ordered), 'slot-teams', 'Ctrl+5 Teams');
 eq(po.directPick(c('Digit6'), ordered), 'slot-outlook', 'Ctrl+6 Outlook');
 eq(po.directPick(c('Digit7'), ordered), 'slot-discord', 'Ctrl+7 Discord (#282)');
-eq(po.directPick(c('Digit8'), ordered), null, 'Ctrl+8 is free');
+eq(po.directPick(c('Digit8'), ordered), 'slot-slack', '#307: Ctrl+8 is the 9th');
+eq(po.directPick(c('Digit9'), ordered), 'f', '#307: Ctrl+9 is the 10th');
+eq(po.directPick(c('Digit0'), ordered), null, 'Ctrl+0 stays Actual Size');
 eq(po.directPick(c('Digit0'), ordered), null, 'Ctrl+0 stays Actual Size');
 eq(po.directPick(c('Digit1', { shift: true }), ordered), null, 'Ctrl+Shift+1 stays the page\'s');
 eq(po.directPick(c('Digit1', { control: false }), ordered), null, 'bare 1 types a 1');
@@ -91,7 +94,10 @@ eq(po.directPick(fk('F5'), ordered), 'p', 'F5 Personal');
 eq(po.directPick(fk('F6'), ordered), 'slot-teams', 'F6 Teams');
 eq(po.directPick(fk('F7'), () => ordered), 'slot-outlook', 'F7 Outlook');
 eq(po.directPick(fk('F8'), ordered), 'slot-discord', 'F8 Discord (#282)');
-eq(po.directPick(fk('F9'), ordered), null, 'F9 is free');
+eq(po.directPick(fk('F9'), ordered), 'slot-slack', '#307: F9 is the 9th');
+eq(po.directPick(fk('F10'), ordered), 'f', '#307: F10 is the 10th');
+eq(po.directPick(fk('F11'), ordered), null, 'F11 stays full screen');
+eq(po.directPick(fk('F12'), ordered), null, 'F12 stays DevTools');
 eq(po.directPick(fk('F11'), ordered), null, 'F11 stays full screen');
 eq(po.directPick(fk('F4', { alt: true }), ordered), null, 'Alt+F4 still closes the window');
 eq(po.directPick(fk('F4', { control: true }), ordered), null, 'Ctrl+F4 still closes the tab');
@@ -172,7 +178,8 @@ eq(few[few.length - 1].key, '&', '... and may take the key of its position');
 const nine = po.orderPersonas(stored, po.slots(), ['f', ...saved.filter((i) => i !== 'f')]);
 eq(nine[0].key, '`', 'any Persona can take position 1');
 eq(nine.find((p) => p.id === 'slot-outlook').key, '&', 'position 8 is &');
-eq(nine.find((p) => p.id === 'slot-discord').key, undefined, 'position 9+ has no key');
+eq(nine.find((p) => p.id === 'slot-discord').key, '*', '#307: position 9 is *');
+eq(nine[nine.length - 1].key, undefined, 'position 11+ has no key');
 
 console.log('movePersona (#297)');
 eq(po.movePersona(base, 'slot-teams', -1).slice(4, 7), ['slot-teams', 'p', 'slot-outlook'], 'left swaps with the one before');
@@ -190,7 +197,8 @@ console.log('keyLabel (#297)');
 eq(po.keyLabel(base[0]), 'F1 · Ctrl+`', 'position 1');
 eq(po.keyLabel(base[2]), 'F3 · Ctrl+2', 'position 3');
 eq(po.keyLabel(base[7]), 'F8 · Ctrl+7', 'position 8');
-eq(po.keyLabel(base[8]), '', 'no key');
+eq(po.keyLabel(base[8]), 'F9 · Ctrl+8', '#307: the 9th');
+eq(po.keyLabel({ id: 'x' }), '', 'no key');
 
 
 console.log('apps (#301)');
@@ -248,12 +256,12 @@ eq(po.slotFor('https://app.slack.com/client/T1/C2', seeded), 'slot-slack', 'Slac
 const oz = po.orderPersonas(P, withZ);
 eq(oz.map((p) => p.id), ['terminal', 'slot-work-mattermost', 'w', 'slot-personal-mattermost', 'p', 'slot-teams', 'slot-outlook', 'slot-discord', 'slot-slack', 'slot-zulip', 'f', 'unassigned'],
   'Slack at 9 and a new app after the defaults, before your other Personas');
-eq(oz.find((p) => p.id === 'slot-slack').key, undefined, 'Slack has no key by default');
+eq(oz.find((p) => p.id === 'slot-slack').key, '*', '#307: Slack (9th by default) is *');
 eq(oz.find((p) => p.id === 'slot-zulip').url, 'https://chat.z.example.com/#narrow', 'the new slot persona has its URL');
 const oneMove = po.movePersona(oz, 'slot-slack', -1);
 const oz2 = po.orderPersonas(P, withZ, oneMove);
 eq(oz2.find((p) => p.id === 'slot-slack').key, '&', 'Slack moved up one: it takes position 8, key &');
-eq(oz2.find((p) => p.id === 'slot-discord').key, undefined, 'and Discord gives its key up');
+eq(oz2.find((p) => p.id === 'slot-discord').key, '*', 'and Discord drops to 9th, key *');
 eq(po.orderPersonas(P, r1, oneMove).some((p) => p.id === 'slot-teams'), false, 'a removed app vanishes from the order');
 eq(po.orderPersonas(P, po.removeApp(withZ, 'zulip'), ['slot-zulip', 'w']).map((p) => p.id).includes('slot-zulip'), false, 'a saved id of a removed app is ignored');
 eq(po.openerHome('slot-zulip', oz, withZ), 'f', 'home as a Persona id');

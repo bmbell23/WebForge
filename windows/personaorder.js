@@ -14,8 +14,8 @@ const SLOT_PREFIX = 'slot-';
 const TERMINAL_PERSONA = Object.freeze({ id: TERMINAL, name: 'Terminal', builtin: true, terminal: true, rules: [] });
 
 // #297: the keys FOLLOW THE POSITION. The list is the key map: position 1 gets `
-// (Backquote, F1), position 2 gets ! (Digit1, Ctrl+1, F2) ... position 8 gets &
-// (Digit7, F8). Positions 9+ have no key. Ctrl+Space then the physical key.
+// (Backquote, F1), position 2 gets ! (Digit1, Ctrl+1, F2) ... position 10 gets (
+// (Digit9, F10, #307). Positions 11+ have no key. Ctrl+Space then the physical key.
 const KEYS = Object.freeze([
   { key: '`', code: 'Backquote', shift: false },
   { key: '!', code: 'Digit1', shift: true },
@@ -25,6 +25,8 @@ const KEYS = Object.freeze([
   { key: '%', code: 'Digit5', shift: true },
   { key: '^', code: 'Digit6', shift: true },
   { key: '&', code: 'Digit7', shift: true }, // #282
+  { key: '*', code: 'Digit8', shift: true }, // #307
+  { key: '(', code: 'Digit9', shift: true }, // #307 (Ctrl+0 stays Actual Size)
 ]);
 
 // Brandon's default order (2026-10-06), used until you reorder:
@@ -162,7 +164,7 @@ const isSlotId = (id) => typeof id === 'string' && id.startsWith(SLOT_PREFIX);
 // #297: `savedOrder` (settings.personaOrder, an array of ids) wins: the ids that
 // still exist, in that order, then everything else in the default order (so a new
 // Persona lands after the ones you placed), then Unassigned, always last. Each
-// entry in the first 8 places carries the key for its position (`key`, `code`,
+// entry in the first 10 places carries the key for its position (`key`, `code`,
 // `shift`) for the picker and the leader.
 function orderPersonas(list, slotList = slots(), savedOrder = null) {
   const stored = (list || []).filter((p) => p.id !== TERMINAL && !isSlotId(p.id));
@@ -212,7 +214,7 @@ function movePersona(ordered, id, dir) {
 
 // #297: what picks an entry, for Settings: "F3 · Ctrl+2". '' when it has no key.
 function keyLabel(p) {
-  const m = /^Digit([1-7])$/.exec((p && p.code) || '');
+  const m = /^Digit([1-9])$/.exec((p && p.code) || '');
   if (m) return `F${Number(m[1]) + 1} · Ctrl+${m[1]}`;
   return p && p.code === 'Backquote' ? 'F1 · Ctrl+`' : '';
 }
@@ -255,12 +257,12 @@ function openerHome(pid, ordered, appList = slots()) {
 }
 
 // #224: the same targets as one chord, no leader: Ctrl+` (Shift allowed, so
-// Ctrl+~ too) and Ctrl+1–7, by physical key. `ordered` is a function so the
+// Ctrl+~ too) and Ctrl+1–9, by physical key. `ordered` is a function so the
 // Persona list is only built when the chord actually matches.
 // #251/#264: bare F-keys, in the Ctrl+Space key order: F1 is the Terminal
-// (Ctrl+`), F2–F8 are Ctrl+1–7.
-const DIRECT = /^(Backquote|Digit[1-7])$/; // #297: the key of whoever holds that position
-const FKEY = /^F([1-8])$/;
+// (Ctrl+`), F2–F10 are Ctrl+1–9.
+const DIRECT = /^(Backquote|Digit[1-9])$/; // #297: the key of whoever holds that position
+const FKEY = /^F([1-9]|10)$/; // #307: F11 full screen and F12 DevTools stay
 function directPick(input, ordered) {
   if (!input) return null;
   const f = FKEY.exec(input.code || '');
