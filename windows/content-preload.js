@@ -129,60 +129,6 @@ window.addEventListener('keydown', (e) => {
   }, 0);
 }, true); // capture: a site that stops the event's propagation can't hide it from us
 
-// #247: Ctrl+Shift+Up/Down step through the Persona's tabs, like Ctrl+PageUp/
-// PageDown. In a text field the chord stays the field's (paragraph selection,
-// the #38/#101 lesson); Esc (#243) gets you out of the field first.
-window.addEventListener(
-  'keydown',
-  (e) => {
-    if (!e.ctrlKey || !e.shiftKey || e.altKey || e.metaKey) return;
-    if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
-    let el = e.composedPath?.()[0] || document.activeElement;
-    if (el === document.body) el = null;
-    const tag = el && el.tagName;
-    const field =
-      el &&
-      (el.isContentEditable ||
-        tag === 'TEXTAREA' ||
-        tag === 'SELECT' ||
-        (tag === 'INPUT' &&
-          !['button', 'submit', 'reset', 'checkbox', 'radio', 'file', 'image', 'range', 'color'].includes(
-            (el.type || 'text').toLowerCase()
-          )));
-    if (field) return;
-    e.preventDefault();
-    e.stopPropagation();
-    ipcRenderer.send('cycle-tab', e.key === 'ArrowDown' ? 1 : -1);
-  },
-  true
-);
-
-// #266: Shift+Space opens the quick search box, unless you are typing (then it
-// stays a space). Same editable check as #247 above.
-window.addEventListener(
-  'keydown',
-  (e) => {
-    if (e.key !== ' ' || !e.shiftKey || e.ctrlKey || e.altKey || e.metaKey || e.isComposing) return;
-    let el = e.composedPath?.()[0] || document.activeElement;
-    if (el === document.body) el = null;
-    const tag = el && el.tagName;
-    const field =
-      el &&
-      (el.isContentEditable ||
-        tag === 'TEXTAREA' ||
-        tag === 'SELECT' ||
-        (tag === 'INPUT' &&
-          !['button', 'submit', 'reset', 'checkbox', 'radio', 'file', 'image', 'range', 'color'].includes(
-            (el.type || 'text').toLowerCase()
-          )));
-    if (field) return;
-    e.preventDefault();
-    e.stopPropagation();
-    ipcRenderer.send('quick-search');
-  },
-  true
-);
-
 // #100: Ctrl+J opens the current selection through the URL rules. Read here
 // because before-input-event in the main process is synchronous and cannot ask
 // the page what is selected. Main stays silent when nothing matches.
