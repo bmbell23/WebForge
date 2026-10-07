@@ -149,7 +149,7 @@ function knownHostsLine(host, port, keyBuf) {
 const CTRL_SPACE = '\x1b[32;5u';
 
 // #214: inside a terminal tab, Ctrl+Space holds the NEXT key. A Persona key
-// (` and Shift+1–6, see personaorder.KEYMAP; Cora: all unbound in forge) switches
+// (` and Shift+1–7, see personaorder.KEYMAP; Cora: all unbound in forge) switches
 // Persona and forge never sees the prefix; any other key goes to the session
 // right behind the prefix, in one write. Bare modifiers keep waiting. No timeout:
 // forge never expires an armed prefix, so neither do we.
