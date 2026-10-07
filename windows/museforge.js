@@ -9,6 +9,15 @@
 'use strict';
 
 const OUTFIT_PAGE = 'http://100.69.184.113:8005/library/outfit/from-image';
+// #260: the pose flow is the outfit flow at a sibling address; the girl flow is
+// the Studio's own describe page (it shows the price and its own button).
+const POSE_PAGE = 'http://100.69.184.113:8005/library/pose/from-image';
+const GIRL_PAGE = 'http://100.69.184.113:8005/girls/describe';
+
+/** #260: the from-image page for a kind; anything but 'pose' is an outfit. */
+function pageFor(kind) {
+  return kind === 'pose' ? POSE_PAGE : OUTFIT_PAGE;
+}
 
 /** Only an absolute http(s) image can be handed over; data:, blob: and file: can't be fetched by the Studio. */
 function canSend(src) {
@@ -21,14 +30,20 @@ function canSend(src) {
 }
 
 /** The Studio address for an image plus the optional name and description. */
-function outfitUrl(src, name, text) {
+function outfitUrl(src, name, text, kind = 'outfit') {
   if (!canSend(src)) return null;
   const q = new URLSearchParams({ src: String(src) });
   const n = String(name || '').trim();
   const t = String(text || '').trim();
   if (n) q.set('name', n);
   if (t) q.set('text', t);
-  return `${OUTFIT_PAGE}?${q.toString()}`;
+  return `${pageFor(kind)}?${q.toString()}`;
+}
+
+/** #260: the Studio's describe page for a picture (no name/description; it asks itself). */
+function girlUrl(src) {
+  if (!canSend(src)) return null;
+  return `${GIRL_PAGE}?${new URLSearchParams({ src: String(src) }).toString()}`;
 }
 
 /**
@@ -37,11 +52,14 @@ function outfitUrl(src, name, text) {
  * WebForge takes you back to the page you came from. Pinned by
  * shared/outfit-done-fixtures.tsv, which the Android test reads too.
  */
-function isDone(url) {
+function isDone(url, kind = 'outfit') {
   try {
     const u = new URL(String(url || ''));
     const page = new URL(OUTFIT_PAGE);
-    return u.origin === page.origin && (u.pathname === '/approvals' || u.pathname.startsWith('/approvals/'));
+    if (!(u.origin === page.origin && (u.pathname === '/approvals' || u.pathname.startsWith('/approvals/')))) return false;
+    // #260: a fragment naming the OTHER kind's figure isn't this flow's result.
+    const other = kind === 'pose' ? '#fig-outfit-' : '#fig-pose-';
+    return !u.hash.startsWith(other);
   } catch {
     return false;
   }
@@ -79,4 +97,4 @@ function createResult(status, location) {
   return 'error';
 }
 
-module.exports = { OUTFIT_PAGE, PRICE_LABEL, canSend, outfitUrl, isDone, createForm, createResult };
+module.exports = { OUTFIT_PAGE, POSE_PAGE, GIRL_PAGE, pageFor, girlUrl, PRICE_LABEL, canSend, outfitUrl, isDone, createForm, createResult };

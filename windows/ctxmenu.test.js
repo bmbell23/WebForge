@@ -153,6 +153,11 @@ test('an http(s) image offers it, last in the image section', () => {
   const items = build({ mediaType: 'image', srcURL: 'https://x.com/i.png' }, { imageOutfit: true });
   const got = ids(items);
   assert.strictEqual(got[got.indexOf('image.save') + 1], 'image.outfit');
+  // #260: pose and girl follow outfit
+  assert.strictEqual(got[got.indexOf('image.outfit') + 1], 'image.pose');
+  assert.strictEqual(got[got.indexOf('image.outfit') + 2], 'image.girl');
+  assert.strictEqual(find(items, 'image.pose').label, 'Create Pose…');
+  assert.strictEqual(find(items, 'image.girl').label, 'Create Girl…');
   assert.strictEqual(find(items, 'image.outfit').label, 'Create Outfit…');
 });
 
@@ -185,7 +190,7 @@ console.log('#177: Add to Stash');
 
 test('an http(s) image offers Add to Stash after Create Outfit', () => {
   const got = ids(build({ mediaType: 'image', srcURL: 'https://x.com/i.png' }, { imageOutfit: true, mediaStash: true }));
-  assert.strictEqual(got[got.indexOf('image.outfit') + 1], 'media.stash');
+  assert.strictEqual(got[got.indexOf('image.girl') + 1], 'media.stash');
 });
 
 test('a <video> with a file behind it offers Add video to Stash', () => {

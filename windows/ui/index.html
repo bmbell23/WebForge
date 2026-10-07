@@ -838,7 +838,7 @@
        optional; the Studio page lets you fix them and confirms before spending. -->
   <div id="outfit">
     <div class="card">
-      <div class="msg">Create Outfit</div>
+      <div class="msg" id="outfitmsg">Create Outfit</div>
       <img id="outfitimg" alt="">
       <input id="outfitname" type="text" placeholder="Name (e.g. moto jacket)" spellcheck="false">
       <input id="outfittext" type="text" placeholder="Description (e.g. black leather moto jacket over a white crop top)">
@@ -2342,10 +2342,12 @@
     const img = document.getElementById('outfitimg');
     const name = document.getElementById('outfitname');
     const text = document.getElementById('outfittext');
+    const msg = document.getElementById('outfitmsg');
     let current = null;
     const answer = (go) => {
       if (!current) return;
-      webforge.outfitAnswer({ go, src: current.src, name: name.value, text: text.value });
+      // #260: the kind goes back with the answer so main builds the right address.
+      webforge.outfitAnswer({ go, kind: current.kind, src: current.src, name: name.value, text: text.value });
       current = null;
       box.classList.remove('open');
       img.removeAttribute('src');
@@ -2367,6 +2369,11 @@
       current = p;
       name.value = '';
       text.value = '';
+      // #260: the same dialog serves outfits and poses.
+      const pose = p.kind === 'pose';
+      msg.textContent = pose ? 'Create a pose from this picture' : 'Create Outfit';
+      name.placeholder = pose ? 'Name (e.g. hair flip)' : 'Name (e.g. moto jacket)';
+      text.placeholder = pose ? 'Description (e.g. looking back over her shoulder)' : 'Description (e.g. black leather moto jacket over a white crop top)';
       img.src = p.src;
       box.classList.add('open');
       name.focus();

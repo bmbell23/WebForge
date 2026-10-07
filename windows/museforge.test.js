@@ -1,6 +1,6 @@
 // #179 tests:  node windows/museforge.test.js
 const assert = require('assert');
-const { canSend, outfitUrl, isDone, createForm, createResult, PRICE_LABEL, OUTFIT_PAGE } = require('./museforge');
+const { pageFor, girlUrl, POSE_PAGE, GIRL_PAGE, canSend, outfitUrl, isDone, createForm, createResult, PRICE_LABEL, OUTFIT_PAGE } = require('./museforge');
 
 let n = 0;
 const ok = (cond, msg) => { assert.ok(cond, msg); n++; };
@@ -62,5 +62,26 @@ for (const line of fs.readFileSync(path.join(__dirname, '..', 'shared', 'outfit-
   created++;
 }
 ok(created >= 10, `only ${created} create fixtures read`);
+
+console.log('#260: pose and girl');
+ok(POSE_PAGE === 'http://100.69.184.113:8005/library/pose/from-image', 'pose page');
+ok(GIRL_PAGE === 'http://100.69.184.113:8005/girls/describe', 'girl page');
+ok(pageFor('pose') === POSE_PAGE && pageFor('outfit') === OUTFIT_PAGE, 'pageFor the two kinds');
+ok(pageFor() === OUTFIT_PAGE && pageFor('girl') === OUTFIT_PAGE, 'anything else is an outfit');
+const pu = new URL(outfitUrl('https://ex.com/p.jpg?w=1&h=2', 'hair flip', 'looking back & smiling', 'pose'));
+ok(pu.origin + pu.pathname === POSE_PAGE, 'pose goes to the pose page');
+ok(pu.searchParams.get('src') === 'https://ex.com/p.jpg?w=1&h=2' && pu.searchParams.get('name') === 'hair flip' && pu.searchParams.get('text') === 'looking back & smiling', 'pose params');
+ok(outfitUrl('https://ex.com/p.jpg', 'a', 'b', 'outfit') === outfitUrl('https://ex.com/p.jpg', 'a', 'b'), 'outfit is the default');
+ok(outfitUrl('data:image/png;base64,AA', 'x', 'y', 'pose') === null, 'unsendable pose picture');
+const gu = new URL(girlUrl('https://ex.com/g.jpg?w=1&h=2'));
+ok(gu.origin + gu.pathname === GIRL_PAGE && gu.searchParams.get('src') === 'https://ex.com/g.jpg?w=1&h=2' && [...gu.searchParams].length === 1, 'girl address carries only src');
+ok(girlUrl('blob:https://ex.com/1') === null && girlUrl('') === null, 'unsendable girl picture');
+const A = 'http://100.69.184.113:8005/approvals';
+ok(isDone(A + '#fig-pose-hair-flip', 'pose') && isDone(A, 'pose') && isDone(A + '/', 'pose'), 'pose done');
+ok(!isDone(A + '#fig-outfit-x', 'pose'), 'an outfit result is not a pose result');
+ok(!isDone(A + '#fig-pose-x') && !isDone(A + '#fig-pose-x', 'outfit'), 'a pose result is not an outfit result');
+ok(isDone(A + '#fig-outfit-x') && isDone(A + '#fig-outfit-x', 'outfit'), 'outfit done still');
+ok(!isDone('http://100.69.184.113:8005/library/pose/from-image?src=x', 'pose'), 'the form page is not done');
+ok(!isDone('https://evil.example/approvals#fig-pose-x', 'pose'), 'wrong origin');
 
 console.log(`ok, ${n} checks`);
