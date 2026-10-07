@@ -57,6 +57,7 @@ const repaint = require('./repaint'); // #148 — ditto (when to force a frame)
 const focusring = require('./focusring'); // #131 — ditto (chrome surface vs page view)
 const museforge = require('./museforge'); // #179 — Electron-free (the Studio's outfit-from-image address)
 const ytdlp = require('./ytdlp'); // #156 — ditto (what the download button sends)
+const popout = require('./popout'); // #235 — Electron-free
 const adultlist = require('./adultlist'); // #203 — ditto (your adult-site list)
 const stash = require('./stash'); // #177 — ditto (Add to Stash body + job wording)
 const autofillFrames = require('./autofillframes'); // #141
@@ -2955,7 +2956,10 @@ function onUnlocked() {
   // Restore the previous session; fall back to legacy pinned.json, then Home.
   const session = vault.readFile('session');
   if (session?.tabs?.length) {
-    for (const t of session.tabs) {
+    for (const saved of session.tabs) {
+      // #235: a Mattermost pop-out can't load without the window that opened it,
+      // so it comes back as the ordinary channel or thread page.
+      const t = { ...saved, url: popout.unpopout(saved.url), pinHome: saved.pinHome && popout.unpopout(saved.pinHome) };
       // #78: restore unloaded — the page is fetched when you first click it.
       const id = createTab(t.url, true, t.persona || null, {
         lazy: true,
