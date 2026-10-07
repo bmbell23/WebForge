@@ -3448,6 +3448,17 @@ ipcMain.on('cycle-tab', (e, dir) => {
   if (locked || activeId === null || tabs.get(activeId)?.webContents !== e.sender) return;
   cycleTab(dir > 0 ? 1 : -1);
 });
+// #258: Ctrl+S picked a hover-only menu header: hover it for real, so its CSS
+// :hover submenu opens. Coordinates are the page's CSS pixels.
+ipcMain.on('hint-hover', (e, x, y) => {
+  const wc = tabs.get(activeId)?.webContents;
+  if (locked || !wc || wc !== e.sender || !Number.isFinite(x) || !Number.isFinite(y)) return;
+  const z = wc.getZoomFactor ? wc.getZoomFactor() : 1;
+  const px = Math.round(x * z);
+  const py = Math.round(y * z);
+  wc.sendInputEvent({ type: 'mouseEnter', x: px, y: py });
+  wc.sendInputEvent({ type: 'mouseMove', x: px, y: py });
+});
 ipcMain.on('close-active-tab', () => {
   if (!locked && activeId !== null) closeTab(activeId);
 });
