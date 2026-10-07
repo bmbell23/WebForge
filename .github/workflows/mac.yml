@@ -1,0 +1,51 @@
+# #270: the macOS app (#269). dockerhost is Linux and can't build or sign a
+# proper .dmg, so a GitHub-hosted Mac does it (the repo is public: free minutes).
+#   pull_request  -> build only; the .dmg/.zip ride along as run artifacts
+#   tag v*        -> build and attach them to that tag's GitHub Release
+# Unsigned for now (identity null in windows/package.json): first launch is
+# right-click > Open. version.txt stays the single source of truth, injected
+# the same way scripts/build-windows.sh does it.
+name: macOS build
+
+on:
+  pull_request:
+    paths: ['windows/**', 'shared/**', 'version.txt', '.github/workflows/mac.yml']
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write # attach files to the tag's release
+
+jobs:
+  mac:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: windows/package-lock.json
+      - name: Install
+        working-directory: windows
+        run: npm ci
+      - name: Build .dmg and .zip (arm64 + x64)
+        working-directory: windows
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false' # no Developer ID yet: don't go looking for one
+        run: npx electron-builder --mac dmg zip --arm64 --x64 --publish never -c.extraMetadata.version="$(cat ../version.txt)"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: webforge-mac
+          path: |
+            windows/dist/*.dmg
+            windows/dist/*.zip
+            windows/dist/latest-mac.yml
+          if-no-files-found: error
+      - name: Attach to the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes "WebForge $GITHUB_REF_NAME"
+          gh release upload "$GITHUB_REF_NAME" windows/dist/*.dmg windows/dist/*.zip windows/dist/latest-mac.yml --clobber
