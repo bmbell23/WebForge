@@ -142,6 +142,17 @@ function directPick(input, ordered) {
   return hit ? hit.id : null;
 }
 
+// #295: Ctrl+Alt+Left/Right. The Persona `dir` (±1) places from `currentId` in
+// picker order, wrapping at the ends. A current id not in the list starts from
+// the first entry. null when there's nowhere else to go.
+function stepPersona(ordered, currentId, dir) {
+  const ids = (ordered || []).map((p) => p.id);
+  if (ids.length < 2) return null;
+  const i = ids.indexOf(currentId);
+  if (i < 0) return ids[0];
+  return ids[(i + (dir < 0 ? -1 : 1) + ids.length) % ids.length];
+}
+
 // #231: what a page title says about unread messages. Teams and Mattermost
 // lead with "(3) …" for a count; Mattermost leads with "* " when there are
 // unread messages but no mentions. Returns { count, dot }.
@@ -174,5 +185,5 @@ function leaderPick(input, ordered) {
 
 module.exports = {
   TERMINAL, UNASSIGNED, TERMINAL_PERSONA, KEYMAP, DEFAULT_SLOTS,
-  slots, slotUrl, isSlotId, orderPersonas, leaderPick, unreadFromTitle, unreadBadge, directPick, slotFor, openerHome,
+  slots, slotUrl, isSlotId, orderPersonas, leaderPick, unreadFromTitle, unreadBadge, directPick, slotFor, openerHome, stepPersona,
 };

@@ -95,6 +95,16 @@ eq(po.directPick(fk('F4', { alt: true }), ordered), null, 'Alt+F4 still closes t
 eq(po.directPick(fk('F4', { control: true }), ordered), null, 'Ctrl+F4 still closes the tab');
 eq(po.directPick(fk('F5', { shift: true }), ordered), null, 'Shift+F5 is not');
 
+console.log('stepPersona (#295)');
+eq(po.stepPersona(ordered, 'terminal', 1), 'slot-work-mattermost', 'right from Terminal');
+eq(po.stepPersona(ordered, 'slot-work-mattermost', -1), 'terminal', 'left back to Terminal');
+eq(po.stepPersona(ordered, 'terminal', -1), 'unassigned', 'left from the first wraps to the last');
+eq(po.stepPersona(ordered, 'unassigned', 1), 'terminal', 'right from the last wraps to the first');
+eq(po.stepPersona(ordered, 'w', 1), 'slot-personal-mattermost', 'Work → Mattermost');
+eq(po.stepPersona(ordered, 'gone', 1), 'terminal', 'unknown current starts at the first');
+eq(po.stepPersona([{ id: 'only' }], 'only', 1), null, 'one Persona: nowhere to go');
+eq(po.stepPersona(null, 'x', 1), null, 'no list');
+
 console.log('unread (#231)');
 eq(po.unreadFromTitle('(3) Town Square - Team Mattermost'), { count: 3, dot: false }, 'Mattermost mentions');
 eq(po.unreadFromTitle('(12) Chat | Microsoft Teams'), { count: 12, dot: false }, 'Teams count');
