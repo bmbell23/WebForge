@@ -14,12 +14,12 @@ const stored = [
 ];
 const ordered = po.orderPersonas(stored);
 eq(ordered.map((p) => p.name),
-  ['Terminal', 'Work Mattermost', 'Work', 'Mattermost', 'Personal', 'Teams', 'Outlook', 'Finance', 'Unassigned'],
+  ['Terminal', 'Work Mattermost', 'Work', 'Mattermost', 'Personal', 'Teams', 'Outlook', 'Discord', 'Finance', 'Unassigned'],
   'key order, then your other Personas, then Unassigned');
-eq(ordered.map((p) => p.key || ''), ['`', '!', '@', '#', '$', '%', '^', '', ''], 'Unassigned and Finance have no key');
+eq(ordered.map((p) => p.key || ''), ['`', '!', '@', '#', '$', '%', '^', '&', '', ''], 'Unassigned and Finance have no key');
 eq(ordered.filter((p) => !p.slot && p.id !== 'terminal').map((p) => p.id), ['w', 'p', 'f', 'unassigned'], 'stored ids are unchanged');
-eq(po.orderPersonas([...stored, { id: 'terminal', name: 'Imposter' }, { id: 'slot-teams', name: 'X' }]).length, 9, 'a stored "terminal" or slot id never doubles up');
-eq(po.orderPersonas([]).map((p) => p.key), ['`', '!', '#', '%', '^'], 'no Work or Personal: their keys are free');
+eq(po.orderPersonas([...stored, { id: 'terminal', name: 'Imposter' }, { id: 'slot-teams', name: 'X' }]).length, 10, 'a stored "terminal" or slot id never doubles up');
+eq(po.orderPersonas([]).map((p) => p.key), ['`', '!', '#', '%', '^', '&'], 'no Work or Personal: their keys are free');
 eq(po.orderPersonas([{ id: 'x', name: ' work ' }]).find((p) => p.key === '@').id, 'x', 'Work found by name, any case');
 eq(stored.length, 4, 'input not mutated');
 
@@ -29,6 +29,7 @@ eq(po.slots().map((s) => s.url), [
   'http://100.69.184.113:8065/',
   'https://teams.cloud.microsoft/',
   'https://outlook.cloud.microsoft/mail/',
+  'https://discord.com/channels/276238974421434368/276238974421434368',
 ], 'defaults');
 const edited = po.slots({ 'work-mattermost': 'https://chat.example.com', teams: 'javascript:alert(1)', outlook: '  ' });
 eq(edited[0].url, 'https://chat.example.com/', 'an edited URL wins');
@@ -47,7 +48,8 @@ eq(po.leaderPick(k('Digit3'), ordered), 'slot-personal-mattermost', '# Mattermos
 eq(po.leaderPick(k('Digit4'), ordered), 'p', '$ Personal');
 eq(po.leaderPick(k('Digit5'), ordered), 'slot-teams', '% Teams');
 eq(po.leaderPick(k('Digit6'), ordered), 'slot-outlook', '^ Outlook');
-eq(po.leaderPick(k('Digit7'), ordered), null, 'Shift+7 is free');
+eq(po.leaderPick(k('Digit7'), ordered), 'slot-discord', '& Discord (#282)');
+eq(po.leaderPick(k('Digit8'), ordered), null, 'Shift+8 is free');
 eq(po.leaderPick(k('Backquote'), ordered), null, '~ is not `');
 eq(po.leaderPick(k('Digit1', { shift: false }), ordered), null, 'bare 1 is forge\'s, not a Persona key');
 eq(po.leaderPick(k('Digit1', { control: true }), ordered), null, 'Ctrl+Shift+1 is not');
@@ -65,7 +67,8 @@ eq(po.directPick(c('Digit3'), ordered), 'slot-personal-mattermost', 'Ctrl+3 Matt
 eq(po.directPick(c('Digit4'), () => ordered), 'p', 'Ctrl+4 Personal (list built lazily)');
 eq(po.directPick(c('Digit5'), ordered), 'slot-teams', 'Ctrl+5 Teams');
 eq(po.directPick(c('Digit6'), ordered), 'slot-outlook', 'Ctrl+6 Outlook');
-eq(po.directPick(c('Digit7'), ordered), null, 'Ctrl+7 is free');
+eq(po.directPick(c('Digit7'), ordered), 'slot-discord', 'Ctrl+7 Discord (#282)');
+eq(po.directPick(c('Digit8'), ordered), null, 'Ctrl+8 is free');
 eq(po.directPick(c('Digit0'), ordered), null, 'Ctrl+0 stays Actual Size');
 eq(po.directPick(c('Digit1', { shift: true }), ordered), null, 'Ctrl+Shift+1 stays the page\'s');
 eq(po.directPick(c('Digit1', { control: false }), ordered), null, 'bare 1 types a 1');
@@ -85,7 +88,8 @@ eq(po.directPick(fk('F4'), ordered), 'slot-personal-mattermost', 'F4 Mattermost'
 eq(po.directPick(fk('F5'), ordered), 'p', 'F5 Personal');
 eq(po.directPick(fk('F6'), ordered), 'slot-teams', 'F6 Teams');
 eq(po.directPick(fk('F7'), () => ordered), 'slot-outlook', 'F7 Outlook');
-eq(po.directPick(fk('F8'), ordered), null, 'F8 is free');
+eq(po.directPick(fk('F8'), ordered), 'slot-discord', 'F8 Discord (#282)');
+eq(po.directPick(fk('F9'), ordered), null, 'F9 is free');
 eq(po.directPick(fk('F11'), ordered), null, 'F11 stays full screen');
 eq(po.directPick(fk('F4', { alt: true }), ordered), null, 'Alt+F4 still closes the window');
 eq(po.directPick(fk('F4', { control: true }), ordered), null, 'Ctrl+F4 still closes the tab');
@@ -110,6 +114,9 @@ eq(po.slotFor('http://co-sf-pe-042.colorado.datadirectnet.com:8065/team/channels
 eq(po.slotFor('http://100.69.184.113:8065/agents/pl/abc'), 'slot-personal-mattermost', 'another personal Mattermost page');
 eq(po.slotFor('https://outlook.cloud.microsoft/calendar/view/week'), 'slot-outlook', 'the whole Outlook site, not just /mail/');
 eq(po.slotFor('https://teams.cloud.microsoft/v2/?meetingjoin=true'), 'slot-teams', 'a Teams meeting link');
+eq(po.slotFor('https://discord.com/channels/@me/123'), 'slot-discord', '#282: all of discord.com');
+eq(po.slotFor('https://discord.com/login'), 'slot-discord', 'Discord sign-in too');
+eq(po.slotFor('https://support.discord.com/hc'), null, 'other Discord hosts are not the slot');
 eq(po.slotFor('http://100.69.184.113:8005/'), null, 'same host, other port is not the slot');
 eq(po.slotFor('https://co-sf-pe-042.colorado.datadirectnet.com:8065/'), null, 'other scheme is not the slot');
 eq(po.slotFor('https://login.microsoftonline.com/x'), null, 'sign-in pages are nobody\'s');
@@ -122,6 +129,7 @@ eq(po.openerHome('slot-work-mattermost', ordered), 'w', 'Work Mattermost → Wor
 eq(po.openerHome('slot-teams', ordered), 'w', 'Teams → Work');
 eq(po.openerHome('slot-outlook', ordered), 'w', 'Outlook → Work');
 eq(po.openerHome('slot-personal-mattermost', ordered), 'p', 'Mattermost → Personal');
+eq(po.openerHome('slot-discord', ordered), 'p', 'Discord → Personal');
 eq(po.openerHome('terminal', ordered), 'unassigned', 'Terminal → Unassigned');
 eq(po.openerHome('slot-teams', po.orderPersonas([])), 'unassigned', 'no Work Persona → Unassigned');
 eq(po.openerHome(undefined, ordered), 'unassigned', 'unknown opener → Unassigned');

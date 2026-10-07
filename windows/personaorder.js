@@ -4,7 +4,7 @@
 //
 // Terminal is built in and Windows-only: it is never stored in personas.json,
 // so the sync service and the phone never see it. App slots (Mattermost,
-// Teams, Outlook) are the same kind of thing: one pinned tab each, stored in
+// Teams, Outlook, Discord) are the same kind of thing: one pinned tab each, stored in
 // local settings, never synced. Unassigned is the fallback, so it goes last
 // (#71). Ids never change; only the display order does.
 const TERMINAL = 'terminal';
@@ -16,6 +16,7 @@ const TERMINAL_PERSONA = Object.freeze({ id: TERMINAL, name: 'Terminal', builtin
 // Brandon's key map (2026-10-06), Ctrl+Space then the physical key:
 //   ` Terminal   ! Work Mattermost   @ Work   # Personal Mattermost
 //   $ Personal   % Teams             ^ Outlook
+//   & Discord (#282)
 // `persona` entries find a stored Persona by name; `slot` entries are app slots.
 const KEYMAP = [
   { key: '`', code: 'Backquote', shift: false, terminal: true },
@@ -25,6 +26,7 @@ const KEYMAP = [
   { key: '$', code: 'Digit4', shift: true, persona: 'personal' },
   { key: '%', code: 'Digit5', shift: true, slot: 'teams' },
   { key: '^', code: 'Digit6', shift: true, slot: 'outlook' },
+  { key: '&', code: 'Digit7', shift: true, slot: 'discord' }, // #282
 ];
 
 const DEFAULT_SLOTS = Object.freeze([
@@ -33,6 +35,7 @@ const DEFAULT_SLOTS = Object.freeze([
   { id: 'personal-mattermost', name: 'Mattermost', url: 'http://100.69.184.113:8065/', home: 'personal' },
   { id: 'teams', name: 'Teams', url: 'https://teams.cloud.microsoft/', home: 'work' },
   { id: 'outlook', name: 'Outlook', url: 'https://outlook.cloud.microsoft/mail/', home: 'work' },
+  { id: 'discord', name: 'Discord', url: 'https://discord.com/channels/276238974421434368/276238974421434368', home: 'personal' },
 ]);
 
 // An http(s) URL, or null.
@@ -116,12 +119,12 @@ function openerHome(pid, ordered) {
 }
 
 // #224: the same targets as one chord, no leader: Ctrl+` (Shift allowed, so
-// Ctrl+~ too) and Ctrl+1–6, by physical key. `ordered` is a function so the
+// Ctrl+~ too) and Ctrl+1–7, by physical key. `ordered` is a function so the
 // Persona list is only built when the chord actually matches.
 // #251/#264: bare F-keys, in the Ctrl+Space key order: F1 is the Terminal
-// (Ctrl+`), F2–F7 are Ctrl+1–6.
-const DIRECT = /^(Backquote|Digit[1-6])$/;
-const FKEY = /^F([1-7])$/;
+// (Ctrl+`), F2–F8 are Ctrl+1–7.
+const DIRECT = /^(Backquote|Digit[1-7])$/;
+const FKEY = /^F([1-8])$/;
 function directPick(input, ordered) {
   if (!input) return null;
   const f = FKEY.exec(input.code || '');
