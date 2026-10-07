@@ -107,6 +107,14 @@
 <div class="inner">
   <h1>Settings</h1>
 
+  <!-- #297, #305: the keys follow the position in this list. First on the page so it can be found. -->
+  <h2>Order (Personas and apps)</h2>
+  <div class="sub" style="margin-bottom:10px">
+    ▲▼ to move. The keys follow the position: 1st is <b>F1</b> / <b>Ctrl+`</b>, 2nd is <b>F2</b> / <b>Ctrl+1</b>, and so on
+    to the 8th. <b>Ctrl+Alt+Shift+Left / Right</b> moves the Persona you're on. Unassigned stays last.
+  </div>
+  <div id="orderlist"></div>
+
   <h2>Appearance</h2>
   <div class="row" id="themes">
     <button class="choice" data-theme="system">System</button>
@@ -174,7 +182,7 @@
   <h2>Apps</h2>
   <div class="sub" style="margin-bottom:10px">
     Each app is one pinned tab of its own, and its whole site opens in it. Its key
-    follows its place in the Order list below (<b>Ctrl+Space</b> then the key, or
+    follows its place in the Order list at the top (<b>Ctrl+Space</b> then the key, or
     F-keys); only the first eight places have a key. <b>Links open in</b> is the
     Persona a page opened from the app lands in. Removing an app keeps its tabs.
   </div>
@@ -230,9 +238,8 @@
   <div class="sub" style="margin-bottom:10px">
     Named workspaces with their own tab list and their own hotkey bindings.
     Opening a URL that matches a Persona's rules switches you to it automatically;
-    anything unmatched lands in <b>Unassigned</b>. Switch with <b>Ctrl+Space</b> then
-    the Persona's key (<b>@</b> Work, <b>$</b> Personal), or straight from <b>Ctrl+2</b> / <b>Ctrl+4</b>. Unassigned and any Persona you add
-    are in the picker only.
+    anything unmatched lands in <b>Unassigned</b>. Each Persona's keys follow its place
+    in the Order list at the top.
     <br><br>
     One rule per line. Every rule is anchored at the start and open-ended at the end,
     so <code>https://host</code> also matches <code>https://host/deep/path</code>.
@@ -245,10 +252,6 @@
       <code>/^https:\/\/(ci|cd)\.example\.com/</code>. An invalid pattern simply
       matches nothing rather than breaking routing.
   </div>
-  <!-- #297: the keys follow the position in this list. -->
-  <div class="sub" style="margin:14px 0 6px"><b>Order</b> — F-keys and Ctrl+number follow the position, so moving a
-    Persona changes which keys pick it. Also <b>Ctrl+Alt+Shift+Left / Right</b> on the active Persona. Unassigned stays last.</div>
-  <div id="orderlist"></div>
   <div id="personalist"></div>
   <div class="addrow">
     <input id="pname" type="text" placeholder="New persona name (e.g. Finance)" spellcheck="false" style="flex:1">
