@@ -15,8 +15,17 @@ const termhosts = require('./termhosts');
 
 const DEFAULT_TARGET = 'brandon@dockerhost';
 
+// #256: only an agent that is actually running. Handing ssh2 the Windows pipe
+// while the ssh-agent service is stopped aborted the whole connection.
 function agentPath() {
-  return process.env.SSH_AUTH_SOCK || (process.platform === 'win32' ? '\\\\.\\pipe\\openssh-ssh-agent' : null);
+  if (process.env.SSH_AUTH_SOCK) return process.env.SSH_AUTH_SOCK;
+  if (process.platform !== 'win32') return null;
+  const pipe = '\\\\.\\pipe\\openssh-ssh-agent';
+  try {
+    return fs.existsSync(pipe) ? pipe : null;
+  } catch {
+    return null;
+  }
 }
 
 function readKey(file) {
@@ -52,7 +61,7 @@ function sshConfigText(home = os.homedir()) {
 
 // `say(kind, text)` surfaces notices in the terminal; kind is info | warn | error.
 // `ask(question, cb)` asks a y/N question in the terminal (#214's host-key prompt).
-function buildConfig(target, say, ask = (_q, cb) => cb(false)) {
+function buildConfig(target, say, ask = (_q, cb) => cb(false), askText = (_q, _echo, cb) => cb(null)) {
   const home = os.homedir();
   const t = term.parseTarget(target);
   // #214: a ~/.ssh/config alias resolves the way OpenSSH would resolve it.
@@ -68,7 +77,7 @@ function buildConfig(target, say, ask = (_q, cb) => cb(false)) {
     host,
     port,
     username: t.username || r.username || os.userInfo().username,
-    readyTimeout: 90000, // #214: long enough to answer the host-key question
+    readyTimeout: 180000, // #214/#256: long enough to answer the host-key question and type a password
     keepaliveInterval: 20000,
     hostVerifier: (key, verify) => {
       const verdict = term.knownHostsVerdict(knownHosts, host, port, term.keyTypeOf(key), key.toString('base64'));
@@ -119,12 +128,45 @@ function buildConfig(target, say, ask = (_q, cb) => cb(false)) {
   if (agent) config.agent = agent;
   const privateKey = readPrivateKey(home, r.identityFile);
   if (privateKey) config.privateKey = privateKey;
+  // #256: OpenSSH's order: agent, key, then the server's own prompts
+  // (keyboard-interactive, usually "Password:"), then a plain password.
+  const user = config.username;
+  const methods = [];
+  if (agent) methods.push({ type: 'agent', username: user, agent });
+  if (privateKey) methods.push({ type: 'publickey', username: user, key: privateKey });
+  methods.push({
+    type: 'keyboard-interactive',
+    username: user,
+    prompt: (_name, instructions, _lang, prompts, finish) => {
+      if (instructions) say('info', instructions);
+      const answers = [];
+      const next = () => {
+        if (answers.length === prompts.length) return finish(answers);
+        const p = prompts[answers.length];
+        askText(p.prompt || 'Password: ', Boolean(p.echo), (text) => {
+          if (text === null) return finish([]); // cancelled
+          answers.push(text);
+          next();
+        });
+      };
+      next();
+    },
+  });
+  methods.push('password');
+  config.authHandler = (methodsLeft, _partial, cb) => {
+    const m = methods.shift();
+    if (!m) return cb(false);
+    if (m !== 'password') return cb(m);
+    if (methodsLeft && !methodsLeft.includes('password')) return cb(false);
+    askText(`${user}@${host}'s password: `, false, (text) => (text === null ? cb(false) : cb({ type: 'password', username: user, password: text })));
+    return undefined;
+  };
   return config;
 }
 
 // Opens a shell. Hooks: onData(Buffer), onStatus(kind, text), onClose(),
 // onReady(), ask(question, cb). Returns { write, resize, end }.
-function openSession(target, { cols, rows, onData, onStatus, onClose, onReady = () => {}, ask }) {
+function openSession(target, { cols, rows, onData, onStatus, onClose, onReady = () => {}, ask, askText }) {
   const conn = new (ssh2().Client)();
   let stream = null;
   let closed = false;
@@ -152,13 +194,13 @@ function openSession(target, { cols, rows, onData, onStatus, onClose, onReady = 
   });
   conn.on('error', (err) => {
     const authFailed = /authentication/i.test(err.message);
-    onStatus('error', authFailed ? 'authentication failed: no agent key or unencrypted ~/.ssh key was accepted' : `connection error: ${err.message}`);
+    onStatus('error', authFailed ? 'authentication failed: the server refused every key and password tried' : `connection error: ${err.message}`);
     close();
   });
   conn.on('close', close);
   onStatus('info', `connecting to ${target}…`);
   try {
-    conn.connect(buildConfig(target, onStatus, ask));
+    conn.connect(buildConfig(target, onStatus, ask, askText));
   } catch (err) {
     onStatus('error', `connection error: ${err.message}`);
     setImmediate(close); // after the caller has the handle, so its onClose can recognise it
@@ -264,11 +306,18 @@ function connect(st) {
       send(st, 'terminal:prompt', question);
       st.answer = cb;
     },
+    // #256: a typed answer (password or server prompt); passwords never echo.
+    askText: (question, echo, cb) => {
+      batch.flushNow();
+      send(st, 'terminal:prompt', question);
+      st.text = { buf: '', echo, cb };
+    },
     onClose: () => {
       batch.flushNow(); // #216: the tail of the output lands before the disconnect notice
       if (st.session !== mine) return;
       st.session = null;
       st.answer = null;
+      st.text = null;
       send(st, 'terminal:status', { kind: 'info', text: '[disconnected — press Enter to reconnect]' });
     },
   });
@@ -277,7 +326,7 @@ function connect(st) {
 
 // Called by main.js for every terminal tab it creates.
 function attach(wc) {
-  const st = { wc, target: null, session: null, size: { cols: 80, rows: 24 }, hold: false, prefix: false, answer: null };
+  const st = { wc, target: null, session: null, size: { cols: 80, rows: 24 }, hold: false, prefix: false, answer: null, text: null };
   const wid = wc.id; // read now: a destroyed webContents may not answer
   tabs.set(wid, st);
   // Every key belongs to the shell: no menu accelerator (Ctrl+W, Ctrl+T …) may
@@ -348,6 +397,19 @@ function installIpc(h) {
   ipcMain.on('terminal:write', (e, data) => {
     const st = stateFor(e);
     if (!st) return;
+    if (st.text) {
+      // #256: typing into a password / server prompt.
+      const r = term.lineEdit(st.text.buf, data, st.text.echo);
+      if (r.echo) send(st, 'terminal:data', Buffer.from(r.echo));
+      if (!r.submit && !r.cancel) {
+        st.text.buf = r.buf;
+        return;
+      }
+      const { cb } = st.text;
+      st.text = null;
+      cb(r.cancel ? null : r.buf);
+      return;
+    }
     if (st.answer) {
       // Only y / n / Enter answer the host-key question; anything else waits.
       if (!/^[yYnN\r]$/.test(data)) return;

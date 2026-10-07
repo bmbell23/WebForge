@@ -84,6 +84,15 @@ console.log(`${n} assertions passed`);
   e2(d(key('r', 'KeyR')), { kind: 'pass' }, 'a letter passes');
   e2(d(key('Escape', 'Escape')), { kind: 'pass' }, 'Esc passes; forge cancels');
   e2(t.CTRL_SPACE, '\x1b[32;5u', 'Ctrl+Space as kitty CSI-u');
+  // #256: typing a password
+  e2(t.lineEdit('', 'hunter2'), { buf: 'hunter2', submit: false, cancel: false, echo: '' }, 'a password never echoes');
+  e2(t.lineEdit('hunter', '2\r'), { buf: 'hunter2', submit: true, cancel: false, echo: '\r\n' }, 'Enter submits');
+  e2(t.lineEdit('abc', '\x7f\x7f').buf, 'a', 'Backspace edits');
+  e2(t.lineEdit('', '\x7f').buf, '', 'Backspace on empty is harmless');
+  e2(t.lineEdit('secret', '\x03').cancel, true, 'Ctrl+C cancels');
+  e2(t.lineEdit('', 'a\x1b[Ab\x1bOD').buf, 'ab', 'arrow keys are dropped whole');
+  e2(t.lineEdit('', 'bob', true).echo, 'bob', 'an echoed prompt shows what you type');
+  e2(t.lineEdit('bo', '\x7f', true).echo, '\b \b', 'and erases on Backspace');
   // #249: replacing a changed key
   const kh = [
     '# comment',
