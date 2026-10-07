@@ -926,8 +926,19 @@ function tabState() {
 // #71: Unassigned is the fallback, not a destination, so it goes last.
 // #214: keyed Personas and app slots come first, in key order (` ! @ # $ % ^).
 // personaorder.js holds the rule, under test.
+// #297: the keys follow the position; settings.personaOrder (ids) is your order.
 function orderedPersonas() {
-  return personaorder.orderPersonas(personas.all(), appSlots());
+  return personaorder.orderPersonas(personas.all(), appSlots(), getSettings().personaOrder);
+}
+// #297: move Persona `id` one place (dir -1 left, +1 right), keep it, and refresh
+// everything that shows the order or the keys. false when it can't move.
+function movePersonaBy(id, dir) {
+  const next = personaorder.movePersona(orderedPersonas(), id, dir);
+  if (!next) return false;
+  getSettings().personaOrder = next;
+  saveSettings();
+  pushStateNow(); // the picker and its keys
+  return true;
 }
 // Personas a URL can be routed to: not Terminal or the app slots, which have no rules.
 const routablePersonas = () => orderedPersonas().filter((p) => !personas.isBuiltinView(p.id));
@@ -1910,6 +1921,15 @@ function wireChords(wc) {
       if (terminalMain.isTerminal(wc)) terminalMain.setHold(wc, false);
       const next = personaorder.stepPersona(orderedPersonas(), personas.activeId(), arrow === 'arrowleft' ? -1 : 1);
       if (next && !locked) switchPersona(next);
+      return;
+    }
+    // #297: Ctrl+Alt+Shift+Left/Right move the ACTIVE Persona one place left/right
+    // in the order; its keys follow the new position. Same reach as #295 above.
+    if (modifier.isChord({ ...input, alt: false }) && input.alt && input.shift && (arrow === 'arrowleft' || arrow === 'arrowright')) {
+      event.preventDefault();
+      leaderUntil = 0;
+      if (terminalMain.isTerminal(wc)) terminalMain.setHold(wc, false);
+      if (!locked) movePersonaBy(personas.activeId(), arrow === 'arrowleft' ? -1 : 1);
       return;
     }
     // #214: a terminal tab. Every key belongs to the shell except the held key
@@ -3610,7 +3630,16 @@ ipcMain.handle('int:get-personas', () => ({
   personas: orderedPersonas().filter((p) => !personas.isBuiltinView(p.id)),
   active: personas.activeId(),
 }));
-ipcMain.handle('int:get-slots', () => ({ slots: appSlots(), defaults: personaorder.DEFAULT_SLOTS, keys: personaorder.KEYMAP }));
+ipcMain.handle('int:get-slots', () => ({
+  slots: appSlots(), defaults: personaorder.DEFAULT_SLOTS,
+  // #297: each slot's key now follows its position in the order
+  keys: orderedPersonas().filter((p) => p.slot && p.key).map((p) => ({ slot: p.slot, key: p.key })),
+}));
+// #297: Settings › Personas › Order: every Persona in order, with the keys of its position.
+ipcMain.handle('int:get-persona-order', () => orderedPersonas().map((p) => ({
+  id: p.id, name: p.name, key: personaorder.keyLabel(p),
+})));
+ipcMain.handle('int:move-persona', (_e, { id, dir }) => movePersonaBy(String(id), Number(dir) < 0 ? -1 : 1));
 ipcMain.handle('int:save-slots', (_e, urls) => saveSlots(urls));
 ipcMain.handle('int:add-persona', (_e, name) => {
   const p = personas.add(name);

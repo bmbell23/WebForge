@@ -13,21 +13,36 @@ const SLOT_PREFIX = 'slot-';
 
 const TERMINAL_PERSONA = Object.freeze({ id: TERMINAL, name: 'Terminal', builtin: true, terminal: true, rules: [] });
 
-// Brandon's key map (2026-10-06), Ctrl+Space then the physical key:
-//   ` Terminal   ! Work Mattermost   @ Work   # Personal Mattermost
-//   $ Personal   % Teams             ^ Outlook
-//   & Discord (#282)
+// #297: the keys FOLLOW THE POSITION. The list is the key map: position 1 gets `
+// (Backquote, F1), position 2 gets ! (Digit1, Ctrl+1, F2) ... position 8 gets &
+// (Digit7, F8). Positions 9+ have no key. Ctrl+Space then the physical key.
+const KEYS = Object.freeze([
+  { key: '`', code: 'Backquote', shift: false },
+  { key: '!', code: 'Digit1', shift: true },
+  { key: '@', code: 'Digit2', shift: true },
+  { key: '#', code: 'Digit3', shift: true },
+  { key: '$', code: 'Digit4', shift: true },
+  { key: '%', code: 'Digit5', shift: true },
+  { key: '^', code: 'Digit6', shift: true },
+  { key: '&', code: 'Digit7', shift: true }, // #282
+]);
+
+// Brandon's default order (2026-10-06), used until you reorder:
+//   Terminal, Work Mattermost, Work, Mattermost, Personal, Teams, Outlook, Discord
 // `persona` entries find a stored Persona by name; `slot` entries are app slots.
-const KEYMAP = [
-  { key: '`', code: 'Backquote', shift: false, terminal: true },
-  { key: '!', code: 'Digit1', shift: true, slot: 'work-mattermost' },
-  { key: '@', code: 'Digit2', shift: true, persona: 'work' },
-  { key: '#', code: 'Digit3', shift: true, slot: 'personal-mattermost' },
-  { key: '$', code: 'Digit4', shift: true, persona: 'personal' },
-  { key: '%', code: 'Digit5', shift: true, slot: 'teams' },
-  { key: '^', code: 'Digit6', shift: true, slot: 'outlook' },
-  { key: '&', code: 'Digit7', shift: true, slot: 'discord' }, // #282
-];
+const DEFAULT_ORDER = Object.freeze([
+  { terminal: true },
+  { slot: 'work-mattermost' },
+  { persona: 'work' },
+  { slot: 'personal-mattermost' },
+  { persona: 'personal' },
+  { slot: 'teams' },
+  { slot: 'outlook' },
+  { slot: 'discord' }, // #282
+]);
+
+// The default order with its keys, as before #297 (Settings and docs still read it).
+const KEYMAP = DEFAULT_ORDER.map((e, i) => ({ ...KEYS[i], ...e }));
 
 const DEFAULT_SLOTS = Object.freeze([
   // `home`: the Persona a page opened FROM the slot lands in (#219).
@@ -58,30 +73,60 @@ function slots(overrides) {
 const slotPersona = (s) => ({ id: SLOT_PREFIX + s.id, name: s.name, builtin: true, slot: s.id, url: s.url, rules: [] });
 const isSlotId = (id) => typeof id === 'string' && id.startsWith(SLOT_PREFIX);
 
-// Key order first, then any other Persona you made, then Unassigned. Each entry
-// that has a key carries it (`key`, `code`, `shift`) for the picker and the leader.
-function orderPersonas(list, slotList = slots()) {
+// #297: `savedOrder` (settings.personaOrder, an array of ids) wins: the ids that
+// still exist, in that order, then everything else in the default order (so a new
+// Persona lands after the ones you placed), then Unassigned, always last. Each
+// entry in the first 8 places carries the key for its position (`key`, `code`,
+// `shift`) for the picker and the leader.
+function orderPersonas(list, slotList = slots(), savedOrder = null) {
   const stored = (list || []).filter((p) => p.id !== TERMINAL && !isSlotId(p.id));
   const byName = (name) =>
     stored.find((p) => p.id !== UNASSIGNED && String(p.name || '').trim().toLowerCase() === name);
-  const keyed = [];
-  const used = new Set();
-  for (const k of KEYMAP) {
+  const defaults = [];
+  for (const e of DEFAULT_ORDER) {
     let p = null;
-    if (k.terminal) p = TERMINAL_PERSONA;
-    else if (k.slot) {
-      const s = slotList.find((x) => x.id === k.slot);
+    if (e.terminal) p = TERMINAL_PERSONA;
+    else if (e.slot) {
+      const s = slotList.find((x) => x.id === e.slot);
       p = s && slotPersona(s);
-    } else p = byName(k.persona);
-    if (!p || used.has(p.id)) continue;
-    used.add(p.id);
-    keyed.push({ ...p, key: k.key, code: k.code, shift: k.shift });
+    } else p = byName(e.persona);
+    if (p) defaults.push(p);
   }
-  return [
-    ...keyed,
-    ...stored.filter((p) => p.id !== UNASSIGNED && !used.has(p.id)),
-    ...stored.filter((p) => p.id === UNASSIGNED),
-  ];
+  const known = new Map();
+  for (const p of defaults) known.set(p.id, p);
+  for (const p of stored) if (p.id !== UNASSIGNED && !known.has(p.id)) known.set(p.id, p);
+  const out = [];
+  const used = new Set();
+  const take = (id) => {
+    if (used.has(id) || !known.has(id)) return;
+    used.add(id);
+    out.push(known.get(id));
+  };
+  if (Array.isArray(savedOrder)) savedOrder.forEach(take);
+  defaults.forEach((p) => take(p.id));
+  for (const p of stored) take(p.id);
+  out.push(...stored.filter((p) => p.id === UNASSIGNED));
+  return out.map((p, i) => (i < KEYS.length ? { ...p, ...KEYS[i] } : p));
+}
+
+// #297: `ordered` with `id` swapped one place left (dir < 0) or right, as an id
+// array for settings.personaOrder. No wrap. Unassigned can't move and nothing
+// moves past it. null when there is no move.
+function movePersona(ordered, id, dir) {
+  const ids = (ordered || []).map((p) => p.id);
+  const i = ids.indexOf(id);
+  if (i < 0 || id === UNASSIGNED) return null;
+  const j = i + (dir < 0 ? -1 : 1);
+  if (j < 0 || j >= ids.length || ids[j] === UNASSIGNED) return null;
+  [ids[i], ids[j]] = [ids[j], ids[i]];
+  return ids;
+}
+
+// #297: what picks an entry, for Settings: "F3 · Ctrl+2". '' when it has no key.
+function keyLabel(p) {
+  const m = /^Digit([1-7])$/.exec((p && p.code) || '');
+  if (m) return `F${Number(m[1]) + 1} · Ctrl+${m[1]}`;
+  return p && p.code === 'Backquote' ? 'F1 · Ctrl+`' : '';
 }
 
 // #221: the app slot whose site `url` is on (same scheme, host and port as the
@@ -123,7 +168,7 @@ function openerHome(pid, ordered) {
 // Persona list is only built when the chord actually matches.
 // #251/#264: bare F-keys, in the Ctrl+Space key order: F1 is the Terminal
 // (Ctrl+`), F2–F8 are Ctrl+1–7.
-const DIRECT = /^(Backquote|Digit[1-7])$/;
+const DIRECT = /^(Backquote|Digit[1-7])$/; // #297: the key of whoever holds that position
 const FKEY = /^F([1-8])$/;
 function directPick(input, ordered) {
   if (!input) return null;
@@ -184,6 +229,6 @@ function leaderPick(input, ordered) {
 }
 
 module.exports = {
-  TERMINAL, UNASSIGNED, TERMINAL_PERSONA, KEYMAP, DEFAULT_SLOTS,
-  slots, slotUrl, isSlotId, orderPersonas, leaderPick, unreadFromTitle, unreadBadge, directPick, slotFor, openerHome, stepPersona,
+  TERMINAL, UNASSIGNED, TERMINAL_PERSONA, KEYS, DEFAULT_ORDER, KEYMAP, DEFAULT_SLOTS,
+  slots, slotUrl, isSlotId, orderPersonas, leaderPick, unreadFromTitle, unreadBadge, directPick, slotFor, openerHome, stepPersona, movePersona, keyLabel,
 };
