@@ -77,5 +77,22 @@ test('#217: digits bind like any other key, now that Personas use ` ! @ # $ % ^'
   assert.strictEqual(hotkeys.get('9', 'work').url, 'https://nine.example.com');
 });
 
+console.log('hotkey scope (#311)');
+
+test('scope is stored trimmed; blank or missing means no scope field', () => {
+  hotkeys.set('m', { url: 'http://100.69.184.113:8015/office/', title: 'Office', scope: '  http://100.69.184.113:8015/office/*  ' }, 'personal');
+  assert.strictEqual(hotkeys.get('m', 'personal').scope, 'http://100.69.184.113:8015/office/*');
+  hotkeys.set('n', { url: 'https://n.example.com', title: 'N', scope: '   ' }, 'personal');
+  assert.ok(!('scope' in hotkeys.get('n', 'personal')));
+});
+
+test('re-binding the same bookmark to a new key carries its scope; blank clears it', () => {
+  hotkeys.set('M', { url: 'http://100.69.184.113:8015/office/', title: 'Office' }, 'personal');
+  assert.strictEqual(hotkeys.get('M', 'personal').scope, 'http://100.69.184.113:8015/office/*');
+  assert.strictEqual(hotkeys.get('m', 'personal'), null);
+  hotkeys.set('M', { url: 'http://100.69.184.113:8015/office/', title: 'Office', scope: '' }, 'personal');
+  assert.ok(!('scope' in hotkeys.get('M', 'personal')));
+});
+
 fs.rmSync(userData, { recursive: true, force: true });
 console.log(`\n${run} tests passed`);

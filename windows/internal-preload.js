@@ -82,7 +82,7 @@ contextBridge.exposeInMainWorld('wf', {
   moveBookmarks: (ids, folder) => ipcRenderer.invoke('int:move-bookmarks', { ids, folder }),
   renameFolder: (from, to) => ipcRenderer.invoke('int:rename-folder', { from, to }),
   deleteFolder: (folder) => ipcRenderer.invoke('int:delete-folder', folder),
-  setHotkey: (keyId, url, title) => ipcRenderer.invoke('int:set-hotkey', { keyId, url, title }),
+  setHotkey: (keyId, url, title, scope) => ipcRenderer.invoke('int:set-hotkey', { keyId, url, title, scope }), // #311
   removeHotkey: (keyId, personaId) => ipcRenderer.invoke('int:remove-hotkey', { keyId, personaId }),
   getAllHotkeys: () => ipcRenderer.invoke('int:get-all-hotkeys'), // #74
   getErrors: () => ipcRenderer.invoke('int:get-errors'), // #75

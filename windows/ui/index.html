@@ -347,6 +347,15 @@
     background: var(--field-bg); color: var(--field-text);
     font-size: 12px; outline: none;
   }
+  /* #311: the optional hotkey scope, shown only while a key is being captured */
+  #bmscope {
+    margin: 0 8px 6px; height: 26px;
+    border: none; border-radius: 13px;
+    padding: 0 12px;
+    background: var(--field-bg); color: var(--field-text);
+    font-size: 12px; outline: none;
+  }
+  #bmscope[hidden] { display: none; }
   #bmpanel header {
     display: flex;
     align-items: center;
@@ -881,6 +890,7 @@
       <span id="bmcount">Bookmarks</span>
       <button id="bmmanage" title="Bookmark manager (Ctrl+Shift+B)">🗂</button>
     </header>
+    <input id="bmscope" type="text" hidden placeholder="http://host/path/*" title="Keep these URLs on this tab (optional)" aria-label="Keep these URLs on this tab (optional)" spellcheck="false">
     <input id="bmsearch" type="text" placeholder="Search bookmarks" spellcheck="false">
     <div id="bmlist"></div>
     <div id="connlist"></div>
@@ -2114,17 +2124,30 @@
     feedbackUntil = Date.now() + 4000;
   }
 
+  // #311: "Keep these URLs on this tab (optional)" — typed before pressing the key.
+  const bmscope = document.getElementById('bmscope');
+  const endCapture = () => { capture = null; bmscope.hidden = true; bmscope.value = ''; };
+  bmscope.addEventListener('keydown', (e) => {
+    e.stopPropagation(); // typing here must never fire hotkeys
+    if (e.key === 'Escape' || e.key === 'Enter') {
+      e.preventDefault();
+      if (e.key === 'Escape') { endCapture(); bmcount.textContent = `Bookmarks (${lastBookmarks.length})`; }
+      else bmscope.blur(); // back to waiting for the key press
+    }
+  });
+
   window.addEventListener('keydown', (e) => {
+    if (capture && e.target === bmscope) return; // #311: the scope field takes its own typing
     if (capture) {
       e.preventDefault();
       e.stopPropagation();
       if (e.key === 'Escape') {
-        capture = null;
+        endCapture();
       } else if (e.key === 'Delete' || e.key === 'Backspace') {
         const k = keyForUrl(capture.url);
         if (k) webforge.removeHotkey(k);
         showFeedback(k ? `Unbound "${k}" ✓` : 'Nothing was bound');
-        capture = null;
+        endCapture();
         return;
         // #150: reject the OTHER platform's modifier (the Windows key on
         // Windows, Control on macOS) — not `metaKey`, which IS ⌘ on a Mac and
@@ -2133,9 +2156,9 @@
         // #28: confirm exactly what got captured — field diagnosis for the
         // "capitals won't bind" report (splits set-failure from fire-failure).
         const id = keyIdOf(e);
-        webforge.setHotkey(id, capture.url, capture.title);
+        webforge.setHotkey(id, capture.url, capture.title, bmscope.value.trim()); // #311: blank clears the scope
         showFeedback(`Bound "${id}" → ${capture.title} ✓`);
-        capture = null;
+        endCapture();
         return;
       }
       if (!capture) bmcount.textContent = `Bookmarks (${lastBookmarks.length})`;
@@ -2291,6 +2314,9 @@
     setkey.onclick = (e) => {
       e.stopPropagation();
       capture = { url: b.url, title: b.title };
+      const bk = keyForUrl(b.url); // #311: show the scope already saved with this binding
+      bmscope.value = (bk && hotkeysMap[bk].scope) || '';
+      bmscope.hidden = false;
       bmcount.textContent = `Press a key for "${b.title}" — hold Shift for capitals (Del unbinds, Esc cancels)`;
     };
     el.appendChild(setkey);
