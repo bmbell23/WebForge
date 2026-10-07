@@ -506,9 +506,10 @@ function installIpc(h) {
     hooks.openUrl?.(String(url));
   });
   // #212: paste and copy-selection go through main.
-  ipcMain.on('terminal:paste', (e) => {
+  ipcMain.on('terminal:paste', async (e) => {
     const st = stateFor(e);
-    if (st) send(st, 'terminal:paste-text', clipboard.readText());
+    // Electron 44: clipboard.readText() returns a Promise.
+    if (st) send(st, 'terminal:paste-text', await clipboard.readText());
   });
   ipcMain.on('terminal:copy-text', (e, text) => {
     if (stateFor(e) && typeof text === 'string' && text) clipboard.writeText(text);
