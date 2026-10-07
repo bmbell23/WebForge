@@ -1928,12 +1928,8 @@ function wireChords(wc) {
       if (!locked) handleEscape(); // #42 — don't preventDefault: pages use Esc too
       return;
     }
-    // #236: F2 renames the active tab, inline in the sidebar.
-    if (rawKey.toLowerCase() === 'f2' && modifier.isBare(input)) {
-      event.preventDefault();
-      if (!locked && activeId != null && alive()) chrome.webContents.send('rename-tab-start', activeId);
-      return;
-    }
+    // #251: F2 used to rename the active tab (#236); F1–F6 are Persona keys
+    // now (directPick, above), and renaming is a double-click on the tab.
     // #38: Alt+Left/Right — the browser-standard back/forward I never wired.
     if (modifier.isAltOnly(input)) {
       const k = rawKey.toLowerCase();
@@ -3379,7 +3375,6 @@ function menuTemplate() {
             },
           },
           { label: 'Reload', accelerator: 'CmdOrCtrl+R', click: () => activeWc()?.reload() },
-          { label: 'Reload', accelerator: 'F5', visible: false, click: () => activeWc()?.reload() },
           // #101: the basics that were missing.
           { label: 'Hard Reload', accelerator: 'CmdOrCtrl+Shift+R', click: () => hardReload() },
           { label: 'Reader Mode', accelerator: 'CmdOrCtrl+Alt+R', click: () => toggleReader() }, // #232

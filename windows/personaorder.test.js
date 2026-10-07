@@ -76,6 +76,18 @@ po.directPick(c('KeyA'), () => { built++; return ordered; });
 eq(built, 0, 'an ordinary Ctrl chord never builds the list');
 eq(po.directPick(c('Digit2'), po.orderPersonas([])), null, 'no Work Persona: Ctrl+2 does nothing');
 
+console.log('F-keys (#251)');
+const fk = (code, mods = {}) => ({ code, control: false, shift: false, alt: false, meta: false, ...mods });
+eq(po.directPick(fk('F1'), ordered), 'slot-work-mattermost', 'F1 Work Mattermost');
+eq(po.directPick(fk('F2'), ordered), 'w', 'F2 Work');
+eq(po.directPick(fk('F4'), ordered), 'p', 'F4 Personal');
+eq(po.directPick(fk('F6'), () => ordered), 'slot-outlook', 'F6 Outlook');
+eq(po.directPick(fk('F7'), ordered), null, 'F7 is free');
+eq(po.directPick(fk('F11'), ordered), null, 'F11 stays full screen');
+eq(po.directPick(fk('F4', { alt: true }), ordered), null, 'Alt+F4 still closes the window');
+eq(po.directPick(fk('F4', { control: true }), ordered), null, 'Ctrl+F4 still closes the tab');
+eq(po.directPick(fk('F5', { shift: true }), ordered), null, 'Shift+F5 is not');
+
 console.log('unread (#231)');
 eq(po.unreadFromTitle('(3) Town Square - Team Mattermost'), { count: 3, dot: false }, 'Mattermost mentions');
 eq(po.unreadFromTitle('(12) Chat | Microsoft Teams'), { count: 12, dot: false }, 'Teams count');
