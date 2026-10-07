@@ -281,6 +281,7 @@
   <div class="row">
     <button class="choice" id="updcheck">Check for updates now</button>
     <button class="choice" id="updrestart" style="display:none">Restart to apply</button>
+    <button class="choice" id="upddownload" style="display:none">Download</button>
   </div>
 
   <h2>About</h2>
@@ -635,6 +636,7 @@
     const restart = document.getElementById('updrestart');
     const s = await wf.updateState();
     restart.style.display = s.status === 'ready' ? '' : 'none';
+    document.getElementById('upddownload').style.display = s.status === 'available' ? '' : 'none';
     if (!s.packaged) {
       el.innerHTML = `Running <b>v${s.current}</b> unpackaged (dev) — updates are not checked.`;
       return;
@@ -646,6 +648,9 @@
       current: `<span class="ok">Up to date</span> — running <b>v${s.current}</b>.`,
       downloading: `Downloading <b>v${s.version || '?'}</b>… ${s.percent || 0}%`,
       ready: `<span class="ok">v${s.version} is ready</span> — restart to apply.`,
+      // #315: macOS (unsigned): the app can't install it, so it's a download.
+      available: `<span class="ok">v${s.version} is available</span> — download it, quit WebForge, ` +
+                 `then drag the new one into Applications.`,
       error: `<span class="bad">Update check failed</span> — ${s.message || 'unknown error'}.` +
              ` If you are off the tailnet this is expected.`,
     }[s.status] || `Running <b>v${s.current}</b>.`;
@@ -657,6 +662,7 @@
     setTimeout(refreshUpdate, 1200);
   };
   document.getElementById('updrestart').onclick = () => wf.updateRestart();
+  document.getElementById('upddownload').onclick = () => wf.updateDownload();
 
   // --- certificate exceptions (#108) ---
   async function refreshCertExceptions() {

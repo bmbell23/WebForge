@@ -31,6 +31,7 @@ contextBridge.exposeInMainWorld('wf', {
   updateState: () => ipcRenderer.invoke('int:update-state'),
   updateCheck: () => ipcRenderer.invoke('int:update-check'),
   updateRestart: () => ipcRenderer.invoke('int:update-restart'),
+  updateDownload: () => ipcRenderer.invoke('int:update-download'), // #315: macOS
   // selected-text URL rules (#100)
   getTextRules: () => ipcRenderer.invoke('int:get-text-rules'),
   saveTextRules: (list) => ipcRenderer.invoke('int:save-text-rules', list),
