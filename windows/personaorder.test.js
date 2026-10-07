@@ -78,11 +78,14 @@ eq(po.directPick(c('Digit2'), po.orderPersonas([])), null, 'no Work Persona: Ctr
 
 console.log('F-keys (#251)');
 const fk = (code, mods = {}) => ({ code, control: false, shift: false, alt: false, meta: false, ...mods });
-eq(po.directPick(fk('F1'), ordered), 'slot-work-mattermost', 'F1 Work Mattermost');
-eq(po.directPick(fk('F2'), ordered), 'w', 'F2 Work');
-eq(po.directPick(fk('F4'), ordered), 'p', 'F4 Personal');
-eq(po.directPick(fk('F6'), () => ordered), 'slot-outlook', 'F6 Outlook');
-eq(po.directPick(fk('F7'), ordered), null, 'F7 is free');
+eq(po.directPick(fk('F1'), ordered), 'terminal', '#264: F1 Terminal');
+eq(po.directPick(fk('F2'), ordered), 'slot-work-mattermost', 'F2 Work Mattermost');
+eq(po.directPick(fk('F3'), ordered), 'w', 'F3 Work');
+eq(po.directPick(fk('F4'), ordered), 'slot-personal-mattermost', 'F4 Mattermost');
+eq(po.directPick(fk('F5'), ordered), 'p', 'F5 Personal');
+eq(po.directPick(fk('F6'), ordered), 'slot-teams', 'F6 Teams');
+eq(po.directPick(fk('F7'), () => ordered), 'slot-outlook', 'F7 Outlook');
+eq(po.directPick(fk('F8'), ordered), null, 'F8 is free');
 eq(po.directPick(fk('F11'), ordered), null, 'F11 stays full screen');
 eq(po.directPick(fk('F4', { alt: true }), ordered), null, 'Alt+F4 still closes the window');
 eq(po.directPick(fk('F4', { control: true }), ordered), null, 'Ctrl+F4 still closes the tab');

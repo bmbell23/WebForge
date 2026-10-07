@@ -118,16 +118,18 @@ function openerHome(pid, ordered) {
 // #224: the same targets as one chord, no leader: Ctrl+` (Shift allowed, so
 // Ctrl+~ too) and Ctrl+1–6, by physical key. `ordered` is a function so the
 // Persona list is only built when the chord actually matches.
-// #251: bare F1–F6 are the same as Ctrl+1–6.
+// #251/#264: bare F-keys, in the Ctrl+Space key order: F1 is the Terminal
+// (Ctrl+`), F2–F7 are Ctrl+1–6.
 const DIRECT = /^(Backquote|Digit[1-6])$/;
-const FKEY = /^F([1-6])$/;
+const FKEY = /^F([1-7])$/;
 function directPick(input, ordered) {
   if (!input) return null;
   const f = FKEY.exec(input.code || '');
   if (f) {
     if (input.control || input.alt || input.meta || input.shift) return null; // Alt+F4, Ctrl+F4 stay
     const list = typeof ordered === 'function' ? ordered() : ordered;
-    const hit = (list || []).find((p) => p.code === `Digit${f[1]}`);
+    const want = f[1] === '1' ? 'Backquote' : `Digit${Number(f[1]) - 1}`;
+    const hit = (list || []).find((p) => p.code === want);
     return hit ? hit.id : null;
   }
   if (!input.control || input.alt || input.meta || !DIRECT.test(input.code || '')) return null;
