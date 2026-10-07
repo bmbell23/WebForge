@@ -1197,6 +1197,16 @@
     input.ondblclick = (e) => e.stopPropagation();
     input.onmousedown = (e) => e.stopPropagation();
     input.onblur = () => { if (!moving) finish(true); }; // #254: not when a re-render moves it
+    // #277: the click that began the double-click gave the PAGE keyboard focus;
+    // the caret showed here but keys went to the page. Pull focus to the sidebar.
+    webforge.focusChrome();
+    moving = true; // focusing the sidebar's webContents must not read as leaving the box
+    setTimeout(() => {
+      moving = false;
+      if (renameInput !== input) return;
+      input.focus();
+      input.select();
+    }, 50);
     input.focus();
     input.select();
   }

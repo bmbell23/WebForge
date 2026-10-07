@@ -3530,6 +3530,10 @@ ipcMain.on('hint-hover', (e, x, y) => {
   wc.sendInputEvent({ type: 'mouseEnter', x: px, y: py });
   wc.sendInputEvent({ type: 'mouseMove', x: px, y: py });
 });
+// #277: the sidebar asks for keyboard focus (tab rename). Only the sidebar itself may.
+ipcMain.on('focus-chrome', (e) => {
+  if (chrome && !chrome.webContents.isDestroyed() && e.sender === chrome.webContents) chrome.webContents.focus();
+});
 ipcMain.on('close-active-tab', () => {
   if (!locked && activeId !== null) closeTab(activeId);
 });

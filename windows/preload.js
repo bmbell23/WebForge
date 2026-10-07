@@ -63,6 +63,7 @@ contextBridge.exposeInMainWorld('webforge', {
   closeTab: (id) => ipcRenderer.send('close-tab', id),
   renameTab: (id, name) => ipcRenderer.send('rename-tab', id, name), // #236
   onRenameTabStart: (cb) => ipcRenderer.on('rename-tab-start', (_e, id) => cb(id)), // #236
+  focusChrome: () => ipcRenderer.send('focus-chrome'), // #277: the rename box needs the keyboard
   activateTab: (id) => ipcRenderer.send('activate-tab', id),
   togglePin: (id) => ipcRenderer.send('toggle-pin', id),
   closeTabs: (ids) => ipcRenderer.send('close-tabs', ids), // #46
