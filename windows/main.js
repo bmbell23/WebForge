@@ -18,6 +18,17 @@ app.commandLine.appendSwitch(
   'enable-features',
   'OverscrollHistoryNavigation,TouchpadOverscrollHistoryNavigation'
 );
+// #238: Outlook (and other heavy pages) flashed white on mouse movement on
+// Brandon's PC; launching with --disable-direct-composition fixed it, and Edge
+// on the same PC never flickered. So WebForge applies that switch itself, on by
+// default, with a Settings toggle. Read straight from settings.json because
+// the switch must be set before app ready, ahead of getSettings() below.
+try {
+  const s = JSON.parse(fs.readFileSync(path.join(app.getPath('userData'), 'settings.json'), 'utf8'));
+  if (s.directComposition !== true) app.commandLine.appendSwitch('disable-direct-composition');
+} catch {
+  app.commandLine.appendSwitch('disable-direct-composition'); // no settings yet: the default
+}
 const bookmarks = require('./bookmarks');
 const vault = require('./vault');
 const credentials = require('./credentials');
@@ -3995,6 +4006,12 @@ ipcMain.handle('int:set-tab-expiry', (_e, choice) => {
   getSettings().tabExpiry = choice;
   saveSettings();
   sweepStaleTabs();
+  return true;
+});
+// #238: takes effect on the next start (Chromium switches are fixed at launch).
+ipcMain.handle('int:set-direct-composition', (_e, on) => {
+  getSettings().directComposition = Boolean(on);
+  saveSettings();
   return true;
 });
 ipcMain.handle('int:set-engine', (_e, engine) => {
