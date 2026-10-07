@@ -1889,6 +1889,9 @@ function wireChords(wc) {
       } else if (chord && !input.shift && (k === 'pagedown' || k === 'pageup')) {
         event.preventDefault();
         cycleTab(k === 'pagedown' ? 1 : -1);
+      } else if (chord && input.shift && (k === 'arrowdown' || k === 'arrowup')) {
+        event.preventDefault(); // #247: step between sessions
+        cycleTab(k === 'arrowdown' ? 1 : -1);
       }
       return;
     }
@@ -3445,6 +3448,11 @@ ipcMain.on('rename-tab', (_e, id, name) => {
 });
 // #115: Ctrl+X from any renderer that decided the user was not typing. The
 // editable-field check lives in the preloads, where focus is known exactly.
+// #247: Ctrl+Shift+Up/Down from a page (the preload already yielded to text fields).
+ipcMain.on('cycle-tab', (e, dir) => {
+  if (locked || activeId === null || tabs.get(activeId)?.webContents !== e.sender) return;
+  cycleTab(dir > 0 ? 1 : -1);
+});
 ipcMain.on('close-active-tab', () => {
   if (!locked && activeId !== null) closeTab(activeId);
 });
