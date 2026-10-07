@@ -1074,6 +1074,8 @@ function contextMenuFor(wc, params) {
     'page.ytdlp': () => openYtdlpPicker(wc.getURL(), wc.getTitle()), // #156
     'link.ytdlp': () => openYtdlpPicker(params.linkURL, String(params.linkText || '').trim()), // #156
     'image.outfit': () => openOutfitDialog(params.srcURL), // #179
+    'image.pose': () => openOutfitDialog(params.srcURL, 'pose'), // #260
+    'image.girl': () => { const url = museforge.girlUrl(params.srcURL); if (url && !locked) createTab(url, false); }, // #260: the Studio's describe page does the rest
     'media.stash': () => sendToStash('media', params.srcURL, wc), // #177
     'page.stashVideo': () => sendToStash('video', wc.getURL(), wc),
     'page.stashGallery': () => sendToStash('gallery', wc.getURL(), wc),
@@ -1305,7 +1307,7 @@ function createTab(url = null, background = false, personaId = null, opts = {}) 
   wc.on('did-navigate', (_e2, navUrl) => {
     if (id === activeId) syncAdultShield(); // #245: walking onto (or off) an adult site
     if (!String(navUrl).startsWith('data:')) readerTabs.delete(id); // #232: back/forward/link out of the reader view
-    if (outfitReturn && outfitReturn.tabId === id && museforge.isDone(navUrl)) finishOutfit(); // #191
+    if (outfitReturn && outfitReturn.tabId === id && museforge.isDone(navUrl, outfitReturn.kind)) finishOutfit(); // #191
     settleLogin(id, wc, navUrl); // #145: did a submitted login just succeed?
     // Re-home the tab if it navigated into another persona's territory (#25).
     const claimed = claimOf(navUrl); // #221: a tab that walks onto a slot's site joins the slot
@@ -3676,14 +3678,15 @@ ipcMain.on('ytdlp-open', () => {
 // Asks for an optional name and description in the chrome UI (Electron has no
 // prompt()), then opens the Studio's from-image page in a new tab. The Studio
 // confirms and spends; we only build the address.
-function openOutfitDialog(src) {
+// #260: kind is 'outfit' (default) or 'pose'; the dialog and Studio flow are the same.
+function openOutfitDialog(src, kind = 'outfit') {
   if (locked || !museforge.canSend(src)) return;
   if (outfitOpen || bmDialogOpen || ytdlpOpen || loginPromptOpen) return; // #195: one dialog answers Enter at a time
   outfitOpen = true;
   clearFsReveal();
   setChromeRaised(true);
   layout();
-  chrome?.webContents.send('outfit-prompt', { src });
+  chrome?.webContents.send('outfit-prompt', { src, kind });
   chrome.webContents.focus();
 }
 
@@ -3694,18 +3697,19 @@ ipcMain.on('outfit-answer', (_e, a) => {
   layout();
   activeWc()?.focus();
   if (locked || !wasOpen || !a || !a.go) return;
-  if (a.go === 'create') { createOutfitInBackground(a.src, a.name, a.text); return; } // #195
-  openOutfitTab(a.src, a.name, a.text);
+  const kind = a.kind === 'pose' ? 'pose' : 'outfit'; // #260
+  if (a.go === 'create') { createOutfitInBackground(a.src, a.name, a.text, kind); return; } // #195
+  openOutfitTab(a.src, a.name, a.text, activeId, kind);
 });
 
 // #179/#191: the Studio's prefilled page in a tab, with the way back remembered.
-function openOutfitTab(src, name, text, openerId = activeId) {
-  const url = museforge.outfitUrl(src, name, text);
+function openOutfitTab(src, name, text, openerId = activeId, kind = 'outfit') {
+  const url = museforge.outfitUrl(src, name, text, kind);
   if (!url || locked) return;
   // #191: remember where you came from. Set BEFORE createTab, because opening
   // the tab activates it and runs the adult sweep, which must already spare the
   // opener; createTab takes nextTabId as the new tab's id.
-  outfitReturn = { tabId: nextTabId, openerId };
+  outfitReturn = { tabId: nextTabId, openerId, kind }; // #260: kind decides which result page means done
   if (createTab(url, false) !== outfitReturn?.tabId) outfitReturn = null;
 }
 
@@ -3714,19 +3718,24 @@ function openOutfitTab(src, name, text, openerId = activeId) {
 // cookie. Logged out on this PC → the prefilled page opens instead, so you can
 // log in and land on it.
 const outfitCreating = new Set(); // #195: pictures with a Create in flight; each press costs money
-async function createOutfitInBackground(src, name, text) {
+async function createOutfitInBackground(src, name, text, kind = 'outfit') {
   const body = museforge.createForm(src, name, text);
   if (!body) return;
+  const pose = kind === 'pose'; // #260
+  const noun = pose ? 'pose' : 'outfit';
+  const Noun = pose ? 'Pose' : 'Outfit';
+  const page = museforge.pageFor(kind);
   const openerId = activeId; // the login fallback returns here, even if you moved on meanwhile
   const say = (message) => {
-    errorlog.record('outfit', message);
-    if (Notification.isSupported()) new Notification({ title: 'Create Outfit', body: message }).show();
+    errorlog.record(noun, message);
+    if (Notification.isSupported()) new Notification({ title: `Create ${Noun}`, body: message }).show();
   };
-  if (outfitCreating.has(src)) { say('Already creating an outfit from this picture'); return; }
-  outfitCreating.add(src);
+  const key = `${kind}|${src}`; // #260: an outfit and a pose from one picture are separate spends
+  if (outfitCreating.has(key)) { say(`Already creating a ${noun} from this picture`); return; }
+  outfitCreating.add(key);
   try {
-    const jar = await session.defaultSession.cookies.get({ url: museforge.OUTFIT_PAGE });
-    const r = await fetch(museforge.OUTFIT_PAGE, {
+    const jar = await session.defaultSession.cookies.get({ url: page });
+    const r = await fetch(page, {
       method: 'POST',
       redirect: 'manual',
       headers: {
@@ -3737,13 +3746,13 @@ async function createOutfitInBackground(src, name, text) {
       signal: AbortSignal.timeout(60000), // the Studio fetches the picture before answering
     });
     const result = museforge.createResult(r.status, r.headers.get('location'));
-    if (result === 'queued') say('Outfit queued: 2 figures in Approvals');
-    else if (result === 'login') { say('Log in to the Studio first'); openOutfitTab(src, name, text, openerId); }
-    else say(`Create Outfit failed: HTTP ${r.status} ${(await r.text().catch(() => '')).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200)}`);
+    if (result === 'queued') say(pose ? 'Pose queued in Approvals' : 'Outfit queued: 2 figures in Approvals');
+    else if (result === 'login') { say('Log in to the Studio first'); openOutfitTab(src, name, text, openerId, kind); }
+    else say(`Create ${Noun} failed: HTTP ${r.status} ${(await r.text().catch(() => '')).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200)}`);
   } catch (err) {
-    say(`Create Outfit failed: ${String(err.message || err).slice(0, 200)}`);
+    say(`Create ${Noun} failed: ${String(err.message || err).slice(0, 200)}`);
   } finally {
-    outfitCreating.delete(src);
+    outfitCreating.delete(key);
   }
 }
 

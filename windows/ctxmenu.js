@@ -58,7 +58,14 @@ function build(params = {}, ctx = {}) {
     );
     // #179: hand the picture to the Studio to make an outfit from it.
     // #181: the label names the action, not the product.
-    if (ctx.imageOutfit) items.push({ id: 'image.outfit', label: 'Create Outfit…' });
+    // #260: the same picture can make a pose or a girl.
+    if (ctx.imageOutfit) {
+      items.push(
+        { id: 'image.outfit', label: 'Create Outfit…' },
+        { id: 'image.pose', label: 'Create Pose…' },
+        { id: 'image.girl', label: 'Create Girl…' }
+      );
+    }
     // #177: the original file into Pictures/Downloads, tagged in Stash.
     if (ctx.mediaStash) items.push({ id: 'media.stash', label: 'Add to Stash' });
   }
