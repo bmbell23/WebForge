@@ -244,6 +244,10 @@
       <code>/^https:\/\/(ci|cd)\.example\.com/</code>. An invalid pattern simply
       matches nothing rather than breaking routing.
   </div>
+  <!-- #297: the keys follow the position in this list. -->
+  <div class="sub" style="margin:14px 0 6px"><b>Order</b> — F-keys and Ctrl+number follow the position, so moving a
+    Persona changes which keys pick it. Also <b>Ctrl+Alt+Shift+Left / Right</b> on the active Persona. Unassigned stays last.</div>
+  <div id="orderlist"></div>
   <div id="personalist"></div>
   <div class="addrow">
     <input id="pname" type="text" placeholder="New persona name (e.g. Finance)" spellcheck="false" style="flex:1">
@@ -731,12 +735,37 @@
   }
   loadHotkeys();
 
+  // --- persona order (#297) ---
+  async function loadOrder() {
+    const list = await wf.getPersonaOrder();
+    const box = document.getElementById('orderlist');
+    box.replaceChildren(...list.map((p, i) => {
+      const row = document.createElement('div');
+      row.className = 'row';
+      row.style.cssText = 'align-items:center;margin:3px 0';
+      row.appendChild(Object.assign(document.createElement('code'), { textContent: p.key, style: 'width:8em' }));
+      row.appendChild(Object.assign(document.createElement('span'), { textContent: p.name, style: 'flex:1' }));
+      const fixed = p.id === 'unassigned';
+      for (const [label, dir, off] of [['▲', -1, i === 0], ['▼', 1, i === list.length - 1 || list[i + 1].id === 'unassigned']]) {
+        const b = Object.assign(document.createElement('button'), {
+          className: 'choice', textContent: label, disabled: fixed || off,
+          title: dir < 0 ? 'Move up (earlier key)' : 'Move down (later key)',
+        });
+        b.style.cssText = 'flex:none;min-width:36px';
+        b.onclick = async () => { await wf.movePersona(p.id, dir); loadOrder(); loadSlots(); /* slot keys follow the order */ };
+        row.appendChild(b);
+      }
+      return row;
+    }));
+  }
+
   // --- personas (#25) ---
   let personas = [];
   async function loadPersonas() {
     const d = await wf.getPersonas();
     personas = d.personas || [];
     renderPersonas();
+    loadOrder(); // #297
   }
   function renderPersonas() {
     const box = document.getElementById('personalist');

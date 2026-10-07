@@ -793,7 +793,7 @@
 <body>
   <div id="sidebar">
     <header>
-      <select id="personaPick" title="Persona or app (Ctrl+` and Ctrl+1–7 or F1–F8, or Ctrl+Space then ` ! @ # $ % ^ &)"></select>
+      <select id="personaPick" title="Persona or app, in your order (Ctrl+` and Ctrl+1–7 or F1–F8, or Ctrl+Space then ` ! @ # $ % ^ &, by position; Ctrl+Alt+Shift+Left/Right moves one)"></select>
       <button id="newtab" title="New tab (Ctrl+T)">+</button>
     </header>
     <div id="tablist"></div>
@@ -970,11 +970,12 @@
         <tr><td>Double-click a tab</td><td>Rename it (empty = page title)</td></tr>
         <tr><td>Ctrl+Tab</td><td>Flip to the tab you were just on, in any Persona (terminal ↔ Mattermost)</td></tr>
         <tr><td>Ctrl+Shift+T</td><td>Terminal Persona; inside it, a new terminal tab (Ctrl+Shift+Tab too)</td></tr>
-        <tr><td>Ctrl+` / Ctrl+1–7</td><td>Straight to: ` Terminal, 1 Work Mattermost, 2 Work, 3 Mattermost, 4 Personal, 5 Teams, 6 Outlook, 7 Discord (from any page or terminal)</td></tr>
-        <tr><td>F1–F8</td><td>The same, in order: F1 Terminal, F2 Work Mattermost, F3 Work, F4 Mattermost, F5 Personal, F6 Teams, F7 Outlook, F8 Discord</td></tr>
-        <tr><td>Ctrl+Space, then ` ! @ # $ % ^ &</td><td>` Terminal, ! Work Mattermost, @ Work, # Mattermost, $ Personal, % Teams, ^ Outlook, &amp; Discord (works inside a terminal too). Unassigned is in the picker.</td></tr>
+        <tr><td>Ctrl+` / Ctrl+1–7</td><td>Straight to the Persona in that position of your order (default: ` Terminal, 1 Work Mattermost, 2 Work, 3 Mattermost, 4 Personal, 5 Teams, 6 Outlook, 7 Discord). From any page or terminal. The keys follow the order (#297)</td></tr>
+        <tr><td>F1–F8</td><td>The same, by position: F1 is the first Persona (default Terminal), F2 the second (Work Mattermost), F3 Work, F4 Mattermost, F5 Personal, F6 Teams, F7 Outlook, F8 Discord</td></tr>
+        <tr><td>Ctrl+Space, then ` ! @ # $ % ^ &</td><td>The Persona in that position of your order (default: ` Terminal, ! Work Mattermost, @ Work, # Mattermost, $ Personal, % Teams, ^ Outlook, &amp; Discord). Works inside a terminal too. Unassigned is last, in the picker.</td></tr>
         <tr><td>Ctrl+PageDown</td><td>Next tab</td></tr>
         <tr><td>Ctrl+Alt+Left / Right</td><td>Previous / next Persona, in picker order (wraps; works while typing and in a terminal)</td></tr>
+        <tr><td>Ctrl+Alt+Shift+Left / Right</td><td>Move this Persona one place left / right; its keys follow the new position (also in Settings › Personas › Order)</td></tr>
         <tr><td>Ctrl+Shift+Up / Down</td><td>Previous / next tab in this Persona (works while typing too)</td></tr>
         <tr><td>Shift+Space</td><td>Quick search box (new tab in Unassigned; not while typing in a text box)</td></tr>
         <tr><td>Ctrl+Alt+T</td><td>Reopen closed tab</td></tr>

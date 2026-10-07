@@ -19,7 +19,7 @@ eq(ordered.map((p) => p.name),
 eq(ordered.map((p) => p.key || ''), ['`', '!', '@', '#', '$', '%', '^', '&', '', ''], 'Unassigned and Finance have no key');
 eq(ordered.filter((p) => !p.slot && p.id !== 'terminal').map((p) => p.id), ['w', 'p', 'f', 'unassigned'], 'stored ids are unchanged');
 eq(po.orderPersonas([...stored, { id: 'terminal', name: 'Imposter' }, { id: 'slot-teams', name: 'X' }]).length, 10, 'a stored "terminal" or slot id never doubles up');
-eq(po.orderPersonas([]).map((p) => p.key), ['`', '!', '#', '%', '^', '&'], 'no Work or Personal: their keys are free');
+eq(po.orderPersonas([]).map((p) => p.key), ['`', '!', '@', '#', '$', '%'], '#297: no Work or Personal: the keys close up, they follow the position');
 eq(po.orderPersonas([{ id: 'x', name: ' work ' }]).find((p) => p.key === '@').id, 'x', 'Work found by name, any case');
 eq(stored.length, 4, 'input not mutated');
 
@@ -77,7 +77,8 @@ eq(po.directPick(c('Numpad1'), ordered), null, 'numpad is not');
 let built = 0;
 po.directPick(c('KeyA'), () => { built++; return ordered; });
 eq(built, 0, 'an ordinary Ctrl chord never builds the list');
-eq(po.directPick(c('Digit2'), po.orderPersonas([])), null, 'no Work Persona: Ctrl+2 does nothing');
+eq(po.directPick(c('Digit2'), po.orderPersonas([])), 'slot-personal-mattermost', '#297: no Work Persona: Ctrl+2 picks whoever is in position 3');
+eq(po.directPick(c('Digit7'), po.orderPersonas([])), null, '#297: fewer than 8 Personas: the last keys are free');
 
 console.log('F-keys (#251)');
 const fk = (code, mods = {}) => ({ code, control: false, shift: false, alt: false, meta: false, ...mods });
@@ -144,4 +145,50 @@ eq(po.openerHome('terminal', ordered), 'unassigned', 'Terminal → Unassigned');
 eq(po.openerHome('slot-teams', po.orderPersonas([])), 'unassigned', 'no Work Persona → Unassigned');
 eq(po.openerHome(undefined, ordered), 'unassigned', 'unknown opener → Unassigned');
 
+console.log('reordering (#297)');
+const ids = (l) => l.map((p) => p.id);
+const base = po.orderPersonas(stored);
+const saved = ids(base).filter((i) => i !== 'unassigned');
+// Teams to position 2
+const teamsSecond = ['terminal', 'slot-teams', ...saved.filter((i) => i !== 'terminal' && i !== 'slot-teams')];
+const re = po.orderPersonas(stored, po.slots(), teamsSecond);
+eq(ids(re).slice(0, 3), ['terminal', 'slot-teams', 'slot-work-mattermost'], 'saved order wins');
+eq(po.directPick(c('Digit1'), re), 'slot-teams', 'Ctrl+1 picks Teams after the move');
+eq(po.directPick(fk('F2'), re), 'slot-teams', 'F2 picks Teams after the move');
+eq(po.leaderPick(k('Digit1'), re), 'slot-teams', '! picks Teams after the move');
+eq(po.directPick(c('Digit5'), re), 'p', 'Personal keeps its place relative to the shift: still position 5');
+eq(re.find((p) => p.id === 'slot-work-mattermost').key, '@', 'the one it displaced moves down a key');
+eq(po.orderPersonas(stored, po.slots(), null).map((p) => p.id), ids(base), 'no saved order = default');
+eq(po.orderPersonas(stored, po.slots(), []).map((p) => p.id), ids(base), 'empty saved order = default');
+eq(ids(po.orderPersonas(stored, po.slots(), ['ghost', 'w', 'w', 'terminal'])).slice(0, 3), ['w', 'terminal', 'slot-work-mattermost'],
+  'unknown ids ignored, duplicates dropped, the rest follow in default order');
+eq(ids(po.orderPersonas([...stored, { id: 'n', name: 'New' }], po.slots(), saved)).slice(-3), ['f', 'n', 'unassigned'], 'a new Persona is appended after the placed ones');
+eq(ids(po.orderPersonas(stored, po.slots(), ['unassigned', 'w'])).slice(-1), ['unassigned'], 'Unassigned stays last even if saved first');
+eq(po.orderPersonas(stored, po.slots(), ['unassigned', 'w'])[0].id, 'w', 'and does not lead');
+const few = po.orderPersonas([{ id: 'unassigned', name: 'Unassigned' }], po.slots(), null);
+eq(few[few.length - 1].id, 'unassigned', 'few Personas: Unassigned still last');
+eq(few[few.length - 1].key, '^', '... and may take the key of its position');
+const nine = po.orderPersonas(stored, po.slots(), ['f', ...saved.filter((i) => i !== 'f')]);
+eq(nine[0].key, '`', 'any Persona can take position 1');
+eq(nine.find((p) => p.id === 'slot-outlook').key, '&', 'position 8 is &');
+eq(nine.find((p) => p.id === 'slot-discord').key, undefined, 'position 9+ has no key');
+
+console.log('movePersona (#297)');
+eq(po.movePersona(base, 'slot-teams', -1).slice(4, 7), ['slot-teams', 'p', 'slot-outlook'], 'left swaps with the one before');
+eq(po.movePersona(base, 'slot-teams', 1).slice(5, 8), ['slot-outlook', 'slot-teams', 'slot-discord'], 'right swaps with the one after');
+eq(po.movePersona(base, 'terminal', -1), null, 'no wrap at the left end');
+eq(po.movePersona(base, 'f', 1), null, 'nothing moves past Unassigned');
+eq(po.movePersona(base, 'unassigned', -1), null, 'Unassigned cannot move');
+eq(po.movePersona(base, 'nope', 1), null, 'unknown id');
+eq(po.movePersona(base, 'f', -1).slice(-3), ['f', 'slot-discord', 'unassigned'], 'moves left into the keyed block');
+eq(ids(base).length, 10, 'input not mutated');
+eq(ids(po.orderPersonas(stored, po.slots(), po.movePersona(base, 'slot-teams', -1))).indexOf('slot-teams'), 4, 'a move round-trips through orderPersonas');
+
 console.log(`personaorder: ${n} passed`);
+
+console.log('keyLabel (#297)');
+eq(po.keyLabel(base[0]), 'F1 · Ctrl+`', 'position 1');
+eq(po.keyLabel(base[2]), 'F3 · Ctrl+2', 'position 3');
+eq(po.keyLabel(base[7]), 'F8 · Ctrl+7', 'position 8');
+eq(po.keyLabel(base[8]), '', 'no key');
+console.log(`personaorder (keyLabel): ${n} passed`);
