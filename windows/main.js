@@ -4545,6 +4545,17 @@ app.whenReady().then(() => {
   applySlots(); // #214: before the active Persona (maybe an app slot) is read
   if (!isPrimaryInstance) return; // losing the lock means this process is a no-op
   setupLogShipping(); // #171: first, so startup errors reach the server too
+  // #287: what this launch's compositor actually runs with, for the flicker reports.
+  try {
+    errorlog.record('gpu-config', new Error(
+      `electron=${process.versions.electron} chrome=${process.versions.chrome}` +
+      ` disableDirectComposition=${app.commandLine.hasSwitch('disable-direct-composition')}` +
+      ` setting=${JSON.stringify(getSettings().directComposition)}` +
+      ` features=${JSON.stringify(app.getGPUFeatureStatus())}`
+    ));
+  } catch (err) {
+    errorlog.record('gpu-config', err);
+  }
   applyTheme(getSettings().theme); // #24: before any view paints
   // #73: park any pre-Persona hotkeys in the first real Persona, deterministically.
   const firstReal = personas.all().find((p) => p.id !== personas.UNASSIGNED);
