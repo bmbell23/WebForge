@@ -1,6 +1,6 @@
 // #113/#114 unit tests. Plain node, no framework:  node windows/tabnav.test.js
 const assert = require('assert');
-const { nextInOrder, mostRecent } = require('./tabnav');
+const { nextInOrder, mostRecent, afterClose } = require('./tabnav');
 
 let run = 0;
 const test = (name, fn) => {
@@ -113,6 +113,34 @@ test('is defined even with no timestamps at all', () => {
 test('does nothing when the active tab is alone', () => {
   assert.strictEqual(mostRecent([5], 5, stamps({ 5: 1 })), null);
   assert.strictEqual(mostRecent([], null, stamps({})), null);
+});
+
+console.log('afterClose (#289)');
+
+test('a middle tab lands on the one below', () => {
+  assert.strictEqual(afterClose([1, 2, 3], 2), 3);
+});
+
+test('the first tab lands on the one below', () => {
+  assert.strictEqual(afterClose([1, 2, 3], 1), 2);
+});
+
+test('the last tab lands on the one above', () => {
+  assert.strictEqual(afterClose([1, 2, 3], 3), 2);
+});
+
+test('the only tab has no neighbor', () => {
+  assert.strictEqual(afterClose([7], 7), null);
+});
+
+test('an id not in the list gives null', () => {
+  assert.strictEqual(afterClose([1, 2, 3], 9), null);
+});
+
+test('an empty or invalid list gives null', () => {
+  assert.strictEqual(afterClose([], 1), null);
+  assert.strictEqual(afterClose(null, 1), null);
+  assert.strictEqual(afterClose(undefined, 1), null);
 });
 
 console.log(`\n${run} tests passed`);

@@ -577,7 +577,7 @@ class MainActivity : Activity() {
 
     // --- tabs ---------------------------------------------------------------
     @SuppressLint("SetJavaScriptEnabled")
-    private fun newTab(url: String?, background: Boolean = false, lazy: Boolean = false): Tab {
+    private fun newTab(url: String?, background: Boolean = false, lazy: Boolean = false, persona: String? = null): Tab {
         val wv = WebView(this)
         wv.settings.apply {
             javaScriptEnabled = true
@@ -617,6 +617,9 @@ class MainActivity : Activity() {
         // #96: URL rules decide the Persona at creation, so tabs never sit in
         // Unassigned waiting to be clicked.
         tab.persona = Personas.forUrl(this, url ?: "")
+        // #289: an explicit Persona (a fresh tab after closing its last one) holds
+        // unless a URL rule claimed the page.
+        if (persona != null && tab.persona == Personas.UNASSIGNED) tab.persona = persona
         // #95: this URL is open again — drop any tombstone, or we would keep
         // publishing "closed" for a tab that is plainly sitting right here.
         url?.let { TabSync.forgetClose(it) }
@@ -862,6 +865,30 @@ class MainActivity : Activity() {
         syncChrome()
     }
 
+    /**
+     * #289: tab indices of [persona] in the order the tab sheet lists them:
+     * quick-launch, pinned, then host groups of two or more, then the loose rest.
+     * (showTabSheet draws the same sequence with headers between.)
+     */
+    private fun sheetOrder(persona: String): List<Int> {
+        val mine = tabs.indices
+            .filter { tabs[it].persona == persona }
+            .sortedWith(compareBy({ if (tabs[it].quick) 0 else if (tabs[it].pinned) 1 else 2 }, { it }))
+        val special = mine.filter { tabs[it].quick || tabs[it].pinned }
+        val rest = mine.filter { !tabs[it].quick && !tabs[it].pinned }
+        fun hostOf(u: String): String = try {
+            android.net.Uri.parse(u).host?.removePrefix("www.") ?: ""
+        } catch (e: Exception) { "" }
+        val buckets = LinkedHashMap<String, MutableList<Int>>()
+        for (i in rest) buckets.getOrPut(hostOf(tabs[i].url)) { mutableListOf() }.add(i)
+        val grouped = mutableListOf<Int>()
+        val loose = mutableListOf<Int>()
+        for ((host, idx) in buckets) {
+            if (idx.size >= 2 && host.isNotEmpty()) grouped.addAll(idx) else loose.addAll(idx)
+        }
+        return special + grouped + loose
+    }
+
     private fun closeTab(index: Int, remote: Boolean = false, adult: Boolean = false) {
         val tab = tabs.getOrNull(index) ?: return
         if (tab.pinned && !adult) return // #176: adult tabs close even when pinned
@@ -871,16 +898,20 @@ class MainActivity : Activity() {
         // unconditionally re-activated, so closing a background tab (or the
         // idle sweep closing several) yanked you to a different page.
         val wasActive = index == activeIndex
+        // #289: the neighbor comes from the closed tab's own Persona, in the order
+        // the tab sheet shows it — read BEFORE the tab leaves the list.
+        val neighbor = if (wasActive) {
+            TabNav.afterClose(sheetOrder(tab.persona), index)?.let { tabs[it] }
+        } else null
         if (tab === outfitTab || tab === outfitOpener) clearOutfitPair() // #191
         tabs.removeAt(index)
         (tab.webView.parent as? ViewGroup)?.removeView(tab.webView)
         tab.webView.destroy()
-        if (tabs.isEmpty()) {
-            newTab(newTabUrl())
-            return
-        }
         if (wasActive) {
-            activateTab(index.coerceAtMost(tabs.size - 1))
+            // #289: below, else above, within the same Persona; an emptied Persona
+            // gets a fresh tab of its own.
+            val at = neighbor?.let { tabs.indexOf(it) } ?: -1
+            if (at >= 0) activateTab(at) else newTab(newTabUrl(), persona = tab.persona)
         } else {
             if (index < activeIndex) activeIndex--  // keep pointing at the same tab
             syncChrome()

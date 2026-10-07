@@ -866,10 +866,10 @@ function starCurrent() {
   });
 }
 
-function visibleTabs() {
+function visibleTabs(personaId = personas.activeId()) {
   // #25: the sidebar only ever shows the ACTIVE persona's tabs.
-  const active = personas.activeId();
-  return tabOrder.filter((id) => (personaByTab.get(id) || personas.UNASSIGNED) === active);
+  // #289: closeTab asks for the CLOSED tab's Persona, which is normally the active one.
+  return tabOrder.filter((id) => (personaByTab.get(id) || personas.UNASSIGNED) === personaId);
 }
 
 // #107: the ONE definition of "the order tabs appear in". Both the sidebar
@@ -877,8 +877,8 @@ function visibleTabs() {
 // which is exactly what made Ctrl+PageUp/PageDown appear to hop around the
 // screen: it walked tabOrder, which knows nothing about hotkey-key sorting (#44)
 // or group buckets (#34), while the sidebar drew something else entirely.
-function displayOrderedIds() {
-  const items = visibleTabs().map((id) => ({
+function displayOrderedIds(personaId = personas.activeId()) {
+  const items = visibleTabs(personaId).map((id) => ({
     id,
     url: tabUrlOf(id),
     hotkey: hotkeyByTab.get(id) || null,
@@ -1498,6 +1498,12 @@ function closeTab(id, opts = {}) {
   const view = tabs.get(id);
   if (!view) return;
   if (pinnedIds.has(id) && !opts.adult && !opts.gone) return; // #219: a destroyed page can't stay pinned; #9: pinned tabs don't close — unpin first (#176: adult ones do)
+  // #289: where focus goes after closing the ACTIVE tab. The neighbor comes from
+  // the sidebar order of the closed tab's own Persona (not the global tabOrder,
+  // which interleaves Personas). It must be read now: displayOrderedIds uses
+  // maps (pinnedIds too) that are cleared below.
+  const closedPersona = personaByTab.get(id) || personas.UNASSIGNED;
+  const sidebarOrder = activeId === id ? displayOrderedIds(closedPersona) : null;
   if (outfitReturn && (id === outfitReturn.tabId || id === outfitReturn.openerId)) outfitReturn = null; // #191
   pinnedIds.delete(id);
   // #57: a close is a fact other devices must learn about — unless we're only
@@ -1517,7 +1523,6 @@ function closeTab(id, opts = {}) {
       if (closedTabs.length > CLOSED_STACK_MAX) closedTabs.shift();
     }
   }
-  const idx = tabOrder.indexOf(id);
   tabs.delete(id);
   hotkeyByTab.delete(id); // #16: the binding survives; only the open tab dies
   pinnedHome.delete(id); // #117: no stale homes for dead tabs
@@ -1538,8 +1543,11 @@ function closeTab(id, opts = {}) {
   if (!view.webContents.isDestroyed()) view.webContents.close(); // #219: it may have closed itself
   if (activeId === id) {
     activeId = null;
-    if (tabOrder.length === 0) createTab(); // the window always has ≥1 tab
-    else activateTab(tabOrder[Math.min(idx, tabOrder.length - 1)]);
+    // #289: the tab below, else the one above, in the same Persona; an emptied
+    // Persona gets a fresh tab of its own (new-tab page, slot home, or terminal picker).
+    const next = tabnav.afterClose(sidebarOrder, id);
+    if (next !== null && tabs.has(next)) activateTab(next);
+    else createTab(null, false, closedPersona);
   } else {
     pushState();
   }

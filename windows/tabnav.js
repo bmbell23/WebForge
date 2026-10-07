@@ -36,4 +36,18 @@ function mostRecent(list, activeId, lastActiveAt) {
   return others.reduce((best, id) => (at(id) > at(best) ? id : best));
 }
 
-module.exports = { nextInOrder, mostRecent };
+/**
+ * #289: the tab to land on after closing `id` — the one BELOW it in `order`
+ * (the Persona's sidebar order), or the one ABOVE when it was last. Null when
+ * `id` is not in the list or was its only entry (the caller opens a fresh tab).
+ */
+function afterClose(order, id) {
+  if (!Array.isArray(order)) return null;
+  const idx = order.indexOf(id);
+  if (idx < 0) return null;
+  if (idx + 1 < order.length) return order[idx + 1];
+  if (idx > 0) return order[idx - 1];
+  return null;
+}
+
+module.exports = { nextInOrder, mostRecent, afterClose };
