@@ -1967,6 +1967,15 @@ function wireChords(wc) {
       if (next && !locked) switchPersona(next);
       return;
     }
+    // #303: Ctrl+Alt+Up/Down step through this Persona's tabs (the sidebar order,
+    // like Ctrl+Shift+Up/Down), from any page or terminal, typing or not.
+    if (modifier.isChord({ ...input, alt: false }) && input.alt && !input.shift && (arrow === 'arrowup' || arrow === 'arrowdown')) {
+      event.preventDefault();
+      leaderUntil = 0;
+      if (terminalMain.isTerminal(wc)) terminalMain.setHold(wc, false);
+      if (!locked) cycleTab(arrow === 'arrowdown' ? 1 : -1);
+      return;
+    }
     // #297: Ctrl+Alt+Shift+Left/Right move the ACTIVE Persona one place left/right
     // in the order; its keys follow the new position. Same reach as #295 above.
     if (modifier.isChord({ ...input, alt: false }) && input.alt && input.shift && (arrow === 'arrowleft' || arrow === 'arrowright')) {
