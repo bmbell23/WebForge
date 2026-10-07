@@ -96,6 +96,9 @@ contextBridge.exposeInMainWorld('webforge', {
   onYtdlpPicker: (cb) => ipcRenderer.on('ytdlp-picker', (_e, p) => cb(p)),
   onOutfitPrompt: (cb) => ipcRenderer.on('outfit-prompt', (_e, p) => cb(p)), // #179
   outfitAnswer: (a) => ipcRenderer.send('outfit-answer', a),
+  onQuickSearch: (cb) => ipcRenderer.on('quick-search-open', () => cb()), // #266
+  onQuickSearchClose: (cb) => ipcRenderer.on('quick-search-close', () => cb()),
+  quickSearchAnswer: (text) => ipcRenderer.send('quick-search-answer', text),
   onYtdlpStatus: (cb) => ipcRenderer.on('ytdlp-status', (_e, s) => cb(s)),
   onUrlReset: (cb) => ipcRenderer.on('url-reset', () => cb()), // #193
   // bookmark manager (#29)
