@@ -37,8 +37,11 @@ contextBridge.exposeInMainWorld('wf', {
   getAdult: () => ipcRenderer.invoke('int:get-adult'), // #203
   getPersonaOrder: () => ipcRenderer.invoke('int:get-persona-order'), // #297
   movePersona: (id, dir) => ipcRenderer.invoke('int:move-persona', { id, dir }), // #297
-  getSlots: () => ipcRenderer.invoke('int:get-slots'), // #214
-  saveSlots: (urls) => ipcRenderer.invoke('int:save-slots', urls),
+  // #301: the apps list (was getSlots/saveSlots, #214)
+  getApps: () => ipcRenderer.invoke('int:get-apps'),
+  addApp: (fields) => ipcRenderer.invoke('int:add-app', fields),
+  editApp: (id, fields) => ipcRenderer.invoke('int:edit-app', id, fields),
+  removeApp: (id) => ipcRenderer.invoke('int:remove-app', id),
   saveAdult: (user) => ipcRenderer.invoke('int:save-adult', user),
   addAdult: (typed) => ipcRenderer.invoke('int:add-adult', typed),
   // default browser (#106)

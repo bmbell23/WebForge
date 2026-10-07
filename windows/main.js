@@ -944,30 +944,76 @@ function movePersonaBy(id, dir) {
 // Personas a URL can be routed to: not Terminal or the app slots, which have no rules.
 const routablePersonas = () => orderedPersonas().filter((p) => !personas.isBuiltinView(p.id));
 
-// #214: app slots. Their URLs are local settings (settings.appSlots = {id: url}),
-// editable in Settings › App slots, never synced.
-const appSlots = () => personaorder.slots(getSettings().appSlots);
+// #214: app slots. #301: they are your own list, settings.apps = [{id, name, url,
+// home}], managed in Settings > Apps and never synced. The first load writes the
+// seed (the defaults plus Slack, with any old settings.appSlots URL edits) so the
+// list is stable from then on.
+const appSlots = () => personaorder.slots(getSettings().apps);
 function applySlots() {
+  const st = getSettings();
+  if (!Array.isArray(st.apps)) {
+    st.apps = personaorder.seedApps(st); // #301
+    saveSettings();
+  }
   personas.setSlots(personaorder.orderPersonas([], appSlots()).filter((p) => p.slot));
 }
-function saveSlots(urls) {
-  const before = new Map(appSlots().map((s) => [s.id, s.url]));
-  const clean = {};
-  for (const s of personaorder.DEFAULT_SLOTS) {
-    const u = personaorder.slotUrl(urls && urls[s.id]);
-    if (u && u !== s.url) clean[s.id] = u;
-  }
-  getSettings().appSlots = clean;
-  saveSettings();
-  applySlots();
-  // An open slot tab follows a CHANGED URL; the rest keep their calls and drafts.
-  for (const tid of tabOrder) {
-    const p = isSlotTab(tid) && personas.get(personaByTab.get(tid));
-    if (p && tabs.has(tid) && !lazyTabs.has(tid) && before.get(p.slot) !== p.url) tabs.get(tid).webContents.loadURL(p.url);
-  }
-  pushPersonas();
-  return appSlots();
+// #301: what an app's "links open in" can be: Work, Personal (by name, so they
+// survive a re-created Persona), your other stored Personas (by id), Unassigned.
+function appHomeChoices() {
+  const named = ['work', 'personal'];
+  const stored = personas.all().filter((p) => p.id !== personas.UNASSIGNED);
+  return [
+    { value: 'work', label: 'Work' },
+    { value: 'personal', label: 'Personal' },
+    ...stored.filter((p) => !named.includes(String(p.name || '').trim().toLowerCase()))
+      .map((p) => ({ value: p.id, label: p.name })),
+    { value: 'unassigned', label: 'Unassigned' },
+  ];
 }
+const appsView = () => ({ apps: appSlots(), homes: appHomeChoices() });
+// #301: after the list changed. `before` = the apps as they were. Open slot tabs
+// follow a CHANGED URL (the rest keep their calls and drafts); tabs of a REMOVED
+// app move to whoever claims their page, else the app's home Persona (never
+// closed); tabs whose page now belongs to a slot move into it.
+function appsChanged(before) {
+  const wasActive = personas.activeId();
+  const gone = new Set(before.map((a) => a.id).filter((id) => !appSlots().some((a) => a.id === id)));
+  const urls = new Map(before.map((a) => [a.id, a.url]));
+  saveSettings();
+  const stored = orderedPersonas(); // for a removed app's home
+  applySlots();
+  for (const tid of tabOrder) {
+    const slot = personaorder.isSlotId(personaByTab.get(tid)) ? personaByTab.get(tid).slice('slot-'.length) : null;
+    if (!slot) continue;
+    if (gone.has(slot)) {
+      const claimed = claimOf(tabUrlOf(tid));
+      personaByTab.set(tid, claimed !== personas.UNASSIGNED ? claimed
+        : personaorder.openerHome('slot-' + slot, stored, before));
+    } else {
+      const now = appSlots().find((a) => a.id === slot);
+      if (now && urls.get(slot) !== now.url && tabs.has(tid) && !lazyTabs.has(tid)) tabs.get(tid).webContents.loadURL(now.url);
+    }
+  }
+  rehomeAllTabs(); // a page on a slot's site joins the slot
+  // The app you were in is gone: follow the active tab to its new home.
+  if (personaorder.isSlotId(wasActive) && gone.has(wasActive.slice('slot-'.length))) {
+    switchPersona(personaByTab.get(activeId) || personas.UNASSIGNED);
+  }
+  pushStateNow(); // the picker, its keys and the badges
+}
+// #301: add / edit / remove. Validate, save, apply. { ok, error?, apps, homes }.
+function changeApps(fn) {
+  const before = appSlots();
+  const r = fn(before);
+  if (r.error) return { ok: false, error: r.error, ...appsView() };
+  getSettings().apps = r.apps;
+  appsChanged(before);
+  return { ok: true, ...appsView() };
+}
+const cleanHome = (h) => {
+  const v = String(h || '').trim();
+  return appHomeChoices().some((c) => c.value === v) ? v : 'unassigned';
+};
 
 // #57: other devices' tabs. #298: every Persona at once, newest first, minus
 // what is already open here and adult URLs; the sidebar shows it collapsed.
@@ -1074,7 +1120,7 @@ function contextMenuFor(wc, params) {
   const nav = wc.navigationHistory;
   // #219: a link opened from here lands in this tab's Persona (an app slot's home).
   const fromId = [...tabs].find(([, v]) => v.webContents === wc)?.[0];
-  const home = personaorder.openerHome(personaByTab.get(fromId), orderedPersonas());
+  const home = personaorder.openerHome(personaByTab.get(fromId), orderedPersonas(), appSlots());
 
   const defineTerm = selection && !params.isEditable ? defineterm.cleanTerm(selection) : null; // #286
 
@@ -1231,7 +1277,7 @@ function createTab(url = null, background = false, personaId = null, opts = {}) 
   // Every new window lands in the opener's Persona (an app slot's home Persona).
   wc.setWindowOpenHandler((details) => {
     const real = popuprule.wantsRealWindow(details); // #125
-    const home = personaorder.openerHome(personaByTab.get(id), orderedPersonas());
+    const home = personaorder.openerHome(personaByTab.get(id), orderedPersonas(), appSlots());
     // #111 round 2: log every decision. The first fix keyed only on
     // disposition === 'new-window' and did not work, and there is no Windows
     // machine here to observe on — so the app has to say what it decided.
@@ -1264,7 +1310,7 @@ function createTab(url = null, background = false, personaId = null, opts = {}) 
   wc.on('will-navigate', (event, navUrl) => {
     if (isStickyTab(id)) { // #117: pinned tabs divert like hotkey tabs
       event.preventDefault();
-      openOrFocus(navUrl, false, undefined, personaorder.openerHome(personaByTab.get(id), orderedPersonas())); // #219
+      openOrFocus(navUrl, false, undefined, personaorder.openerHome(personaByTab.get(id), orderedPersonas(), appSlots())); // #219
     }
   });
   // #33 round 4 — the invariant the user actually asked for: a hotkey tab is
@@ -1291,7 +1337,7 @@ function createTab(url = null, background = false, personaId = null, opts = {}) 
     // the exclusion openOrFocus picked it as its own rescue target, opened
     // nothing, and the loadURL below then threw the page away. That is the
     // "bookmark flickers and never opens" report.
-    openOrFocus(navUrl, false, id, personaorder.openerHome(personaByTab.get(id), orderedPersonas())); // #219
+    openOrFocus(navUrl, false, id, personaorder.openerHome(personaByTab.get(id), orderedPersonas(), appSlots())); // #219
     wc.loadURL(home);
     setTimeout(() => {
       reHoming = false;
@@ -3615,17 +3661,27 @@ ipcMain.handle('int:get-personas', () => ({
   personas: orderedPersonas().filter((p) => !personas.isBuiltinView(p.id)),
   active: personas.activeId(),
 }));
-ipcMain.handle('int:get-slots', () => ({
-  slots: appSlots(), defaults: personaorder.DEFAULT_SLOTS,
-  // #297: each slot's key now follows its position in the order
-  keys: orderedPersonas().filter((p) => p.slot && p.key).map((p) => ({ slot: p.slot, key: p.key })),
+// #301: Settings > Apps. Each change returns { ok, error?, apps, homes }.
+ipcMain.handle('int:get-apps', () => appsView());
+ipcMain.handle('int:add-app', (_e, f) => changeApps((apps) => {
+  const home = cleanHome(f && f.home);
+  const error = personaorder.validateApp({ name: f && f.name, url: f && f.url }, apps);
+  return error ? { error } : { apps: personaorder.addApp(apps, { name: f.name, url: f.url, home }) };
 }));
+ipcMain.handle('int:edit-app', (_e, id, f) => changeApps((apps) => {
+  id = String(id);
+  const cur = apps.find((a) => a.id === id);
+  if (!cur) return { error: 'That app is gone' };
+  const next = { ...cur, ...(f || {}), id };
+  const error = personaorder.validateApp(next, apps);
+  return error ? { error } : { apps: personaorder.editApp(apps, id, { name: next.name, url: next.url, home: cleanHome(next.home) }) };
+}));
+ipcMain.handle('int:remove-app', (_e, id) => changeApps((apps) => ({ apps: personaorder.removeApp(apps, String(id)) })));
 // #297: Settings › Personas › Order: every Persona in order, with the keys of its position.
 ipcMain.handle('int:get-persona-order', () => orderedPersonas().map((p) => ({
   id: p.id, name: p.name, key: personaorder.keyLabel(p),
 })));
 ipcMain.handle('int:move-persona', (_e, { id, dir }) => movePersonaBy(String(id), Number(dir) < 0 ? -1 : 1));
-ipcMain.handle('int:save-slots', (_e, urls) => saveSlots(urls));
 ipcMain.handle('int:add-persona', (_e, name) => {
   const p = personas.add(name);
   pushState();

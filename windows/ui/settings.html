@@ -170,16 +170,17 @@
   </div>
   <div class="sub" id="rulemsg" style="margin-top:6px"></div>
 
-  <!-- #214: app slots, one pinned tab each. Local to this PC, not synced. -->
-  <h2>App slots</h2>
+  <!-- #214: apps, one pinned tab each (#301: your own list). Local to this PC, not synced. -->
+  <h2>Apps</h2>
   <div class="sub" style="margin-bottom:10px">
-    Each app is one tab of its own: <b>Ctrl+Space</b> then its key opens it, and pressing
-    it again brings you back to it. <b>`</b> is the Terminal. Clear a URL to get the default back.
+    Each app is one pinned tab of its own, and its whole site opens in it. Its key
+    follows its place in the Order list below (<b>Ctrl+Space</b> then the key, or
+    F-keys); only the first eight places have a key. <b>Links open in</b> is the
+    Persona a page opened from the app lands in. Removing an app keeps its tabs.
   </div>
   <div id="slotlist"></div>
-  <div class="row" style="margin-top:8px">
-    <button class="choice" id="slotsave">Save app slots</button>
-  </div>
+  <div class="sub" style="margin:10px 0 4px"><b>Add app</b></div>
+  <div class="row" id="appadd" style="align-items:center"></div>
   <div class="sub" id="slotmsg" style="margin-top:6px"></div>
 
   <!-- #203: your adult sites, on top of the built-in list. Synced with the phone. -->
@@ -486,38 +487,75 @@
     renderRules();
   }
 
-  // --- app slots (#214) ---
-  async function loadSlots() {
-    const { slots, defaults, keys } = await wf.getSlots();
+  // --- apps (#214, #301) ---
+  const appField = 'padding:6px 8px;border-radius:6px;border:1px solid var(--border,rgba(128,128,128,.35));background:var(--field-bg,#131315);color:inherit;font:12px ui-monospace,monospace';
+  const appMsg = (t, bad) => {
+    const m = document.getElementById('slotmsg');
+    m.textContent = t;
+    m.style.color = bad ? '#e5484d' : '';
+  };
+  const textBox = (value, placeholder, style) => Object.assign(document.createElement('input'), {
+    type: 'text', value, placeholder, spellcheck: false, style: `${appField};${style}`,
+  });
+  const homeSelect = (homes, value) => {
+    const sel = document.createElement('select');
+    sel.style.cssText = appField;
+    sel.title = 'Links open in: the Persona a page opened from this app lands in';
+    for (const h of homes) sel.appendChild(Object.assign(document.createElement('option'), { value: h.value, textContent: h.label }));
+    sel.value = homes.some((h) => h.value === value) ? value : 'unassigned';
+    return sel;
+  };
+  const refreshAfterApps = () => { loadApps(); loadOrder(); /* keys and the list follow the apps */ };
+  async function loadApps() {
+    const { apps, homes } = await wf.getApps();
     const box = document.getElementById('slotlist');
-    box.replaceChildren(...slots.map((s) => {
-      const k = keys.find((x) => x.slot === s.id);
-      const def = defaults.find((d) => d.id === s.id);
+    box.replaceChildren(...apps.map((a) => {
       const row = document.createElement('div');
       row.className = 'row';
-      row.appendChild(Object.assign(document.createElement('b'), {
-        textContent: k ? k.key : '', title: k ? `Ctrl+Space then ${k.key}` : '', style: 'width:1.5em;text-align:center',
-      }));
-      row.appendChild(Object.assign(document.createElement('span'), { textContent: s.name, style: 'width:9em' }));
-      row.appendChild(Object.assign(document.createElement('input'), {
-        type: 'text', value: s.url, placeholder: def ? def.url : '', spellcheck: false,
-        style: 'flex:1;min-width:220px;padding:6px 8px;border-radius:6px;border:1px solid var(--border,rgba(128,128,128,.35));background:var(--field-bg,#131315);color:inherit;font:12px ui-monospace,monospace',
-      })).dataset.slot = s.id;
+      row.style.cssText = 'align-items:center;margin:3px 0';
+      const name = textBox(a.name, 'Name', 'width:9em');
+      name.maxLength = 40;
+      const url = textBox(a.url, 'https://', 'flex:1;min-width:220px');
+      const home = homeSelect(homes, a.home);
+      const save = Object.assign(document.createElement('button'), { className: 'choice', textContent: 'Save' });
+      save.onclick = async () => {
+        const r = await wf.editApp(a.id, { name: name.value, url: url.value, home: home.value });
+        if (!r.ok) return appMsg(`${a.name}: ${r.error}`, true);
+        appMsg('Saved. An open tab of the app moved to a changed address.');
+        refreshAfterApps();
+      };
+      const rm = Object.assign(document.createElement('button'), { className: 'choice', textContent: '✕', title: `Remove ${a.name}` });
+      rm.onclick = async () => {
+        const r = await wf.removeApp(a.id);
+        appMsg(r.ok ? `${a.name} removed. Its open tabs moved to a Persona.` : r.error, !r.ok);
+        refreshAfterApps();
+      };
+      row.append(name, url, home, save, rm);
       return row;
     }));
+    // The Add form keeps what you typed; only the Persona choices refresh.
+    const form = document.getElementById('appadd');
+    if (!form.children.length) {
+      const name = textBox('', 'Name', 'width:9em');
+      name.maxLength = 40;
+      const url = textBox('', 'https://example.com/', 'flex:1;min-width:220px');
+      const add = Object.assign(document.createElement('button'), { className: 'choice', textContent: 'Add' });
+      form.append(name, url, homeSelect(homes, 'unassigned'), add);
+      add.onclick = async () => {
+        const r = await wf.addApp({ name: name.value, url: url.value, home: form.querySelector('select').value });
+        if (!r.ok) return appMsg(r.error, true);
+        name.value = '';
+        url.value = '';
+        appMsg('Added. It is last in the Order list; move it up to give it a key.');
+        refreshAfterApps();
+      };
+    } else {
+      const old = form.querySelector('select');
+      const sel = homeSelect(homes, old.value);
+      old.replaceWith(sel);
+    }
   }
-  document.getElementById('slotsave').onclick = async () => {
-    const urls = {};
-    for (const i of document.querySelectorAll('#slotlist input')) urls[i.dataset.slot] = i.value;
-    const saved = await wf.saveSlots(urls);
-    const bad = saved.filter((s) => urls[s.id].trim() && new URL(s.url).href !== safeHref(urls[s.id]));
-    document.getElementById('slotmsg').textContent = bad.length
-      ? `Not a web address, kept: ${bad.map((s) => s.name).join(', ')}.`
-      : 'Saved. Open app tabs moved to the new address.';
-    loadSlots();
-  };
-  const safeHref = (u) => { try { return new URL(u.trim()).href; } catch { return null; } };
-  loadSlots();
+  loadApps();
 
   // --- adult sites (#203) ---
   let adult = { added: [], removed: [], builtins: [] };
@@ -752,7 +790,7 @@
           title: dir < 0 ? 'Move up (earlier key)' : 'Move down (later key)',
         });
         b.style.cssText = 'flex:none;min-width:36px';
-        b.onclick = async () => { await wf.movePersona(p.id, dir); loadOrder(); loadSlots(); /* slot keys follow the order */ };
+        b.onclick = async () => { await wf.movePersona(p.id, dir); loadOrder(); };
         row.appendChild(b);
       }
       return row;

@@ -4,8 +4,8 @@
 //
 // Terminal is built in and Windows-only: it is never stored in personas.json,
 // so the sync service and the phone never see it. App slots (Mattermost,
-// Teams, Outlook, Discord) are the same kind of thing: one pinned tab each, stored in
-// local settings, never synced. Unassigned is the fallback, so it goes last
+// Teams, Outlook, Discord, Slack; #301: now your own list, settings.apps) are the same
+// kind of thing: one pinned tab each, stored in local settings, never synced. Unassigned is the fallback, so it goes last
 // (#71). Ids never change; only the display order does.
 const TERMINAL = 'terminal';
 const UNASSIGNED = 'unassigned';
@@ -28,7 +28,7 @@ const KEYS = Object.freeze([
 ]);
 
 // Brandon's default order (2026-10-06), used until you reorder:
-//   Terminal, Work Mattermost, Work, Mattermost, Personal, Teams, Outlook, Discord
+//   Terminal, Work Mattermost, Work, Mattermost, Personal, Teams, Outlook, Discord, Slack
 // `persona` entries find a stored Persona by name; `slot` entries are app slots.
 const DEFAULT_ORDER = Object.freeze([
   { terminal: true },
@@ -39,10 +39,12 @@ const DEFAULT_ORDER = Object.freeze([
   { slot: 'teams' },
   { slot: 'outlook' },
   { slot: 'discord' }, // #282
+  { slot: 'slack' }, // #301: position 9, so no key until you move it up
 ]);
 
 // The default order with its keys, as before #297 (Settings and docs still read it).
-const KEYMAP = DEFAULT_ORDER.map((e, i) => ({ ...KEYS[i], ...e }));
+// #301: only the first KEYS.length entries have a key.
+const KEYMAP = DEFAULT_ORDER.slice(0, KEYS.length).map((e, i) => ({ ...KEYS[i], ...e }));
 
 const DEFAULT_SLOTS = Object.freeze([
   // `home`: the Persona a page opened FROM the slot lands in (#219).
@@ -51,6 +53,7 @@ const DEFAULT_SLOTS = Object.freeze([
   { id: 'teams', name: 'Teams', url: 'https://teams.cloud.microsoft/', home: 'work' },
   { id: 'outlook', name: 'Outlook', url: 'https://outlook.cloud.microsoft/mail/', home: 'work' },
   { id: 'discord', name: 'Discord', url: 'https://discord.com/channels/276238974421434368/276238974421434368', home: 'personal' },
+  { id: 'slack', name: 'Slack', url: 'https://app.slack.com/client', home: 'work' }, // #301
 ]);
 
 // An http(s) URL, or null.
@@ -63,12 +66,95 @@ function slotUrl(s) {
   }
 }
 
-// The app slots with your edited URLs (settings.appSlots = {id: url}) laid over
-// the defaults. A blank or broken edit keeps the default.
-function slots(overrides) {
-  const o = overrides && typeof overrides === 'object' ? overrides : {};
+// #301: an app as stored in settings.apps, or null when it can't be one. `home` is
+// a Persona id or one of the names 'work'/'personal' ('' = Unassigned).
+function normalizeApp(a) {
+  if (!a || typeof a !== 'object') return null;
+  const id = String(a.id || '').trim();
+  const name = String(a.name || '').trim();
+  const url = slotUrl(a.url);
+  if (!id || !name || !url) return null;
+  return { id, name, url, home: String(a.home || '').trim() };
+}
+
+function normalizeApps(list) {
+  const seen = new Set();
+  const out = [];
+  for (const raw of list) {
+    const a = normalizeApp(raw);
+    if (!a || seen.has(a.id)) continue;
+    seen.add(a.id);
+    out.push(a);
+  }
+  return out;
+}
+
+// #301: the apps list. A stored settings.apps array wins (normalized). Otherwise
+// the defaults, with the old URL edits (settings.appSlots = {id: url}) laid over
+// them; a blank or broken edit keeps the default.
+function seedApps(settings) {
+  const st = settings && typeof settings === 'object' ? settings : {};
+  if (Array.isArray(st.apps)) return normalizeApps(st.apps);
+  const o = st.appSlots && typeof st.appSlots === 'object' ? st.appSlots : {};
   return DEFAULT_SLOTS.map((s) => ({ ...s, url: slotUrl(o[s.id]) || s.url }));
 }
+
+// The app slots: an apps array as is (normalized), else (legacy) a {id: url}
+// override object over the defaults.
+function slots(appsOrOverrides) {
+  return Array.isArray(appsOrOverrides) ? normalizeApps(appsOrOverrides) : seedApps({ appSlots: appsOrOverrides });
+}
+
+const originOf = (u) => {
+  try {
+    return new URL(u).origin;
+  } catch {
+    return '';
+  }
+};
+
+// #301: why `app` can't be saved next to `apps`, or null. An app with an id that
+// is already in `apps` is an edit and is not compared with itself.
+function validateApp(app, apps) {
+  const name = String((app && app.name) || '').trim();
+  if (name.length < 1 || name.length > 40) return 'Name must be 1 to 40 characters';
+  const url = slotUrl(app && app.url);
+  if (!url) return 'URL must be a web address (http or https)';
+  const origin = originOf(url);
+  const other = (apps || []).find((a) => a.id !== (app && app.id) && originOf(a.url) === origin);
+  return other ? `Another app already uses ${origin}` : null;
+}
+
+const slugOf = (name) => String(name || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'app';
+
+// #301: `apps` plus a new one (ids are permanent: slug of the name, then -2, -3...).
+// Does not validate; call validateApp first. Returns `apps` unchanged for junk.
+function addApp(apps, fields) {
+  const list = apps || [];
+  const base = slugOf(fields && fields.name);
+  let id = base;
+  for (let n = 2; list.some((a) => a.id === id); n++) id = `${base}-${n}`;
+  const app = normalizeApp({ ...fields, id });
+  return app ? [...list, app] : list;
+}
+
+// #301: `apps` with app `id`'s name/url/home replaced; the id never changes. A
+// field that would be invalid (blank name, bad URL) keeps its old value.
+function editApp(apps, id, fields) {
+  return (apps || []).map((a) => {
+    if (a.id !== id) return a;
+    const f = fields || {};
+    return normalizeApp({
+      ...a,
+      name: f.name !== undefined && String(f.name).trim() ? f.name : a.name,
+      url: f.url !== undefined && slotUrl(f.url) ? f.url : a.url,
+      home: f.home !== undefined ? f.home : a.home,
+      id: a.id,
+    }) || a;
+  });
+}
+
+const removeApp = (apps, id) => (apps || []).filter((a) => a.id !== id);
 
 const slotPersona = (s) => ({ id: SLOT_PREFIX + s.id, name: s.name, builtin: true, slot: s.id, url: s.url, rules: [] });
 const isSlotId = (id) => typeof id === 'string' && id.startsWith(SLOT_PREFIX);
@@ -92,6 +178,8 @@ function orderPersonas(list, slotList = slots(), savedOrder = null) {
     } else p = byName(e.persona);
     if (p) defaults.push(p);
   }
+  // #301: apps you added are not in DEFAULT_ORDER; they follow the defaults.
+  for (const s of slotList) if (!DEFAULT_ORDER.some((e) => e.slot === s.id)) defaults.push(slotPersona(s));
   const known = new Map();
   for (const p of defaults) known.set(p.id, p);
   for (const p of stored) if (p.id !== UNASSIGNED && !known.has(p.id)) known.set(p.id, p);
@@ -151,15 +239,18 @@ function slotFor(url, slotList = slots()) {
 }
 
 // #219: where a page opened from Persona `pid` belongs (URL rules still win in
-// createTab). A normal Persona keeps it; an app slot sends it to its home Persona
-// (Work or Personal, by name); the Terminal, or a slot whose home is missing,
-// sends it to Unassigned.
-function openerHome(pid, ordered) {
+// createTab). A normal Persona keeps it; an app slot sends it to its home (#301: a
+// Persona id, or the name 'work'/'personal', or any name); the Terminal, or a slot
+// whose home is missing or 'unassigned', sends it to Unassigned.
+function openerHome(pid, ordered, appList = slots()) {
   if (pid === TERMINAL) return UNASSIGNED;
   if (!isSlotId(pid)) return pid || UNASSIGNED;
-  const def = DEFAULT_SLOTS.find((s) => SLOT_PREFIX + s.id === pid);
-  const home = def && (ordered || []).find((p) => !p.slot && p.id !== TERMINAL && p.id !== UNASSIGNED &&
-    String(p.name || '').trim().toLowerCase() === def.home);
+  const def = appList.find((s) => SLOT_PREFIX + s.id === pid);
+  const want = def ? String(def.home || '').trim() : '';
+  if (!want || want.toLowerCase() === UNASSIGNED) return UNASSIGNED;
+  const real = (ordered || []).filter((p) => !p.slot && p.id !== TERMINAL && p.id !== UNASSIGNED);
+  const home = real.find((p) => p.id === want) ||
+    real.find((p) => String(p.name || '').trim().toLowerCase() === want.toLowerCase());
   return home ? home.id : UNASSIGNED;
 }
 
@@ -230,5 +321,5 @@ function leaderPick(input, ordered) {
 
 module.exports = {
   TERMINAL, UNASSIGNED, TERMINAL_PERSONA, KEYS, DEFAULT_ORDER, KEYMAP, DEFAULT_SLOTS,
-  slots, slotUrl, isSlotId, orderPersonas, leaderPick, unreadFromTitle, unreadBadge, directPick, slotFor, openerHome, stepPersona, movePersona, keyLabel,
+  slots, slotUrl, seedApps, normalizeApp, validateApp, addApp, editApp, removeApp, isSlotId, orderPersonas, leaderPick, unreadFromTitle, unreadBadge, directPick, slotFor, openerHome, stepPersona, movePersona, keyLabel,
 };
