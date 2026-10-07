@@ -45,6 +45,7 @@ const taburl = require('./taburl'); // #107 — ditto
 const tabsync = require('./tabsync'); // #298 — which devices still count, and the other-devices list
 const taborder = require('./taborder'); // #107 — ditto
 const { cleanTabName } = require('./tabname'); // #236 — ditto
+const wintitle = require('./wintitle'); // #317 — ditto
 const ctxmenu = require('./ctxmenu'); // #133 — ditto
 const stickytab = require('./stickytab'); // #117 — ditto
 const popuprule = require('./popuprule'); // #125 — ditto
@@ -683,6 +684,7 @@ function setFullscreenMode(on) {
   fsRevealed = null;
   chrome.webContents.send('fs-mode', null);
   win.setFullScreen(on);
+  updateWindowTitle(); // #317
   if (on) {
     fsPollTimer = setInterval(fsPoll, 150);
   } else {
@@ -1113,10 +1115,18 @@ function pushStateNow() {
   pushPersonas(); // #25
   sendIfChanged('tabs-updated', tabState()); // #216
   sendIfChanged('remote-tabs', remoteTabsForActive()); // #57
-  const wc = activeWc();
-  const title = customTitles.get(activeId) || wc?.getTitle(); // #236
-  win.setTitle(title ? `${title} — WebForge` : 'WebForge');
+  updateWindowTitle();
   saveSessionSoon();
+}
+
+// #317: one place sets the OS window title, and only when it changes. Held at
+// "WebForge" in fullscreen so Alt+Tab has no stream of old titles to ghost.
+let setWindowTitle = null;
+function updateWindowTitle() {
+  if (!win || win.isDestroyed()) return;
+  if (!setWindowTitle) setWindowTitle = wintitle.makeTitleSetter((t) => win.setTitle(t));
+  const pageTitle = locked ? null : customTitles.get(activeId) || activeWc()?.getTitle(); // #236
+  setWindowTitle(wintitle.windowTitle({ fullscreen, locked, pageTitle }));
 }
 
 // #111/#219: a popup's page is web content and must never be more privileged
@@ -3047,7 +3057,7 @@ function showLock() {
   tabOrder = [];
   pinnedIds.clear();
   activeId = null;
-  win.setTitle('WebForge — locked');
+  updateWindowTitle(); // #317
   sendIfChanged('tabs-updated', []); // #216: through the dedupe, or unlock could skip its first push
 
   lockView = new WebContentsView({
@@ -3066,7 +3076,7 @@ function onUnlocked() {
     lockView.webContents.close();
     lockView = null;
   }
-  win.setTitle('WebForge');
+  updateWindowTitle(); // #317
   // Restore the previous session; fall back to legacy pinned.json, then Home.
   const session = vault.readFile('session');
   if (session?.tabs?.length) {
