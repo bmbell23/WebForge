@@ -3584,6 +3584,40 @@ ipcMain.on('stop', () => activeWc()?.stop());
 ipcMain.on('new-tab', () => openNewTab()); // #82
 ipcMain.on('close-tab', (_e, id) => closeTab(id));
 // #236: rename a tab (empty/whitespace clears it back to the page title).
+// #309: a tab's own menu (right-click in the sidebar). Rename goes through main
+// so the sidebar is raised and focused BEFORE the edit starts: double-click was
+// two clicks, each activating the tab and focusing the page, which raced the
+// rename box for the keyboard (#254, #277).
+let renameOpen = false;
+function startTabRename(id) {
+  if (locked || !tabs.has(id) || !chrome || chrome.webContents.isDestroyed()) return;
+  renameOpen = true;
+  setChromeRaised(true);
+  chrome.webContents.focus();
+  chrome.webContents.send('rename-tab-start', id);
+}
+function endTabRename() {
+  if (!renameOpen) return;
+  renameOpen = false;
+  if (!bmDialogOpen && !settingsOpen && !managerOpen && !ytdlpOpen && !outfitOpen && !quickOpen) setChromeRaised(false);
+  activeWc()?.focus();
+}
+function showTabMenu(id) {
+  if (locked || !tabs.has(id)) return;
+  const pinned = pinnedIds.has(id);
+  const viaActive = (fn) => () => { if (!tabs.has(id)) return; if (id !== activeId) activateTab(id); fn(); };
+  Menu.buildFromTemplate([
+    { label: 'Rename…', click: () => startTabRename(id) },
+    { label: pinned ? 'Unpin' : 'Pin', click: () => togglePin(id) },
+    { label: 'Duplicate', click: viaActive(() => duplicateActiveTab()) },
+    { label: 'Reload', click: viaActive(() => activeWc()?.reload()) },
+    { type: 'separator' },
+    { label: 'Close', enabled: !pinned, click: () => closeTab(id) },
+  ]).popup({ window: win });
+}
+ipcMain.on('tab-menu', (e, id) => { if (chrome && e.sender === chrome.webContents) showTabMenu(Number(id)); });
+ipcMain.on('rename-tab-request', (e, id) => { if (chrome && e.sender === chrome.webContents) startTabRename(Number(id)); });
+ipcMain.on('rename-tab-done', (e) => { if (chrome && e.sender === chrome.webContents) endTabRename(); });
 ipcMain.on('rename-tab', (_e, id, name) => {
   if (!tabs.has(id)) return;
   const clean = cleanTabName(name);
