@@ -338,7 +338,27 @@ const HINT_SELECTOR = [
   '[role=button]', '[role=link]', '[role=checkbox]', '[role=tab]', '[role=menuitem]',
   '[onclick]', '[contenteditable=""]', '[contenteditable=true]',
   '[tabindex]:not([tabindex="-1"])',
+  '[aria-haspopup]:not([aria-haspopup="false"])', '[aria-expanded]', // #258: menu buttons
 ].join(',');
+
+// #258: hover-only dropdowns. A nav header whose submenu opens on CSS :hover has
+// nothing clickable about it, but its submenu links exist, hidden. The header is
+// the nearest visible ancestor of such a link; label that, and hover it for real.
+function hoverTriggers(isTarget) {
+  const out = new Set();
+  for (const a of document.querySelectorAll('a[href]')) {
+    if (a.checkVisibility ? a.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }) : a.offsetParent !== null) continue;
+    let el = a.parentElement;
+    while (el && el !== document.body && !(el.checkVisibility ? el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }) : el.offsetParent !== null)) {
+      el = el.parentElement;
+    }
+    if (!el || el === document.body || el === document.documentElement || out.has(el) || isTarget(el)) continue;
+    const r = el.getBoundingClientRect();
+    if (r.height > 120 || r.width > window.innerWidth / 2) continue; // a page section, not a menu header
+    out.add(el);
+  }
+  return [...out];
+}
 
 /**
  * Every hintable element, INCLUDING those inside open shadow roots.
@@ -380,7 +400,11 @@ function hintTargets() {
   const vh = window.innerHeight;
   const seen = new Set();
   const out = [];
-  for (const el of hintCollect(document, [])) {
+  const regular = hintCollect(document, []);
+  const regularSet = new Set(regular);
+  // #258: a header already labelled for itself (or holding a labelled element) is skipped.
+  const hover = new Set(hoverTriggers((el) => regularSet.has(el) || regular.some((r) => el.contains(r) && r.checkVisibility?.())));
+  for (const el of [...regular, ...hover]) {
     if (el.disabled || seen.has(el)) continue;
     const r = el.getBoundingClientRect();
     if (r.width < 4 || r.height < 4) continue;
@@ -399,7 +423,7 @@ function hintTargets() {
       if (!sameRoot) continue;
     }
     seen.add(el);
-    out.push({ el, rect: r });
+    out.push({ el, rect: r, hover: hover.has(el) });
   }
   return out;
 }
@@ -472,9 +496,17 @@ function hintsStart() {
     const typed = hintSession.typed;
     const exact = hintSession.labels.indexOf(typed);
     if (exact >= 0) {
-      const target = hintSession.targets[exact].el;
+      const t = hintSession.targets[exact];
       hintsCancel();
-      hintsActivate(target);
+      if (t.hover) {
+        // #258: a real mouse move (CSS :hover ignores synthetic events), then
+        // label the menu it opened.
+        const r = t.el.getBoundingClientRect();
+        ipcRenderer.send('hint-hover', Math.round(r.left + r.width / 2), Math.round(r.top + r.height / 2));
+        setTimeout(hintsStart, 250);
+        return;
+      }
+      hintsActivate(t.el);
       return;
     }
     let any = false;
