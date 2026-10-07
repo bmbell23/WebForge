@@ -382,6 +382,8 @@ const isTerminal = (wc) => Boolean(wc && tabs.has(wc.id));
 const holding = (wc) => Boolean(wc && tabs.get(wc.id)?.hold);
 // A tab with no host yet is the picker: Ctrl+T reuses it rather than stacking more.
 const isPicker = (wc) => Boolean(wc && tabs.has(wc.id) && !tabs.get(wc.id).target);
+// #272: the host a terminal tab is for (null for a bare picker), so the session can save it.
+const targetOf = (wc) => (wc && tabs.has(wc.id) ? tabs.get(wc.id).target || null : null);
 
 function clearHold(wc) {
   const st = wc && tabs.get(wc.id);
@@ -510,5 +512,5 @@ function installIpc(h) {
 module.exports = {
   openSession, buildConfig, DEFAULT_TARGET,
   attach, installIpc, isTerminal, isPicker, holding, setHold, clearHold, clearAllHolds, passHeldKey, passDoublePrefix,
-  connections, toggleFavorite, editFavorite,
+  connections, toggleFavorite, editFavorite, targetOf,
 };
