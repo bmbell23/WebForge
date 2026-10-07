@@ -11,6 +11,10 @@ Stdlib only — no pip, runs straight on the python:alpine image.
                               (#171: appended as JSON lines to logs/<device>.log)
     GET  /logs/<device>?tail=N -> {"lines": [<entry>, ...]}  (last N, default 200)
 
+    POST /define           <- {"term": str, "url": str?}   (#286)
+                              drops {"term", "source", "url", "at"} as a .json file
+                              into TRIGGER_DIR for the agent-bus router's !define
+
 Exposed only over Tailscale like everything else on dockerhost. v1 syncs
 bookmarks, personas and tabs; credentials would need end-to-end encryption
 first (see ticket).
@@ -18,6 +22,7 @@ first (see ticket).
 import json
 import os
 import re
+import secrets
 import time
 from urllib.parse import parse_qs, urlsplit
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -129,6 +134,55 @@ def tail_log(device, n):
     return out
 
 
+# #286: select a word in the browser -> Define. The term goes into a drop folder
+# that agent-bus (thread 025) watches. That host folder is agent-bus's, mounted
+# here at /triggers, so we only ever write INTO it and never create it.
+TRIGGER_DIR = os.environ.get("TRIGGER_DIR", "/triggers")
+DEFINE_MAX_BODY = 4096
+DEFINE_MAX_TERM = 64
+DEFINE_MAX_URL = 2048
+_WS = " \t\n\r\f\v\u00a0"
+_EDGE = _WS + "\"'`,.;:!?()[]{}<>\u00ab\u00bb\u2026-"
+
+
+def clean_term(s):
+    """The cleaned term, or None. Same rule as windows/defineterm.js and
+    DefineTerm.kt (same test cases in each): smart quotes -> plain, whitespace
+    runs -> one space, edge punctuation dropped, then 1-64 chars of letters,
+    digits, space, ' or -."""
+    if not isinstance(s, str):
+        return None
+    t = s.translate({0x2018: "'", 0x2019: "'", 0x201C: '"', 0x201D: '"'})
+    t = re.sub("[" + _WS + "]+", " ", t).strip(_EDGE)
+    if not t or len(t) > DEFINE_MAX_TERM:
+        return None
+    if not all(c.isalpha() or c.isdecimal() or c in " '-" for c in t):
+        return None
+    return t
+
+
+class DefineNotSetUp(Exception):
+    pass
+
+
+def write_trigger(term, url=None, trigger_dir=None):
+    """Atomically drop one trigger file. Returns its name (<unix-ms>-<hex8>.json).
+    Raises DefineNotSetUp if the folder is absent (we do not create it)."""
+    trigger_dir = trigger_dir or TRIGGER_DIR
+    if not os.path.isdir(trigger_dir):
+        raise DefineNotSetUp(trigger_dir)
+    name = f"{int(time.time() * 1000)}-{secrets.token_hex(4)}.json"
+    record = {"term": term, "source": "WebForge"}
+    if isinstance(url, str) and len(url) <= DEFINE_MAX_URL and re.match(r"^https?://", url, re.I):
+        record["url"] = url
+    record["at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    tmp = os.path.join(trigger_dir, name + ".tmp")
+    with open(tmp, "w") as fh:
+        json.dump(record, fh)
+    os.replace(tmp, os.path.join(trigger_dir, name))
+    return name
+
+
 class Handler(BaseHTTPRequestHandler):
     def _key(self):
         parts = self.path.strip("/").split("/")
@@ -169,7 +223,26 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             return self._send(500, {"error": "corrupt store"})
 
+    def _define(self):
+        length = int(self.headers.get("Content-Length") or 0)
+        if length <= 0 or length > DEFINE_MAX_BODY:
+            return self._send(413, {"error": "bad size"})
+        try:
+            body = json.loads(self.rfile.read(length))
+        except ValueError:
+            return self._send(400, {"error": "bad json"})
+        term = clean_term(body.get("term")) if isinstance(body, dict) else None
+        if term is None:
+            return self._send(400, {"error": "bad term"})
+        try:
+            name = write_trigger(term, body.get("url"))
+        except DefineNotSetUp:
+            return self._send(503, {"error": "define is not set up"})
+        return self._send(200, {"queued": name})
+
     def do_POST(self):
+        if urlsplit(self.path).path == "/define":
+            return self._define()
         device = _log_device(self.path)
         if device is None:
             return self._send(404, {"error": "not found"})
