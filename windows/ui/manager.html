@@ -263,7 +263,21 @@
     sub.className = 'sub';
     sub.textContent = `Press a key for "${b.title}" — hold Shift for capitals, Del unbinds, Esc cancels`;
     document.querySelector('.sub').replaceWith(sub);
+    // #311: "Keep these URLs on this tab (optional)"; shows the saved value when editing.
+    const bk = keyForUrl(b.url);
+    const scope = Object.assign(document.createElement('input'), {
+      value: (bk && keys[bk] && keys[bk].scope) || '',
+      placeholder: 'http://host/path/*',
+      title: 'Keep these URLs on this tab (optional)',
+      spellcheck: false,
+    });
+    sub.after(scope);
     const onKey = async (e) => {
+      if (e.target === scope) { // typing in the scope field; Esc/Enter hand back to key capture
+        e.stopPropagation();
+        if (e.key === 'Escape' || e.key === 'Enter') { e.preventDefault(); scope.blur(); }
+        return;
+      }
       e.preventDefault();
       e.stopPropagation();
       window.removeEventListener('keydown', onKey, true);
@@ -273,8 +287,9 @@
         if (k) await wf.removeHotkey(k);
       } else if (e.key.length === 1) {
         const id = (e.ctrlKey ? 'Ctrl+' : '') + (e.altKey ? 'Alt+' : '') + e.key;
-        await wf.setHotkey(id, b.url, b.title);
+        await wf.setHotkey(id, b.url, b.title, scope.value.trim());
       }
+      scope.remove();
       sub.textContent = 'Drag bookmarks or whole folders onto a folder to move them; drop on empty space for top level. Folders start collapsed.';
       load();
     };

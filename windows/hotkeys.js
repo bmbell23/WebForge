@@ -1,4 +1,4 @@
-// Hotkey store (#16): keyId -> {url, title}. keyId is event.key with optional
+// Hotkey store (#16): keyId -> {url, title, scope?}. keyId is event.key with optional
 // modifier prefixes ("b", "B", "!", "Ctrl+j", "Alt+B", ...) — the shift layer
 // is implicit in event.key's case/symbol. Plain JSON in userData (not secret,
 // shaped for the sync service later).
@@ -85,10 +85,20 @@ function set(keyId, entry, personaId) {
   // #73: one hotkey per bookmark per Persona. Without this an older key for
   // the same URL survived and kept winning keyForUrl(), so the badge showed
   // the stale key while both pointed at the same bookmark.
+  let carried = '';
   for (const k of Object.keys(b)) {
-    if (k !== keyId && b[k] && b[k].url === entry.url) delete b[k];
+    if (k !== keyId && b[k] && b[k].url === entry.url) {
+      carried = carried || b[k].scope || '';
+      delete b[k];
+    }
   }
+  // #311: `scope` (optional pattern) is trimmed; an explicit blank clears it,
+  // while an omitted one keeps what the key (or the key it replaces) had, so
+  // re-binding a bookmark to a new key does not silently drop its scope.
+  let scope = typeof entry.scope === 'string' ? entry.scope.trim() : undefined;
+  if (scope === undefined) scope = (b[keyId] && b[keyId].scope) || carried || '';
   b[keyId] = { url: entry.url, title: entry.title || entry.url };
+  if (scope) b[keyId].scope = scope;
   save();
   return true;
 }

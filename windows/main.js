@@ -181,6 +181,28 @@ function stickyHomeUrl(id) {
   }
   return pinnedHome.get(id) || null;
 }
+
+// #311: the scope pattern of a hotkey tab's binding ('' when none).
+function stickyScope(id) {
+  const keyId = hotkeyByTab.get(id);
+  if (!keyId) return '';
+  return hotkeys.get(keyId, personaByTab.get(id))?.scope || '';
+}
+
+// #311: open hotkey tabs that carry a scope, for stickytab.scopeTabFor.
+function scopeCandidates(exceptId) {
+  const out = [];
+  for (const tid of hotkeyByTab.keys()) {
+    if (tid === exceptId || !tabs.has(tid)) continue;
+    const scope = stickyScope(tid);
+    if (scope) out.push({ id: tid, scope });
+  }
+  return out;
+}
+
+// #311: does a scoped hotkey tab keep `tid` where it is for `url`? Scope is the
+// more specific claim, so an app slot / Persona rule must not pull the tab away.
+const scopeKeepsTab = (tid, url) => stickytab.inScope({ scope: stickyScope(tid) }, url);
 const hotkeyByTab = new Map(); // #16: tabId -> keyId (a tab per bound hotkey)
 const faviconByTab = new Map(); // #45: tabId -> icon URL
 const personaByTab = new Map(); // #25: tabId -> personaId
@@ -1309,6 +1331,7 @@ function createTab(url = null, background = false, personaId = null, opts = {}) 
   // indistinguishable from link clicks here.
   wc.on('will-navigate', (event, navUrl) => {
     if (isStickyTab(id)) { // #117: pinned tabs divert like hotkey tabs
+      if (scopeKeepsTab(id, navUrl)) return; // #311: still inside the scope: navigate in place
       event.preventDefault();
       openOrFocus(navUrl, false, undefined, personaorder.openerHome(personaByTab.get(id), orderedPersonas(), appSlots())); // #219
     }
@@ -1327,7 +1350,7 @@ function createTab(url = null, background = false, personaId = null, opts = {}) 
     if (!home) return;
     // #78: only enforce across ORIGINS — comparing full URLs livelocked the app.
     // The rule and the reasoning now live in stickytab.js, under test.
-    if (!stickytab.shouldRehome(navUrl, home)) return;
+    if (!stickytab.shouldRehome(navUrl, home, stickyScope(id))) return; // #311: scope, when set
     // #118: a re-home ACTIVATES another tab. If that lands mid-switch it looks
     // exactly like the reported flicker, so make it visible in diagnostics.
     errorlog.record('sticky-rehome', `tab=${id} left ${home} for ${navUrl}`);
@@ -1408,7 +1431,7 @@ function createTab(url = null, background = false, personaId = null, opts = {}) 
     // anywhere — following it switched Persona under a cycling user.
     const wasFirstLoad = firstLoad.delete(id);
     // #214: a terminal or app slot tab stays put (Teams bounces through sign-in pages).
-    if (claimed !== personas.UNASSIGNED && claimed !== current && !personas.isBuiltinView(current)) {
+    if (claimed !== personas.UNASSIGNED && claimed !== current && !personas.isBuiltinView(current) && !scopeKeepsTab(id, navUrl)) { // #311
       personaByTab.set(id, claimed);
       if (id === activeId && !wasFirstLoad) personas.setActive(claimed);
       pushState();
@@ -1641,7 +1664,7 @@ function closeTab(id, opts = {}) {
 function rehomeAllTabs() {
   for (const tid of tabOrder) {
     const claimed = claimOf(tabUrlOf(tid)); // #221
-    if (claimed !== personas.UNASSIGNED && !isViewTab(tid)) personaByTab.set(tid, claimed); // #214
+    if (claimed !== personas.UNASSIGNED && !isViewTab(tid) && !scopeKeepsTab(tid, tabUrlOf(tid))) personaByTab.set(tid, claimed); // #214, #311
   }
 }
 
@@ -1667,6 +1690,18 @@ function findTabByUrl(url, exceptId) {
 // calls this to put the destination SOMEWHERE ELSE, and without the exclusion
 // "somewhere else" could be the very tab it is about to send home.
 function openOrFocus(url, background, exceptId, personaId = null) {
+  // #311: a hotkey tab whose scope claims this URL wins over everything below
+  // (exact-URL dedup, app slots, Persona rules): the page loads IN that tab.
+  const scoped = stickytab.scopeTabFor(url, scopeCandidates(exceptId));
+  if (scoped !== null) {
+    if (lazyTabs.has(scoped)) {
+      lazyTabs.set(scoped, { ...lazyTabs.get(scoped), url }); // restored but unopened: just retarget
+    } else if (taburl.canonical(tabUrlOf(scoped)) !== taburl.canonical(url)) {
+      tabs.get(scoped).webContents.loadURL(url);
+    }
+    if (!background) activateTab(scoped); // switches Persona as needed
+    return scoped;
+  }
   const existing = findTabByUrl(url, exceptId);
   if (existing !== null) {
     if (!background) activateTab(existing);
@@ -2219,7 +2254,8 @@ function handleHotkeyPress(keyId) {
     const wc = tabs.get(tabId).webContents;
     // Skip the reload when it is already showing the bound URL, so repeat presses
     // are not a needless page load.
-    if (taburl.canonical(tabUrlOf(tabId)) !== taburl.canonical(entry.url)) {
+    // #311: with a scope, anywhere inside it is "home" — leave the page alone.
+    if (!stickytab.inScope(entry, tabUrlOf(tabId)) && taburl.canonical(tabUrlOf(tabId)) !== taburl.canonical(entry.url)) {
       wc.loadURL(entry.url);
     }
     wc.focus(); // #30
@@ -2228,10 +2264,12 @@ function handleHotkeyPress(keyId) {
     // tab in the Persona the user is actually working in — landing it in
     // Unassigned would switch them out from under their own hotkey.
     const claimed = personas.forUrl(entry.url);
-    const owner = claimed === personas.UNASSIGNED ? pageHome(personas.activeId()) : claimed; // #214
+    const scoped = stickytab.inScope(entry, entry.url); // #311
+    const owner = claimed === personas.UNASSIGNED || scoped ? pageHome(personas.activeId()) : claimed; // #214
     const newId = createTab(entry.url, false, owner);
     if (newId !== null) {
       hotkeyByTab.set(newId, keyId);
+      if (scoped) personaByTab.set(newId, owner); // #311: scope beats the slot/rule claim createTab applied
       sortTabOrder();
       pushStickyModes(); // #33
       pushState();
@@ -3074,7 +3112,7 @@ function onUnlocked() {
   // filed before their Persona's rules existed.
   for (const tid of tabOrder) {
     const claimed = claimOf(tabUrlOf(tid)); // #221
-    if (claimed !== personas.UNASSIGNED && !isViewTab(tid)) personaByTab.set(tid, claimed); // #214
+    if (claimed !== personas.UNASSIGNED && !isViewTab(tid) && !scopeKeepsTab(tid, tabUrlOf(tid))) personaByTab.set(tid, claimed); // #214, #311
   }
   syncBookmarks(); // #13: catch up whenever a session starts
   syncPersonas(); // #88
@@ -3658,7 +3696,8 @@ ipcMain.on('quick-search-answer', (_e, text) => {
   closeQuickSearch();
   if (locked || typeof text !== 'string' || !text.trim()) return;
   const url = resolveInput(text.trim());
-  createTab(url, false, personas.UNASSIGNED); // URL rules still win inside createTab
+  if (stickytab.scopeTabFor(url, scopeCandidates()) !== null) openOrFocus(url, false); // #311
+  else createTab(url, false, personas.UNASSIGNED); // URL rules still win inside createTab
 });
 // #258: Ctrl+S picked a hover-only menu header: hover it for real, so its CSS
 // :hover submenu opens. Coordinates are the page's CSS pixels.
@@ -3874,10 +3913,10 @@ ipcMain.on('webforge-key', (_e, keyId) => handleHotkeyPress(String(keyId)));
 ipcMain.on('open-in-new-tab', (_e, url) => {
   if (!locked && typeof url === 'string') openOrFocus(url, false);
 });
-ipcMain.on('set-hotkey', (_e, { keyId, url, title }) => {
+ipcMain.on('set-hotkey', (_e, { keyId, url, title, scope }) => {
   if (locked) return;
   if (personas.isBuiltinView(personas.activeId())) return; // #214: Terminal and app slots hold no bookmarks
-  if (!hotkeys.set(String(keyId), { url, title }, personas.activeId())) return;
+  if (!hotkeys.set(String(keyId), { url, title, scope: typeof scope === 'string' ? scope : undefined }, personas.activeId())) return;
   broadcastHotkeys();
   pushState();
 });
@@ -4171,8 +4210,11 @@ ipcMain.on('bm-save', (_e, { id, title, url, folder }) => {
 ipcMain.on('bm-close', () => closeBookmarkDialog());
 ipcMain.on('open-bookmark', errorlog.guard('open-bookmark', (_e, { url, background }) => {
   // #31: an already-open copy of the bookmark wins over navigating/spawning.
-  const existing = findTabByUrl(url);
-  if (existing !== null) {
+  const scoped = stickytab.scopeTabFor(url, scopeCandidates()); // #311
+  const existing = scoped !== null ? scoped : findTabByUrl(url);
+  if (scoped !== null) {
+    openOrFocus(url, Boolean(background));
+  } else if (existing !== null) {
     if (!background) activateTab(existing);
   } else if (background || isStickyTab(activeId)) {
     // #138: never navigate a sticky tab (pinned #117 / hotkey #33) to a
@@ -4485,9 +4527,9 @@ ipcMain.handle('int:delete-folder', (_e, folder) => {
   afterBookmarkChange();
   return n;
 });
-ipcMain.handle('int:set-hotkey', (_e, { keyId, url, title }) => {
+ipcMain.handle('int:set-hotkey', (_e, { keyId, url, title, scope }) => {
   if (locked || personas.isBuiltinView(personas.activeId())) return false; // #214
-  if (!hotkeys.set(String(keyId), { url, title }, personas.activeId())) return false;
+  if (!hotkeys.set(String(keyId), { url, title, scope: typeof scope === 'string' ? scope : undefined }, personas.activeId())) return false;
   broadcastHotkeys();
   pushState();
   return true;
