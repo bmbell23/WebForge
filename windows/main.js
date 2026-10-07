@@ -1900,6 +1900,18 @@ function wireChords(wc) {
       if (!locked) switchPersona(direct);
       return;
     }
+    // #295: Ctrl+Alt+Left/Right step to the previous/next Persona in picker order,
+    // from any page or terminal, typing or not. (Ctrl+Shift+Left/Right stays
+    // select-by-word in text boxes.)
+    const arrow = rawKey.toLowerCase();
+    if (modifier.isChord({ ...input, alt: false }) && input.alt && !input.shift && (arrow === 'arrowleft' || arrow === 'arrowright')) {
+      event.preventDefault();
+      leaderUntil = 0;
+      if (terminalMain.isTerminal(wc)) terminalMain.setHold(wc, false);
+      const next = personaorder.stepPersona(orderedPersonas(), personas.activeId(), arrow === 'arrowleft' ? -1 : 1);
+      if (next && !locked) switchPersona(next);
+      return;
+    }
     // #214: a terminal tab. Every key belongs to the shell except the held key
     // after Ctrl+Space (Persona switch, or prefix + key for forge) and the few
     // tab chords below. Ctrl+L, Ctrl+S, Ctrl+B, Alt+arrows and Esc are the shell's.
