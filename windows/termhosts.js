@@ -2,6 +2,8 @@
 // in ~/.ssh/config. Electron-free and unit-tested (termhosts.test.js); main.js
 // owns the file they are saved in.
 
+const term = require('./terminal');
+
 // ~/.ssh/config as a list of { patterns, opts } blocks, in file order.
 // Keys are lower-cased; the FIRST value of a key wins, as in OpenSSH.
 // Match blocks are skipped (we cannot evaluate them), Include is not followed.
@@ -86,7 +88,8 @@ function rankFrequent(uses, limit = 8) {
 // The three groups the panel and the new-tab picker show. A host appears in
 // one group only: Favorites beat Frequent beat ssh config.
 // #280: `hidden` targets are left out of Frequent and ssh config, never Favorites.
-function connectionGroups({ favorites = [], uses = {}, configHosts: cfg = [], names = {}, hidden = [] } = {}) {
+// #276: given a `platform`, a `local` group (this PC's shells) comes first.
+function connectionGroups({ favorites = [], uses = {}, configHosts: cfg = [], names = {}, hidden = [], platform = null } = {}) {
   const gone = new Set(hidden);
   const seen = new Set(favorites);
   // #241: a Favorite also hides the bare host it was made from (an edited
@@ -98,6 +101,7 @@ function connectionGroups({ favorites = [], uses = {}, configHosts: cfg = [], na
   const frequent = rankFrequent(uses).filter((t) => !seen.has(t) && !gone.has(t));
   for (const t of frequent) seen.add(t);
   return {
+    ...(platform ? { local: term.localEntries(platform) } : {}),
     favorites: [...favorites],
     frequent,
     config: cfg.filter((t) => !seen.has(t) && !gone.has(t)),
@@ -105,8 +109,9 @@ function connectionGroups({ favorites = [], uses = {}, configHosts: cfg = [], na
   };
 }
 
-// A target typed by hand: user@host, host:port, [v6]:port. Nothing else.
+// A target typed by hand: user@host, host:port, [v6]:port, or a #276 local:<shell>. Nothing else.
 function validTarget(s) {
+  if (/^local:[a-z]+$/.test(String(s || '').trim())) return true; // #276: a local shell
   return /^(?:[A-Za-z0-9._-]+@)?(?:[A-Za-z0-9._-]+|\[[0-9A-Fa-f:.]+\])(?::\d{1,5})?$/.test(String(s || '').trim());
 }
 

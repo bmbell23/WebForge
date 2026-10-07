@@ -5,8 +5,31 @@ const crypto = require('crypto');
 
 const OSC52_MAX_BASE64 = 1400000; // ~1 MB once decoded
 
+// #276: a local shell target is `local:<name>`; names are per platform.
+const LOCAL_PREFIX = 'local:';
+const LOCAL_NAMES = { win32: ['powershell', 'cmd'], other: ['shell'] };
+const localNames = (platform) => (platform === 'win32' ? LOCAL_NAMES.win32 : LOCAL_NAMES.other);
+
+// #276: { shell, file, args, label } for `local:<name>` on this platform, else
+// null (not a local target, an unknown name, or a name this platform lacks).
+function parseLocal(target, platform = process.platform, env = process.env) {
+  const t = String(target || '').trim();
+  if (!t.startsWith(LOCAL_PREFIX)) return null;
+  const shell = t.slice(LOCAL_PREFIX.length);
+  if (!localNames(platform).includes(shell)) return null;
+  if (shell === 'powershell') return { shell, file: 'powershell.exe', args: [], label: 'PowerShell' };
+  if (shell === 'cmd') return { shell, file: env.COMSPEC || 'cmd.exe', args: [], label: 'Command Prompt' };
+  return { shell, file: env.SHELL || (platform === 'darwin' ? '/bin/zsh' : '/bin/bash'), args: ['-l'], label: 'Terminal' };
+}
+
+// #276: the "This PC" entries for a platform, in picker order.
+function localEntries(platform = process.platform, env = process.env) {
+  return localNames(platform).map((n) => ({ target: LOCAL_PREFIX + n, label: parseLocal(LOCAL_PREFIX + n, platform, env).label }));
+}
+
 function parseTarget(s) {
   let rest = String(s || '').trim();
+  if (rest.startsWith(LOCAL_PREFIX)) return { username: null, host: rest, port: 22, local: rest.slice(LOCAL_PREFIX.length) }; // #276
   let username = null;
   const at = rest.lastIndexOf('@');
   if (at >= 0) {
@@ -167,6 +190,6 @@ function holdDecision(input, pick) {
 }
 
 module.exports = {
-  parseTarget, knownHostsVerdict, keyTypeOf, fingerprint, osc52Text, keyCandidates, OSC52_MAX_BASE64,
+  parseTarget, parseLocal, localEntries, LOCAL_PREFIX, knownHostsVerdict, keyTypeOf, fingerprint, osc52Text, keyCandidates, OSC52_MAX_BASE64,
   knownHostsLine, CTRL_SPACE, holdDecision, lineEdit, knownHostsWithout,
 };

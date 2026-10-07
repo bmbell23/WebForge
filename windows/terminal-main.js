@@ -12,6 +12,7 @@ const ssh2 = () => require('ssh2');
 const term = require('./terminal');
 const { createBatcher } = require('./termbatch');
 const termhosts = require('./termhosts');
+const { openLocal } = require('./localterm');
 
 const DEFAULT_TARGET = 'brandon@dockerhost';
 
@@ -194,6 +195,8 @@ function buildConfig(target, say, ask = (_q, cb) => cb(false), askText = (_q, _e
 // Opens a shell. Hooks: onData(Buffer), onStatus(kind, text), onClose(),
 // onReady(), ask(question, cb). Returns { write, resize, end }.
 function openSession(target, { cols, rows, onData, onStatus, onClose, onReady = () => {}, ask, askText, passwords }) {
+  // #276: a local shell (node-pty) has none of the SSH machinery below.
+  if (term.parseLocal(target)) return openLocal(target, { cols, rows, onData, onStatus, onClose, onReady });
   const conn = new (ssh2().Client)();
   const pw = {}; // #262: filled by buildConfig
   let stream = null;
@@ -280,19 +283,19 @@ function saveHosts() {
 function connections() {
   const h = loadHosts();
   const cfg = termhosts.configHosts(termhosts.parseSshConfig(sshConfigText()));
-  return termhosts.connectionGroups({ favorites: h.favorites, uses: h.uses, names: h.names, configHosts: cfg, hidden: h.hidden });
+  return termhosts.connectionGroups({ favorites: h.favorites, uses: h.uses, names: h.names, configHosts: cfg, hidden: h.hidden, platform: process.platform });
 }
 // #280: remove a connection from its group (see termhosts.removeConnection).
 function deleteConnection(target, group) {
   const t = String(target || '').trim();
-  if (!t || !['favorites', 'frequent', 'config'].includes(group)) return false;
+  if (!t || t.startsWith(term.LOCAL_PREFIX) || !['favorites', 'frequent', 'config'].includes(group)) return false; // #276: local shells are fixed
   hostsCache = termhosts.removeConnection(loadHosts(), t, group);
   saveHosts();
   return true;
 }
 function toggleFavorite(target) {
   const t = String(target || '').trim();
-  if (!t) return;
+  if (!t || t.startsWith(term.LOCAL_PREFIX)) return; // #276: local shells are not Favorites
   const h = loadHosts();
   h.favorites = h.favorites.includes(t) ? h.favorites.filter((f) => f !== t) : [...h.favorites, t];
   if (!h.favorites.includes(t)) delete h.names[t]; // #228: an unstarred host forgets its name
@@ -302,6 +305,7 @@ function toggleFavorite(target) {
 // #228: edit a Favorite's name / user / host / port. Returns { ok, error? , target? }.
 function editFavorite(oldTarget, fields) {
   const old = String(oldTarget || '').trim();
+  if (old.startsWith(term.LOCAL_PREFIX)) return { ok: false, error: 'This PC shells cannot be edited.' }; // #276
   const h = loadHosts();
   // #241: editing a Frequent or ssh-config host saves it as a Favorite.
   const base = h.favorites.includes(old) || !termhosts.validTarget(old) ? h : { ...h, favorites: [...h.favorites, old] };
@@ -348,6 +352,7 @@ function connect(st) {
       send(st, 'terminal:status', { kind, text });
     },
     onReady: () => {
+      if (term.parseLocal(st.target)) return; // #276: no use counts for local shells
       recordUse(st.target);
       hooks.onConnectionsChanged?.();
     },
@@ -362,13 +367,17 @@ function connect(st) {
       send(st, 'terminal:prompt', question);
       st.text = { buf: '', echo, cb };
     },
-    onClose: () => {
+    onClose: (code) => {
       batch.flushNow(); // #216: the tail of the output lands before the disconnect notice
       if (st.session !== mine) return;
       st.session = null;
       st.answer = null;
       st.text = null;
-      send(st, 'terminal:status', { kind: 'info', text: '[disconnected — press Enter to reconnect]' });
+      // #276: a local shell reports its exit code and respawns on Enter
+      const text = term.parseLocal(st.target)
+        ? `[process exited${code === null || code === undefined ? '' : ` with code ${code}`} — press Enter to restart]`
+        : '[disconnected — press Enter to reconnect]';
+      send(st, 'terminal:status', { kind: 'info', text });
     },
   });
   st.session = mine;

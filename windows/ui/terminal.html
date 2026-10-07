@@ -117,7 +117,7 @@
   window.terminal.onPrompt((q) => term.write(`\r\n\x1b[33;1m${q}\x1b[0m`));
   const begin = (target) => {
     document.body.classList.remove('picking');
-    document.title = target;
+    document.title = target.startsWith('local:') ? target.slice(6) : target; // #276
     fit.fit();
     window.terminal.start(term.cols, term.rows, target);
     term.focus();
@@ -174,6 +174,17 @@
       const names = g.names || {};
       const groups = document.getElementById('groups');
       groups.replaceChildren();
+      // #276: this PC's shells come first; no star, edit or remove.
+      if (g.local && g.local.length) {
+        groups.appendChild(Object.assign(document.createElement('h2'), { textContent: 'This PC' }));
+        for (const l of g.local) {
+          const row = Object.assign(document.createElement('div'), { className: 'host' });
+          const go = Object.assign(document.createElement('button'), { className: 'go', textContent: l.label, title: `Open ${l.label} on this computer` });
+          go.onclick = () => begin(l.target);
+          row.appendChild(go);
+          groups.appendChild(row);
+        }
+      }
       for (const [title, list, fav] of [['★ Favorites', g.favorites, true], ['Frequent', g.frequent, false], ['~/.ssh/config', g.config, false]]) {
         const h = document.createElement('h2');
         h.textContent = title;

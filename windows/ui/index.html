@@ -1480,6 +1480,17 @@
     lastConns = g;
     const names = g.names || {};
     const nodes = [connInput];
+    // #276: this PC's shells come first; no star, edit or remove.
+    if (g.local && g.local.length) {
+      nodes.push(Object.assign(document.createElement('h4'), { textContent: 'This PC' }));
+      for (const l of g.local) {
+        const el = Object.assign(document.createElement('div'), { className: 'bm', tabIndex: 0, title: `Open ${l.label} on this computer` });
+        el.append(Object.assign(document.createElement('span'), { className: 'title', textContent: l.label }));
+        el.onclick = () => webforge.openConnection(l.target);
+        el.onkeydown = (e) => { if (e.key === 'Enter' && e.target === el) webforge.openConnection(l.target); };
+        nodes.push(el);
+      }
+    }
     for (const [title, list, fav] of [['★ Favorites', g.favorites, true], ['Frequent', g.frequent, false], ['~/.ssh/config', g.config, false]]) {
       nodes.push(Object.assign(document.createElement('h4'), {
         textContent: title,
