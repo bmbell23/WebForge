@@ -974,6 +974,8 @@
         <tr><td>F1–F8</td><td>The same, by position: F1 is the first Persona (default Terminal), F2 the second (Work Mattermost), F3 Work, F4 Mattermost, F5 Personal, F6 Teams, F7 Outlook, F8 Discord</td></tr>
         <tr><td>Ctrl+Space, then ` ! @ # $ % ^ &</td><td>The Persona in that position of your order (default: ` Terminal, ! Work Mattermost, @ Work, # Mattermost, $ Personal, % Teams, ^ Outlook, &amp; Discord). Works inside a terminal too. Unassigned is last, in the picker.</td></tr>
         <tr><td>Ctrl+PageDown</td><td>Next tab</td></tr>
+        <tr><td>Right-click a tab</td><td>Rename, Pin / Unpin, Duplicate, Reload, Close (double-click renames too)</td></tr>
+        <tr><td>Middle-click a tab</td><td>Pin / unpin</td></tr>
         <tr><td>Ctrl+Alt+Up / Down</td><td>Previous / next tab in this Persona (works while typing and in a terminal)</td></tr>
         <tr><td>Ctrl+Alt+Left / Right</td><td>Previous / next Persona, in picker order (wraps; works while typing and in a terminal)</td></tr>
         <tr><td>Ctrl+Alt+Shift+Left / Right</td><td>Move this Persona one place left / right; its keys follow the new position (also in Settings › Personas › Order)</td></tr>
@@ -1119,7 +1121,7 @@
     el.appendChild(close);
 
     el.onclick = () => webforge.activateTab(t.id);
-    el.ondblclick = (e) => { e.preventDefault(); startRename(t.id); }; // #236
+    el.ondblclick = (e) => { e.preventDefault(); webforge.requestRename(t.id); }; // #236, #309: via main, which raises + focuses the sidebar first
     // #131: reachable by keyboard. There was no tabindex anywhere in this file,
     // so the sidebar was mouse-only — Tab could not land on a tab row at all.
     el.tabIndex = 0;
@@ -1137,13 +1139,13 @@
         webforge.closeTab(t.id);
       }
     };
-    // #48: middle-click closes. mousedown is the reliable path (auxclick can
+    // #48, #309: middle-click pins / unpins. mousedown is the reliable path (auxclick can
     // be swallowed, and preventDefault here also kills middle-click autoscroll).
     el.onmousedown = (e) => {
-      if (e.button === 1) { e.preventDefault(); webforge.closeTab(t.id); }
+      if (e.button === 1) { e.preventDefault(); webforge.togglePin(t.id); } // #309: middle-click pins (close is the ✕ or the menu)
     };
     el.onauxclick = (e) => { if (e.button === 1) e.preventDefault(); };
-    el.oncontextmenu = (e) => { e.preventDefault(); webforge.togglePin(t.id); };
+    el.oncontextmenu = (e) => { e.preventDefault(); webforge.tabMenu(t.id); }; // #309: Rename, Pin, Duplicate, Reload, Close
     return el;
   }
 
@@ -1156,11 +1158,11 @@
   let renameInput = null;
   let renameFinish = null;
   function startRename(id) {
-    if (renamingId !== null) return;
+    if (renamingId !== null) { renameInput && renameInput.focus(); return; }
     const row = [...document.querySelectorAll('.tab')].find((r) => r.dataset.tabId === String(id));
     const span = row && row.querySelector('.title');
     const t = lastTabsState && lastTabsState.find((x) => x.id === id);
-    if (!span || !t) return;
+    if (!span || !t) { webforge.renameDone(); return; } // #309: never leave the sidebar raised
     renamingId = id;
     const input = document.createElement('input');
     input.type = 'text';
@@ -1180,6 +1182,7 @@
       window.removeEventListener('mousedown', outside, true);
       window.removeEventListener('blur', onWinBlur);
       if (save) webforge.renameTab(id, input.value);
+      webforge.renameDone(); // #309: main lowers the sidebar and hands the page its focus back
       renderTabs(lastTabsState);
     };
     // #254: a click anywhere else, or the sidebar losing focus, ends the edit,
