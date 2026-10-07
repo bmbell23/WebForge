@@ -136,6 +136,18 @@
     <button class="choice" data-expiry="7d">7 days</button>
   </div>
 
+  <!-- #238 -->
+  <h2>Graphics</h2>
+  <div class="sub" style="margin-bottom:8px">
+    <b>Flicker fix</b> stops Outlook and other heavy pages flashing white as the mouse moves, by turning
+    off Windows DirectComposition. Takes effect after a restart.
+  </div>
+  <div class="row" id="dcomp">
+    <button class="choice" data-dcomp="fix">Flicker fix on</button>
+    <button class="choice" data-dcomp="off">Off (Chromium default)</button>
+  </div>
+  <div class="sub" id="dcompmsg" style="margin-top:6px"></div>
+
   <!-- #106: Windows will not let an app take the default browser slot on its
        own — the user has to confirm in Settings. So report the state and open
        the right page, rather than pretending we can set it. -->
@@ -316,6 +328,9 @@
     const expiry = settings.tabExpiry || '24h'; // #79
     document.querySelectorAll('#expiry .choice').forEach((b) =>
       b.classList.toggle('sel', b.dataset.expiry === expiry));
+    const dcomp = settings.directComposition === true ? 'off' : 'fix'; // #238
+    document.querySelectorAll('#dcomp .choice').forEach((b) =>
+      b.classList.toggle('sel', b.dataset.dcomp === dcomp));
     renderGroups();
   }
 
@@ -347,6 +362,14 @@
   });
   document.querySelectorAll('#expiry .choice').forEach((b) => { // #79
     b.onclick = async () => { settings.tabExpiry = b.dataset.expiry; await wf.setTabExpiry(b.dataset.expiry); paint(); };
+  });
+  document.querySelectorAll('#dcomp .choice').forEach((b) => { // #238
+    b.onclick = async () => {
+      settings.directComposition = b.dataset.dcomp === 'off';
+      await wf.setDirectComposition(settings.directComposition);
+      document.getElementById('dcompmsg').textContent = 'Restart WebForge for this to take effect.';
+      paint();
+    };
   });
   document.getElementById('gadd').onclick = async () => {
     const name = document.getElementById('gname').value.trim();
