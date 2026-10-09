@@ -47,6 +47,7 @@ const taborder = require('./taborder'); // #107 — ditto
 const { cleanTabName } = require('./tabname'); // #236 — ditto
 const wintitle = require('./wintitle'); // #317 — ditto
 const overlays = require('./overlays'); // #170 — ditto
+const hangwatch = require('./hangwatch'); // #170 round 2 — ditto
 const ctxmenu = require('./ctxmenu'); // #133 — ditto
 const stickytab = require('./stickytab'); // #117 — ditto
 const popuprule = require('./popuprule'); // #125 — ditto
@@ -1555,6 +1556,15 @@ function createTab(url = null, background = false, personaId = null, opts = {}) 
   // username — long after the document finished loading. So each of these
   // events starts a short bounded retry schedule instead of a single attempt.
   wc.on('did-finish-load', () => scheduleAutofill(wc));
+  // #170 round 2: a page process that dies or hangs, and a main-frame load that
+  // starts and never ends, were all invisible. Now they're logged.
+  wc.on('did-start-navigation', (d) => {
+    if (d.isMainFrame && !d.isSameDocument) navWatch.start(id, d.url, Date.now());
+  });
+  for (const ev of ['did-finish-load', 'did-fail-load', 'did-stop-loading', 'destroyed']) wc.on(ev, () => navWatch.end(id));
+  wc.on('render-process-gone', (_e, d) => errorlog.record('render-gone', `tab=${id} reason=${d.reason} exit=${d.exitCode}`));
+  wc.on('unresponsive', () => errorlog.record('tab-unresponsive', `tab=${id} url=${tabUrlOf(id)}`));
+  wc.on('responsive', () => errorlog.record('tab-unresponsive', `tab=${id} responsive again`));
   wc.on('did-navigate-in-page', () => scheduleAutofill(wc)); // SPA route change
   wc.on('dom-ready', () => {
     wc.send('sticky-mode', isStickyTab(id)); // #33, #117
@@ -4903,7 +4913,54 @@ app.whenReady().then(() => {
   setInterval(syncTabs, 30 * 1000); // #95: 30s, matching Android — a minute felt dead
   setInterval(sweepStaleTabs, 5 * 60 * 1000); // #79
   setInterval(recordPerf, 10 * 60 * 1000); // #216
+  startHangWatch(); // #170 round 2
 });
+
+// #170 round 2: the signals that were missing when links died and the log went
+// silent. Helper processes (network service, GPU) dying; sleep/resume, so a
+// gap in the log can be told apart from a hang; the main thread stalling; loads
+// that never finish; and a probe that fetches the sync server two ways every
+// minute. Chromium's network stack (session.fetch, what pages use) failing while
+// Node's fetch still works means the network service is wedged, not the network.
+const navWatch = hangwatch.navTracker();
+function startHangWatch() {
+  app.on('child-process-gone', (_e, d) =>
+    errorlog.record('child-gone', `type=${d.type} reason=${d.reason} exit=${d.exitCode} name=${d.name || ''} service=${d.serviceName || ''}`)
+  );
+  const stall = hangwatch.stallTracker(1000, 5000);
+  powerMonitor.on('suspend', () => errorlog.record('power', 'suspend'));
+  powerMonitor.on('resume', () => {
+    stall.reset(Date.now());
+    errorlog.record('power', 'resume');
+  });
+  setInterval(() => {
+    const lag = stall.tick(Date.now());
+    if (lag) errorlog.record('main-stall', `main thread blocked ~${Math.round(lag / 1000)}s`);
+  }, 1000);
+  setInterval(() => {
+    for (const n of navWatch.overdue(Date.now(), 30000)) {
+      errorlog.record('nav-stuck', `tab=${n.id} active=${n.id === activeId} ${Math.round(n.ageMs / 1000)}s url=${n.url}`);
+    }
+  }, 15000);
+  const chromiumNet = hangwatch.probeState();
+  const nodeNet = hangwatch.probeState();
+  const probe = async (label, state, f) => {
+    const t0 = Date.now();
+    try {
+      const r = await f(SYNC_URL, { method: 'HEAD', signal: AbortSignal.timeout(10000) });
+      const line = state(r.status < 500, `${Date.now() - t0}ms status=${r.status}`);
+      if (line) errorlog.record('net-probe', `${label} ${line}`);
+    } catch (err) {
+      const line = state(false, `${Date.now() - t0}ms ${err && (err.name || err.message)}`);
+      if (line) errorlog.record('net-probe', `${label} ${line}`);
+    }
+  };
+  setInterval(() => {
+    if (!alive()) return;
+    probe('chromium', chromiumNet, (u, o) => session.defaultSession.fetch(u, o));
+    probe('node', nodeNet, (u, o) => fetch(u, o));
+  }, 60 * 1000);
+}
 
 // #216: the slowdown report came with no numbers to check it against. Every 10
 // minutes, log tab counts and CPU/memory per process type, so the next round
