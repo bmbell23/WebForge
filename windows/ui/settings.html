@@ -147,8 +147,8 @@
   <!-- #238 -->
   <h2>Graphics</h2>
   <div class="sub" style="margin-bottom:8px">
-    <b>Flicker fix</b> stops Outlook and other heavy pages flashing white as the mouse moves, by turning
-    off Windows DirectComposition. Takes effect after a restart.
+    <b>Flicker fix</b> turns off Windows DirectComposition, which can stop heavy pages like Outlook flashing
+    white. Off by default: with it on, Alt+Tab collects ghost WebForge tiles. Takes effect after a restart.
   </div>
   <div class="row" id="dcomp">
     <button class="choice" data-dcomp="fix">Flicker fix on</button>
@@ -337,7 +337,7 @@
     const expiry = settings.tabExpiry || '24h'; // #79
     document.querySelectorAll('#expiry .choice').forEach((b) =>
       b.classList.toggle('sel', b.dataset.expiry === expiry));
-    const dcomp = settings.directComposition === true ? 'off' : 'fix'; // #238
+    const dcomp = settings.directComposition === false ? 'fix' : 'off'; // #238, opt-in since #317
     document.querySelectorAll('#dcomp .choice').forEach((b) =>
       b.classList.toggle('sel', b.dataset.dcomp === dcomp));
     renderGroups();
