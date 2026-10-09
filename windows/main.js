@@ -49,6 +49,7 @@ const { cleanTabName } = require('./tabname'); // #236 — ditto
 const wintitle = require('./wintitle'); // #317 — ditto
 const overlays = require('./overlays'); // #170 — ditto
 const hangwatch = require('./hangwatch'); // #170 round 2 — ditto
+const tablive = require('./tablive'); // #170: dead webContents never throw — ditto
 const ctxmenu = require('./ctxmenu'); // #133 — ditto
 const stickytab = require('./stickytab'); // #117 — ditto
 const popuprule = require('./popuprule'); // #125 — ditto
@@ -305,8 +306,8 @@ function sessionSnapshot() {
   return {
     tabs: kept
       .map((id) => ({
-        url: isTerminalTab(id) ? termUrl(id) : realUrl(id, lazyTabs.get(id)?.url || tabs.get(id).webContents.getURL()), // #232: never a reader data: URL
-        title: lazyTabs.get(id)?.title || tabs.get(id).webContents.getTitle(), // #78
+        url: isTerminalTab(id) ? termUrl(id) : realUrl(id, lazyTabs.get(id)?.url || tablive.liveUrl(tabs.get(id))), // #232: never a reader data: URL; #170
+        title: lazyTabs.get(id)?.title || tablive.liveWc(tabs.get(id))?.getTitle() || '', // #78, #170
         pinned: pinnedIds.has(id),
         pinHome: pinnedHome.get(id) || null, // #117: or stickiness dies on restart
         hotkey: hotkeyByTab.get(id) || null,
@@ -810,7 +811,7 @@ function openInternalTab(page) {
   }
   // Fallback for tabs restored from a previous session (no id recorded yet).
   for (const id of tabOrder) {
-    if (tabs.get(id).webContents.getURL().startsWith(target)) {
+    if (tablive.liveUrl(tabs.get(id)).startsWith(target)) { // #170
       internalTabs.set(page, id);
       activateTab(id);
       return;
@@ -993,9 +994,9 @@ function displayOrderedIds(personaId = personas.activeId()) {
 
 function tabState() {
   return displayOrderedIds().map((id) => {
-    const wc = tabs.get(id).webContents;
+    const wc = tablive.liveWc(tabs.get(id)); // #170: null once a self-closed popup's page is gone
     const pending = lazyTabs.get(id); // #78: not loaded yet — use saved values
-    const rawUrl = realUrl(id, pending ? pending.url : wc.getURL()); // #232: the address bar shows the article, not the reader's data: URL
+    const rawUrl = realUrl(id, pending ? pending.url : wc?.getURL() || ''); // #232: the address bar shows the article, not the reader's data: URL
     const isNew = isNewTabUrl(rawUrl); // #43: don't surface the file:// path
     const internal = isInternalUrl(rawUrl)
       ? rawUrl.includes('settings.html') ? 'Settings'
@@ -1005,20 +1006,20 @@ function tabState() {
       : null;
     const pageTitle =
       internal ||
-      (isNew ? 'New tab' : (pending ? pending.title : wc.getTitle()) || rawUrl || 'New tab');
+      (isNew ? 'New tab' : (pending ? pending.title : wc?.getTitle()) || rawUrl || 'New tab');
     return {
       id,
       title: customTitles.get(id) || pageTitle, // #236: the user's name wins in the sidebar
       pageTitle, // #236: the real title, shown as the row tooltip
       url: isNew || internal ? '' : rawUrl,
-      loading: wc.isLoading(),
+      loading: Boolean(wc?.isLoading()),
       active: id === activeId,
       pinned: pinnedIds.has(id),
       hotkey: hotkeyByTab.get(id) || null,
       favicon: faviconByTab.get(id) || null, // #45
       starred: bookmarks.has(rawUrl), // #232
-      canGoBack: wc.navigationHistory.canGoBack(),
-      canGoForward: wc.navigationHistory.canGoForward(),
+      canGoBack: Boolean(wc?.navigationHistory.canGoBack()),
+      canGoForward: Boolean(wc?.navigationHistory.canGoForward()),
     };
   });
 }
@@ -1136,7 +1137,7 @@ function sendIfChanged(channel, payload) {
 function slotUnread(pid) {
   const titles = tabOrder
     .filter((t) => personaByTab.get(t) === pid)
-    .map((t) => (lazyTabs.has(t) ? lazyTabs.get(t).title : tabs.get(t)?.webContents.getTitle()));
+    .map((t) => (lazyTabs.has(t) ? lazyTabs.get(t).title : tablive.liveWc(tabs.get(t))?.getTitle())); // #170
   return personaorder.unreadBadge(titles);
 }
 
@@ -1695,7 +1696,16 @@ function closeTab(id, opts = {}) {
   // which interleaves Personas). It must be read now: displayOrderedIds uses
   // maps (pinnedIds too) that are cleared below.
   const closedPersona = personaByTab.get(id) || personas.UNASSIGNED;
-  const sidebarOrder = activeId === id ? displayOrderedIds(closedPersona) : null;
+  // #170: computing the neighbour must never abort the close. A throw here left
+  // a dead tab in tabOrder for good, and every later tab-list walk threw.
+  let sidebarOrder = null;
+  if (activeId === id) {
+    try {
+      sidebarOrder = displayOrderedIds(closedPersona);
+    } catch (err) {
+      errorlog.record('closeTab-order', err);
+    }
+  }
   if (outfitReturn && (id === outfitReturn.tabId || id === outfitReturn.openerId)) outfitReturn = null; // #191
   pinnedIds.delete(id);
   // #57: a close is a fact other devices must learn about — unless we're only
@@ -1732,7 +1742,7 @@ function closeTab(id, opts = {}) {
   for (const [page, tid] of internalTabs) if (tid === id) internalTabs.delete(page);
   tabOrder = tabOrder.filter((t) => t !== id);
   win.contentView.removeChildView(view);
-  if (!view.webContents.isDestroyed()) view.webContents.close(); // #219: it may have closed itself
+  tablive.liveWc(view)?.close(); // #219: it may have closed itself; #170: or have no webContents left at all
   if (activeId === id) {
     activeId = null;
     // #289: the tab below, else the one above, in the same Persona; an emptied
@@ -2716,7 +2726,7 @@ const TOMBSTONE_TTL = 30 * 24 * 3600 * 1000;
 
 function tabUrlOf(id) {
   const pending = lazyTabs.get(id);
-  return pending ? pending.url : realUrl(id, tabs.get(id)?.webContents.getURL() || '');
+  return pending ? pending.url : realUrl(id, tablive.liveUrl(tabs.get(id))); // #170: a self-closed popup's webContents is gone
 }
 
 function shareable(url) {
@@ -2735,7 +2745,7 @@ function localTabPayload() {
     const pending = lazyTabs.get(id);
     (byPersona[pid] ||= {}).open ||= {};
     byPersona[pid].open[url] = {
-      title: pending ? pending.title : tabs.get(id).webContents.getTitle() || url,
+      title: pending ? pending.title : tablive.liveWc(tabs.get(id))?.getTitle() || url, // #170
       at: openedAt.get(id) || Date.now(),
       dev: deviceId(),
     };
@@ -2785,7 +2795,7 @@ function applyRemoteTabState(merged) {
       continue;
     }
     const pending = lazyTabs.get(id);
-    const title = (pending ? pending.title : tabs.get(id).webContents.getTitle()) || url;
+    const title = (pending ? pending.title : tablive.liveWc(tabs.get(id))?.getTitle()) || url; // #170
     recentlyClosed.unshift({ url, title, at: Date.now() });
     recentlyClosed.length = Math.min(recentlyClosed.length, 25);
     closeTab(id, { remote: true }); // don't re-broadcast someone else's close
@@ -3944,7 +3954,7 @@ function isUnusedNewTab(id) {
   const view = tabs.get(id);
   if (!view) return false;
   const pending = lazyTabs.get(id);
-  return isNewTabUrl(pending ? pending.url : view.webContents.getURL());
+  return isNewTabUrl(pending ? pending.url : tablive.liveUrl(view)); // #170
 }
 
 function closeStrayNewTabs(exceptId = null) {
@@ -4373,7 +4383,7 @@ ipcMain.on('import-passwords', () => {
 // #40: IPC for WebForge's own pages (settings + bookmark manager tabs).
 function pushInternalBookmarks() {
   for (const view of tabs.values()) {
-    if (isInternalUrl(view.webContents.getURL())) view.webContents.send('int:bookmarks');
+    if (isInternalUrl(tablive.liveUrl(view))) view.webContents.send('int:bookmarks'); // #170
   }
 }
 ipcMain.handle('int:get-settings', () => ({ ...getSettings(), searchEngine: searchEngine() }));
