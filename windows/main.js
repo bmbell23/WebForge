@@ -18,16 +18,17 @@ app.commandLine.appendSwitch(
   'enable-features',
   'OverscrollHistoryNavigation,TouchpadOverscrollHistoryNavigation'
 );
-// #238: Outlook (and other heavy pages) flashed white on mouse movement on
-// Brandon's PC; launching with --disable-direct-composition fixed it, and Edge
-// on the same PC never flickered. So WebForge applies that switch itself, on by
-// default, with a Settings toggle. Read straight from settings.json because
-// the switch must be set before app ready, ahead of getSettings() below.
-try {
-  const s = JSON.parse(fs.readFileSync(path.join(app.getPath('userData'), 'settings.json'), 'utf8'));
-  if (s.directComposition !== true) app.commandLine.appendSwitch('disable-direct-composition');
-} catch {
-  app.commandLine.appendSwitch('disable-direct-composition'); // no settings yet: the default
+// #238 added a "Flicker fix" (--disable-direct-composition) for Outlook flashing
+// white. #317: it's opt-in now. As the default it left the PC compositing in
+// software, which is the setup behind Alt+Tab's ghost tiles, and Outlook kept
+// flickering anyway (#291). The rule lives in graphics.js, under test. Read
+// straight from settings.json: the switch must be set before app ready.
+{
+  let s = null;
+  try {
+    s = JSON.parse(fs.readFileSync(path.join(app.getPath('userData'), 'settings.json'), 'utf8'));
+  } catch {}
+  if (require('./graphics').disableDirectComposition(s)) app.commandLine.appendSwitch('disable-direct-composition');
 }
 const bookmarks = require('./bookmarks');
 const vault = require('./vault');
