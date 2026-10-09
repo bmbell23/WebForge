@@ -49,6 +49,7 @@ const wintitle = require('./wintitle'); // #317 — ditto
 const overlays = require('./overlays'); // #170 — ditto
 const hangwatch = require('./hangwatch'); // #170 round 2 — ditto
 const tablive = require('./tablive'); // #170: dead webContents never throw — ditto
+const orphans = require('./orphans'); // #333 — ditto
 const ctxmenu = require('./ctxmenu'); // #133 — ditto
 const stickytab = require('./stickytab'); // #117 — ditto
 const popuprule = require('./popuprule'); // #125 — ditto
@@ -4869,11 +4870,46 @@ function setupAutoUpdate() {
 // every clicked link would spawn a second copy with its own session file, its own
 // vault lock state, and two instances racing on the last-write-wins sync store.
 // Must be requested before anything else initialises.
+// #333: a process from the previous run that outlived it keeps Cookies and
+// Local Storage locked, and this run then silently keeps everything in memory:
+// logged out on every launch, site settings gone, Mattermost stuck on Loading.
+// We hold the single-instance lock, so any WebForge.exe that isn't ours is a
+// leftover. Kill them before our own network service opens the profile. Logged
+// with the session line once the shipper is up.
+let reapedAtStart = null;
+function reapOrphans() {
+  if (process.platform !== 'win32') return;
+  try {
+    const out = require('child_process').execFileSync(
+      'powershell.exe',
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        "Get-CimInstance Win32_Process -Filter \"Name='WebForge.exe'\" | Select-Object ProcessId,ParentProcessId,Name | ConvertTo-Json -Compress",
+      ],
+      { timeout: 8000, windowsHide: true, encoding: 'utf8' }
+    );
+    const pids = orphans.pickOrphans(orphans.parseProcs(out), process.pid);
+    const killed = [];
+    for (const pid of pids) {
+      try {
+        process.kill(pid);
+        killed.push(pid);
+      } catch {}
+    }
+    reapedAtStart = { found: pids.length, killed };
+  } catch (err) {
+    reapedAtStart = { error: String((err && err.message) || err).slice(0, 200) };
+  }
+}
+
 const isPrimaryInstance = app.requestSingleInstanceLock();
 if (!isPrimaryInstance) {
   // A URL passed to this process reaches the primary via 'second-instance'.
   app.quit();
 } else {
+  reapOrphans(); // #333
   app.on('second-instance', (_e, argv) => {
     const url = urlFromArgv(argv);
     if (win && !win.isDestroyed()) {
@@ -5040,7 +5076,8 @@ function setupLogShipping() {
   errorlog.record(
     'session',
     `start v${app.getVersion()} electron=${process.versions.electron} ` +
-      `os=${os.release()} displays=${screen.getAllDisplays().length}`
+      `os=${os.release()} displays=${screen.getAllDisplays().length}` +
+      (reapedAtStart ? ` leftovers=${JSON.stringify(reapedAtStart)}` : '') // #333
   );
 }
 
