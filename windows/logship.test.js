@@ -148,6 +148,64 @@ function fakeFetch(results) {
     assert.deepStrictEqual(f.calls[1].body.entries.map((e) => e.body), ['entry 4']);
   });
 
+  // #170: one POST that never settled silenced the shipper for the rest of the session.
+  // The shipper's timers are unref'd, so hold the loop open while promises hang.
+  const keepAlive = setInterval(() => {}, 1000);
+  await test('a POST that never answers fails at the deadline and keeps its entries', async () => {
+    const s = create({ url: 'u', version: 'v', fetch: () => new Promise(() => {}), deadlineMs: 30 });
+    s.push(entry(1));
+    assert.strictEqual(await s.flush(), false);
+    assert.strictEqual(s.size(), 1);
+  });
+
+  await test('after a hung POST, the next flush still ships', async () => {
+    let hang = true;
+    const calls = [];
+    const f = (url, init) => {
+      if (hang) return new Promise(() => {});
+      calls.push(JSON.parse(init.body));
+      return Promise.resolve({ ok: true, text: async () => '' });
+    };
+    const s = create({ url: 'u', version: 'v', fetch: f, deadlineMs: 30 });
+    s.push(entry(1));
+    await s.flush();
+    hang = false;
+    s.push(entry(2));
+    assert.strictEqual(await s.flush(), true);
+    assert.deepStrictEqual(calls[0].entries.map((e) => e.body), ['entry 1', 'entry 2']);
+  });
+
+  await test('a flush stuck past stuckMs is abandoned, counted, and replaced', async () => {
+    let t = 0;
+    let hang = true;
+    const calls = [];
+    const f = (url, init) => {
+      if (hang) return new Promise(() => {});
+      calls.push(JSON.parse(init.body));
+      return Promise.resolve({ ok: true });
+    };
+    // A deadline far beyond the test, so only the stuck rule can free it.
+    const s = create({ url: 'u', version: 'v', fetch: f, deadlineMs: 1e9, stuckMs: 1000, now: () => t });
+    s.push(entry(1));
+    const first = s.flush();
+    t = 500;
+    assert.strictEqual(s.flush(), first); // still within stuckMs: same flush
+    hang = false;
+    t = 2000;
+    assert.strictEqual(await s.flush(), true);
+    assert.deepStrictEqual(calls[0].entries.map((e) => e.body), ['abandoned 1 stuck flush(es)', 'entry 1']);
+  });
+
+  await test('an empty flush settles and does not pin the shipper', async () => {
+    const f = fakeFetch([]);
+    const s = create({ url: 'u', version: 'v', fetch: f });
+    assert.strictEqual(await s.flush(), true);
+    s.push(entry(1));
+    assert.strictEqual(await s.flush(), true);
+    assert.strictEqual(f.calls.length, 1);
+  });
+
+  clearInterval(keepAlive);
   console.log(`\n${run} passed`);
 })().catch((err) => {
   console.error(err);

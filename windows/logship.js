@@ -29,12 +29,32 @@ function deviceName(host) {
  * @param {number} [opts.max]     queue cap
  * @param {number} [opts.batch]   entries per POST
  */
+// #170: the shipper went silent minutes after launch while the local log kept
+// writing (PC errors.log had 11:14–12:28Z, the server nothing after 09:50Z). One
+// POST that never settled pinned `inFlight`, and every later flush returned that
+// same dead promise. AbortSignal.timeout alone didn't save it, so the deadline is
+// now our own timer, and a flush stuck past `stuckMs` is abandoned outright.
+function withDeadline(promise, ms) {
+  let timer;
+  const deadline = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`no answer in ${ms}ms`)), ms);
+    timer.unref?.(); // never the reason the process stays up
+  });
+  return Promise.race([promise, deadline]).finally(() => clearTimeout(timer));
+}
+
 function create(opts) {
   const max = opts.max || MAX_QUEUE;
   const batch = opts.batch || BATCH;
+  const deadlineMs = opts.deadlineMs || 10000;
+  const stuckMs = opts.stuckMs || 60000;
+  const now = opts.now || Date.now;
   let queue = [];
   let dropped = 0;
   let inFlight = null;
+  let inFlightAt = 0;
+  let abandoned = 0;
+  let flushToken = null;
 
   function push(entry) {
     queue.push(entry);
@@ -46,8 +66,12 @@ function create(opts) {
 
   /** Send everything queued, a batch at a time. Resolves true if the queue emptied. */
   function flush() {
-    if (inFlight) return inFlight;
-    inFlight = (async () => {
+    if (inFlight && now() - inFlightAt < stuckMs) return inFlight;
+    if (inFlight) abandoned++; // stuck: leave it behind and start over
+    inFlightAt = now();
+    const token = {};
+    flushToken = token;
+    const mine = (async () => {
       try {
         while (queue.length) {
           const sent = queue.slice(0, batch);
@@ -57,15 +81,24 @@ function create(opts) {
           if (lost) {
             entries.unshift({ at: new Date().toISOString(), where: 'logship', body: `dropped ${lost} entries (queue full)` });
           }
+          const stalls = abandoned;
+          if (stalls) {
+            entries.unshift({ at: new Date().toISOString(), where: 'logship', body: `abandoned ${stalls} stuck flush(es)` });
+          }
           let ok = false;
           try {
-            const res = await opts.fetch(opts.url, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ version: opts.version, entries }),
-              signal: AbortSignal.timeout(5000),
-            });
+            const res = await withDeadline(
+              opts.fetch(opts.url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ version: opts.version, entries }),
+                signal: AbortSignal.timeout(deadlineMs),
+              }),
+              deadlineMs
+            );
             ok = !!(res && res.ok);
+            // Drain the reply so the connection is released, whatever it says.
+            if (res && typeof res.text === 'function') await withDeadline(res.text(), deadlineMs).catch(() => {});
           } catch {
             ok = false;
           }
@@ -75,13 +108,16 @@ function create(opts) {
           const done = new Set(sent);
           queue = queue.filter((e) => !done.has(e));
           dropped -= lost;
+          abandoned -= stalls;
         }
         return true;
       } finally {
-        inFlight = null;
+        token.done = true;
+        if (flushToken === token) inFlight = null; // an abandoned flush must not clear its successor
       }
     })();
-    return inFlight;
+    inFlight = token.done ? null : mine; // an empty queue settles before we get here
+    return mine;
   }
 
   return { push, flush, size: () => queue.length };
