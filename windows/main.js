@@ -46,6 +46,7 @@ const tabsync = require('./tabsync'); // #298 — which devices still count, and
 const taborder = require('./taborder'); // #107 — ditto
 const { cleanTabName } = require('./tabname'); // #236 — ditto
 const wintitle = require('./wintitle'); // #317 — ditto
+const overlays = require('./overlays'); // #170 — ditto
 const ctxmenu = require('./ctxmenu'); // #133 — ditto
 const stickytab = require('./stickytab'); // #117 — ditto
 const popuprule = require('./popuprule'); // #125 — ditto
@@ -156,6 +157,20 @@ let loginPromptOpen = false; // #145
 let ytdlpOpen = false; // #156: the download picker holds the window like the login prompt
 let outfitOpen = false; // #179: the MuseForge outfit dialog, same pattern
 let quickOpen = false; // #266: the Shift+Space quick search box
+// #170: the ONE list of modal overlays that hold chrome full-window on top of the
+// page. Seven hand-copied lists had drifted (closing the bookmark dialog ignored a
+// login prompt; leaving fullscreen ignored four dialogs). settingsOpen/managerOpen
+// are retired constants, kept so the list matches what layout() always checked.
+const modalFlags = () => ({
+  bmDialog: bmDialogOpen,
+  loginPrompt: loginPromptOpen,
+  ytdlp: ytdlpOpen,
+  outfit: outfitOpen,
+  quick: quickOpen,
+  settings: settingsOpen,
+  manager: managerOpen,
+});
+const anyModal = () => overlays.anyOpen(modalFlags());
 let outfitReturn = null; // #191: { tabId, openerId } while a Create Outfit tab is open
 
 let win, chrome, lockView;
@@ -572,7 +587,7 @@ function layout() {
     // settings) is open — then chrome needs the full window to show it.
     view?.setBounds({ x: 0, y: 0, width, height });
     chrome.setBounds(
-      bmDialogOpen || settingsOpen || managerOpen || bmPanelOpen || pwPanelOpen || loginPromptOpen || ytdlpOpen || outfitOpen || quickOpen
+      anyModal() || bmPanelOpen || pwPanelOpen // #170
         ? { x: 0, y: 0, width, height }
         : fsRegionBounds()
     );
@@ -634,6 +649,58 @@ function fsRegionBounds() {
   }
 }
 
+// #170: self-heal for the dead-click bug. Every few seconds while main thinks a
+// modal dialog holds the window, ask the chrome UI which dialogs it is really
+// showing. A flag the UI dropped (twice in a row, so an in-flight open is never
+// torn down) is logged with the whole stacking state, cleared, and chrome is
+// lowered so the page takes clicks again. The log line names the culprit.
+let stalePending = new Set();
+let overlayCheckBusy = false;
+function stackingState() {
+  const kids = win.contentView.children;
+  const view = tabs.get(activeId);
+  return (
+    `flags=${JSON.stringify(modalFlags())} bmPanel=${bmPanelOpen} pwPanel=${pwPanelOpen} rename=${renameOpen} ` +
+    `fsRevealed=${fsRevealed} fullscreen=${fullscreen} findOpen=${findOpen} active=${activeId} ` +
+    `chromeZ=${kids.indexOf(chrome)} pageZ=${view ? kids.indexOf(view) : -1} of ${kids.length} ` +
+    `chromeBounds=${JSON.stringify(chrome.getBounds())}`
+  );
+}
+async function checkStuckOverlays() {
+  if (overlayCheckBusy || !alive() || locked) return;
+  if (!anyModal()) {
+    stalePending = new Set();
+    return;
+  }
+  overlayCheckBusy = true;
+  try {
+    const ui = await chrome.webContents.executeJavaScript(
+      `JSON.stringify({ open: [...document.querySelectorAll(${JSON.stringify(overlays.OPEN_SELECTOR)})].map((e) => e.id), fs: document.body.dataset.fs || null })`
+    );
+    if (!alive()) return;
+    const { open, fs } = JSON.parse(ui);
+    const { heal, pending } = overlays.confirmStale(overlays.staleFlags(modalFlags(), open), stalePending);
+    stalePending = pending;
+    if (!heal.length) return;
+    errorlog.record('stuck-overlay', `healing ${heal.join(',')} uiOpen=${JSON.stringify(open)} uiFs=${fs} ${stackingState()}`);
+    for (const name of heal) {
+      if (name === 'bmDialog') bmDialogOpen = false;
+      if (name === 'loginPrompt') loginPromptOpen = false;
+      if (name === 'ytdlp') ytdlpOpen = false;
+      if (name === 'outfit') outfitOpen = false;
+      if (name === 'quick') quickOpen = false;
+    }
+    stalePending = new Set();
+    if (!anyModal()) setChromeRaised(false);
+    layout();
+    activeWc()?.focus();
+  } catch (err) {
+    errorlog.record('stuck-overlay-check', err);
+  } finally {
+    overlayCheckBusy = false;
+  }
+}
+
 function fsPoll() {
   // #20: the window can die (quit while fullscreen) with this interval still
   // scheduled — every tick then threw "Object has been destroyed" and
@@ -647,6 +714,10 @@ function fsPoll() {
   // #101: while the find bar owns the top strip, the hover-reveal stays out of
   // it — otherwise moving the mouse would swap the bar for the nav mid-search.
   if (findOpen) return;
+  // #170: nor while a dialog holds the window. A reveal sets body[data-fs], which
+  // hides every chrome child, the open dialog included, while chrome stays
+  // full-window on top: an invisible layer that eats every click.
+  if (anyModal()) return;
   const { screen } = require('electron');
   const pt = screen.getCursorScreenPoint();
   const wb = win.getBounds();
@@ -694,7 +765,7 @@ function setFullscreenMode(on) {
     // #32: exiting fullscreen must put the page back above the full-window
     // chrome view, or the sidebar-less area renders as blank chrome.
     const view = tabs.get(activeId);
-    if (view && !bmDialogOpen && !settingsOpen && !managerOpen) win.contentView.addChildView(view);
+    if (view && !anyModal()) win.contentView.addChildView(view); // #170
   }
   layout();
 }
@@ -873,7 +944,7 @@ function openBookmarkDialog(prefill) {
 function closeBookmarkDialog() {
   if (!bmDialogOpen) return;
   bmDialogOpen = false;
-  if (!settingsOpen && !managerOpen && !ytdlpOpen && !outfitOpen && !quickOpen) setChromeRaised(false);
+  if (!anyModal()) setChromeRaised(false); // #170
   chrome.webContents.send('bm-edit', null);
   layout(); // #32: re-collapse chrome if we're fullscreen
   activeWc()?.focus();
@@ -1556,7 +1627,7 @@ function activateTab(id, opts = {}) {
   // z-order. Now the active view is always raised above the other PAGE views,
   // and chrome is put back on top afterwards when it is meant to be showing —
   // which preserves #32's fix rather than trading one for the other.
-  const chromeOnTop = fsRevealed || bmDialogOpen || settingsOpen || managerOpen || loginPromptOpen || ytdlpOpen || outfitOpen || quickOpen; // #145/#156/#179/#266
+  const chromeOnTop = fsRevealed || anyModal(); // #145/#156/#179/#266, one list since #170
   win.contentView.addChildView(view);
   if (chromeOnTop) win.contentView.addChildView(chrome);
   // #148: boundsChangedFor runs layout() and reports whether the geometry moved.
@@ -2313,6 +2384,7 @@ function createWindow() {
   });
   fullscreen = true;
   fsPollTimer = setInterval(fsPoll, 150); // edge-reveal live from launch
+  setInterval(checkStuckOverlays, 3000); // #170
 
   // #38: mouse XButton1/XButton2 + touchpad back/forward gestures.
   win.on('app-command', (_e, cmd) => {
@@ -2972,7 +3044,7 @@ function offerToSave(id, held) {
 ipcMain.on('login-prompt-answer', (_e, answer) => {
   // Put the window back the way it was first, whatever the answer is.
   loginPromptOpen = false;
-  if (!bmDialogOpen && !settingsOpen && !managerOpen && !ytdlpOpen && !outfitOpen && !quickOpen) setChromeRaised(false);
+  if (!anyModal()) setChromeRaised(false); // #170
   layout();
   activeWc()?.focus();
   if (locked || !answer || !answer.accepted) return;
@@ -3652,7 +3724,7 @@ function startTabRename(id) {
 function endTabRename() {
   if (!renameOpen) return;
   renameOpen = false;
-  if (!bmDialogOpen && !settingsOpen && !managerOpen && !ytdlpOpen && !outfitOpen && !quickOpen) setChromeRaised(false);
+  if (!anyModal()) setChromeRaised(false); // #170
   activeWc()?.focus();
 }
 function showTabMenu(id) {
@@ -3689,7 +3761,7 @@ ipcMain.on('cycle-tab', (e, dir) => {
 // One dialog answers Enter at a time, like the outfit dialog (#195).
 ipcMain.on('quick-search', (e) => {
   if (locked || activeId === null || tabs.get(activeId)?.webContents !== e.sender) return;
-  if (quickOpen || outfitOpen || bmDialogOpen || ytdlpOpen || loginPromptOpen || settingsOpen || managerOpen) return;
+  if (anyModal()) return; // #170
   quickOpen = true;
   clearFsReveal();
   setChromeRaised(true);
@@ -3701,7 +3773,7 @@ function closeQuickSearch() {
   const wasOpen = quickOpen;
   quickOpen = false;
   if (wasOpen) chrome?.webContents.send('quick-search-close');
-  if (!bmDialogOpen && !settingsOpen && !managerOpen && !loginPromptOpen && !ytdlpOpen && !outfitOpen) setChromeRaised(false);
+  if (!anyModal()) setChromeRaised(false); // #170
   layout();
   activeWc()?.focus();
   return wasOpen;
@@ -3968,7 +4040,7 @@ ipcMain.on('ytdlp-open', () => {
 // #260: kind is 'outfit' (default) or 'pose'; the dialog and Studio flow are the same.
 function openOutfitDialog(src, kind = 'outfit') {
   if (locked || !museforge.canSend(src)) return;
-  if (outfitOpen || quickOpen || bmDialogOpen || ytdlpOpen || loginPromptOpen) return; // #195: one dialog answers Enter at a time
+  if (anyModal()) return; // #195: one dialog answers Enter at a time
   outfitOpen = true;
   clearFsReveal();
   setChromeRaised(true);
@@ -3980,7 +4052,7 @@ function openOutfitDialog(src, kind = 'outfit') {
 ipcMain.on('outfit-answer', (_e, a) => {
   const wasOpen = outfitOpen; // #195: an answer with no dialog showing spends nothing
   outfitOpen = false;
-  if (!bmDialogOpen && !settingsOpen && !managerOpen && !loginPromptOpen && !ytdlpOpen && !quickOpen) setChromeRaised(false);
+  if (!anyModal()) setChromeRaised(false); // #170
   layout();
   activeWc()?.focus();
   if (locked || !wasOpen || !a || !a.go) return;
@@ -4163,7 +4235,7 @@ async function sendToStash(kind, url, wc, meta = null) {
 
 ipcMain.on('ytdlp-answer', (_e, a) => {
   ytdlpOpen = false;
-  if (!bmDialogOpen && !settingsOpen && !managerOpen && !loginPromptOpen && !outfitOpen && !quickOpen) setChromeRaised(false);
+  if (!anyModal()) setChromeRaised(false); // #170
   layout();
   activeWc()?.focus();
   if (locked || !a || !a.send || !ytdlp.downloadable(a.url)) return;
