@@ -18,17 +18,16 @@ app.commandLine.appendSwitch(
   'enable-features',
   'OverscrollHistoryNavigation,TouchpadOverscrollHistoryNavigation'
 );
-// #238 added a "Flicker fix" (--disable-direct-composition) for Outlook flashing
-// white. #317: it's opt-in now. As the default it left the PC compositing in
-// software, which is the setup behind Alt+Tab's ghost tiles, and Outlook kept
-// flickering anyway (#291). The rule lives in graphics.js, under test. Read
-// straight from settings.json: the switch must be set before app ready.
-{
-  let s = null;
-  try {
-    s = JSON.parse(fs.readFileSync(path.join(app.getPath('userData'), 'settings.json'), 'utf8'));
-  } catch {}
-  if (require('./graphics').disableDirectComposition(s)) app.commandLine.appendSwitch('disable-direct-composition');
+// #238: Outlook (and other heavy pages) flashed white on mouse movement on
+// Brandon's PC; launching with --disable-direct-composition fixed it, and Edge
+// on the same PC never flickered. So WebForge applies that switch itself, on by
+// default, with a Settings toggle. Read straight from settings.json because
+// the switch must be set before app ready, ahead of getSettings() below.
+try {
+  const s = JSON.parse(fs.readFileSync(path.join(app.getPath('userData'), 'settings.json'), 'utf8'));
+  if (s.directComposition !== true) app.commandLine.appendSwitch('disable-direct-composition');
+} catch {
+  app.commandLine.appendSwitch('disable-direct-composition'); // no settings yet: the default
 }
 const bookmarks = require('./bookmarks');
 const vault = require('./vault');
@@ -4949,7 +4948,7 @@ function startHangWatch() {
     const t0 = Date.now();
     try {
       const r = await f(SYNC_URL, { method: 'HEAD', signal: AbortSignal.timeout(10000) });
-      const line = state(r.status < 500, `${Date.now() - t0}ms status=${r.status}`);
+      const line = state(true, `${Date.now() - t0}ms status=${r.status}`); // #330: any HTTP answer means the network is up (sync answers HEAD with 501)
       if (line) errorlog.record('net-probe', `${label} ${line}`);
     } catch (err) {
       const line = state(false, `${Date.now() - t0}ms ${err && (err.name || err.message)}`);
