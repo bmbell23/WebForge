@@ -1962,8 +1962,9 @@ function openTerminal() {
 ipcMain.on('terminal:open-files', (e) => {
   if (locked || !isTerminalUrl(e.sender.getURL()) || !terminalMain.isPicker(e.sender)) return;
   const picker = [...tabs.keys()].find((id) => tabs.get(id).webContents === e.sender);
-  createTab(filesUrl(null), false, personas.TERMINAL, picker !== undefined ? { after: picker } : {});
-  if (picker !== undefined) closeTab(picker);
+  if (picker === undefined) return; // already replaced (a double click)
+  createTab(filesUrl(null), false, personas.TERMINAL, { after: picker });
+  if (!pinnedIds.has(picker)) closeTab(picker); // a pinned picker stays put
 });
 
 // #214: a connection clicked in the panel opens as a new terminal tab.

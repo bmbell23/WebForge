@@ -159,10 +159,18 @@ function rememberShare(list, p, max = 10) {
   return [root, ...rest].slice(0, max);
 }
 
-/** First `maxLines` lines of a text buffer, or null when it looks binary. */
+/**
+ * First `maxLines` lines of a text buffer, or null when it looks binary.
+ * UTF-16 with a BOM (regedit exports, PowerShell `>` output) is text too.
+ */
 function textPreview(buf, maxLines = 200) {
-  if (!buf || buf.includes(0)) return null;
-  const lines = buf.toString('utf8').split(/\r?\n/);
+  if (!buf) return null;
+  let str;
+  if (buf[0] === 0xff && buf[1] === 0xfe) str = buf.subarray(2).toString('utf16le');
+  else if (buf[0] === 0xfe && buf[1] === 0xff) str = Buffer.from(buf.subarray(2)).swap16().toString('utf16le');
+  else if (buf.includes(0)) return null;
+  else str = buf.toString('utf8').replace(/^\uFEFF/, '');
+  const lines = str.split(/\r?\n/);
   return { text: lines.slice(0, maxLines).join('\n'), more: lines.length > maxLines };
 }
 

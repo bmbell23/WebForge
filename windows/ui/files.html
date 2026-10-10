@@ -117,7 +117,7 @@
     status(`${r.entries.length} item${r.entries.length === 1 ? '' : 's'}${hidden ? ` (${hidden} hidden)` : ''}`);
     render();
     markRail();
-    if (how === 'push' && /^\\\\/.test(r.dir)) loadRail(); // a newly visited share joins the rail
+    if (r.newShare) loadRail(); // a newly visited share joins the rail
   }
 
   function render() {
@@ -215,8 +215,8 @@
   addEventListener('blur', hideMenu);
 
   // The left rail: the usual folders, every drive, and shares visited before.
-  async function loadRail() {
-    const pl = await window.files.places();
+  async function loadRail(fresh) {
+    const pl = await window.files.places(fresh);
     if (!pl) return;
     const section = (title, list) => (list.length ? [el('h2', { textContent: title }), ...list.map((p) => {
       const a = el('a', { textContent: p.label, title: p.path });
@@ -228,8 +228,10 @@
     markRail();
     return pl;
   }
+  // `\\nas\media\` and `\\nas\media` are one place; `C:\` keeps its slash.
+  const same = (p) => String(p || '').toLowerCase().replace(/([^:\\/])[\\/]+$/, '$1');
   const markRail = () => {
-    for (const a of $('rail').querySelectorAll('a')) a.classList.toggle('here', a.dataset.path.toLowerCase() === (state.dir || '').toLowerCase());
+    for (const a of $('rail').querySelectorAll('a')) a.classList.toggle('here', same(a.dataset.path) === same(state.dir));
   };
 
   for (const th of document.querySelectorAll('th')) {
@@ -242,7 +244,7 @@
   $('back').onclick = back;
   $('fwd').onclick = fwd;
   $('up').onclick = up;
-  $('refresh').onclick = () => go(state.dir, 'stay');
+  $('refresh').onclick = () => { loadRail(true); go(state.dir, 'stay'); }; // re-probes the drives too
   $('path').addEventListener('keydown', (ev) => {
     if (ev.key === 'Enter') { ev.preventDefault(); go($('path').value).then(() => $('main').focus()); }
     else if (ev.key === 'Escape') { $('path').value = state.dir; $('main').focus(); }
@@ -287,6 +289,7 @@
     const pl = await loadRail();
     const start = new URLSearchParams(location.search).get('path') || (pl && pl.home) || '/';
     await go(start, 'stay');
+    if (!state.dir && pl && pl.home) await go(pl.home, 'stay'); // a restored folder that's gone
     $('main').focus();
   })();
 </script>

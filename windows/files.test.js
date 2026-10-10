@@ -118,6 +118,11 @@ test('text preview: first N lines, binary refused', () => {
   const p = files.textPreview(Buffer.from('a\r\nb\nc\nd'), 2);
   assert.deepStrictEqual(p, { text: 'a\nb', more: true });
   assert.strictEqual(files.textPreview(Buffer.from([0x50, 0x4b, 0x00, 0x03])), null);
+  const reg = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('Windows Registry Editor\r\n[HKEY]', 'utf16le')]);
+  assert.deepStrictEqual(files.textPreview(reg), { text: 'Windows Registry Editor\n[HKEY]', more: false });
+  const be = Buffer.concat([Buffer.from([0xfe, 0xff]), Buffer.from('hi', 'utf16le').swap16()]);
+  assert.strictEqual(files.textPreview(be).text, 'hi');
+  assert.strictEqual(files.textPreview(Buffer.from('\uFEFFkey: 1', 'utf8')).text, 'key: 1');
 });
 
 test('drives: only the roots that answer, slow ones time out', () =>

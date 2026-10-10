@@ -23,19 +23,56 @@ function savedShares() {
     return [];
   }
 }
+/** True when `dir`'s share is new to the rail. */
 function noteShare(dir) {
   const before = savedShares();
   const after = files.rememberShare(before, dir);
-  if (after === before || after.join('\n') === before.join('\n')) return;
+  if (after === before || after.join('\n') === before.join('\n')) return false;
+  const isNew = !before.some((s) => s.toLowerCase() === after[0].toLowerCase());
   try {
     fs.writeFileSync(sharesFile(), JSON.stringify({ shares: after }, null, 2));
   } catch (err) {
     hooks.record?.('files-shares', err);
   }
+  return isNew;
+}
+
+// A dead mapped drive blocks a thread-pool worker for as long as Windows takes
+// to give up, whatever our timeout says, so drives are probed once and again
+// only on an explicit Refresh.
+let drivesCache = null;
+async function drives(fresh) {
+  if (drivesCache && !fresh) return drivesCache;
+  if (process.platform === 'win32') {
+    drivesCache = await files.listDrives((root) => fs.promises.access(root).then(() => true, () => false));
+  } else if (process.platform === 'darwin') {
+    let vols = [];
+    try {
+      vols = fs.readdirSync('/Volumes').map((v) => `/Volumes/${v}`);
+    } catch (_) {}
+    drivesCache = ['/', ...vols];
+  } else {
+    drivesCache = ['/'];
+  }
+  return drivesCache;
+}
+
+/** `fn` over `items`, at most `n` at a time (a big share must not flood the thread pool). */
+async function mapLimit(items, n, fn) {
+  const out = new Array(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const i = next++;
+      out[i] = await fn(items[i]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(n, items.length) }, worker));
+  return out;
 }
 
 /** The left rail: drives, the usual folders, and shares visited before. */
-async function places() {
+async function places(fresh) {
   const { app } = require('electron');
   const get = (name) => {
     try {
@@ -55,22 +92,10 @@ async function places() {
   ]
     .filter(([, p]) => p)
     .map(([label, p]) => ({ label, path: p }));
-  let drives;
-  if (process.platform === 'win32') {
-    drives = await files.listDrives((root) => fs.promises.access(root).then(() => true, () => false));
-  } else if (process.platform === 'darwin') {
-    let vols = [];
-    try {
-      vols = fs.readdirSync('/Volumes').map((v) => `/Volumes/${v}`);
-    } catch (_) {}
-    drives = ['/', ...vols];
-  } else {
-    drives = ['/'];
-  }
   return {
     home: get('home'),
     folders,
-    drives: drives.map((d) => ({ label: d, path: d })),
+    drives: (await drives(fresh)).map((d) => ({ label: d, path: d })),
     shares: savedShares().map((s) => ({ label: s, path: s })),
   };
 }
@@ -81,7 +106,9 @@ async function entryFor(dir, dirent) {
   try {
     st = await fs.promises.stat(full); // follows links and junctions
   } catch (_) {} // locked system files (pagefile.sys) can't be stat'd
-  const isDir = st ? st.isDirectory() : dirent.isDirectory();
+  // A junction we may not read (C:\Documents and Settings) fails stat; it is
+  // still a folder, and opening it reports access denied.
+  const isDir = st ? st.isDirectory() : dirent.isDirectory() || dirent.isSymbolicLink();
   const e = {
     name: dirent.name,
     path: full,
@@ -112,9 +139,9 @@ async function list(target, sort, order) {
       dir = P.dirname(dir);
     }
     const dirents = await fs.promises.readdir(dir, { withFileTypes: true });
-    const entries = files.sortEntries(await Promise.all(dirents.map((d) => entryFor(dir, d))), sort, order);
-    if (files.shareRoot(dir)) noteShare(dir);
-    return { ok: true, dir, parent: files.parentOf(dir, process.platform), entries, select };
+    const entries = files.sortEntries(await mapLimit(dirents, 16, (d) => entryFor(dir, d)), sort, order);
+    const newShare = files.shareRoot(dir) ? noteShare(dir) : false;
+    return { ok: true, dir, parent: files.parentOf(dir, process.platform), entries, select, newShare };
   } catch (err) {
     return { ok: false, dir, parent: files.parentOf(dir, process.platform), error: err.message || String(err) };
   }
@@ -136,9 +163,13 @@ async function preview(p) {
   if (kind === 'text' || kind === 'page') {
     try {
       const fh = await fs.promises.open(p, 'r');
-      const { buffer, bytesRead } = await fh.read(Buffer.alloc(PREVIEW_BYTES), 0, PREVIEW_BYTES, 0);
-      await fh.close();
-      const t = files.textPreview(buffer.subarray(0, bytesRead));
+      let read;
+      try {
+        read = await fh.read(Buffer.alloc(PREVIEW_BYTES), 0, PREVIEW_BYTES, 0);
+      } finally {
+        await fh.close();
+      }
+      const t = files.textPreview(read.buffer.subarray(0, read.bytesRead));
       if (t) return { ...base, kind: 'text', text: t.text, more: t.more || st.size > PREVIEW_BYTES };
     } catch (err) {
       return { ...base, kind: 'info', error: err.message };
@@ -166,7 +197,7 @@ function installIpc(h) {
   installed = true;
   const { ipcMain, clipboard } = require('electron');
   const ok = (e) => Boolean(hooks.isFilesSender?.(e));
-  ipcMain.handle('files:places', (e) => (ok(e) ? places() : null));
+  ipcMain.handle('files:places', (e, fresh) => (ok(e) ? places(Boolean(fresh)) : null));
   ipcMain.handle('files:list', (e, a) => (ok(e) ? list(a?.dir, a?.sort, a?.order) : null));
   ipcMain.handle('files:preview', (e, p) => (ok(e) ? preview(p) : null));
   ipcMain.handle('files:open', (e, a) => (ok(e) ? open(a?.path, a?.how) : null));
