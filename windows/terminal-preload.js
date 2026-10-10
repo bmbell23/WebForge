@@ -17,4 +17,5 @@ contextBridge.exposeInMainWorld('terminal', {
   favorite: (target) => ipcRenderer.send('terminal:favorite', target),
   editFavorite: (target, fields) => ipcRenderer.invoke('terminal:edit-favorite', { target, fields }), // #228
   deleteConnection: (target, group) => ipcRenderer.invoke('terminal:delete-connection', { target, group }), // #280
+  openFiles: () => ipcRenderer.send('terminal:open-files'), // #322
 });

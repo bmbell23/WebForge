@@ -1,0 +1,294 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Files</title>
+<style>
+  /* #322: the Files page. One detail list, no view options; hidden files
+     always shown, dimmed. Colours follow the terminal picker beside it. */
+  html, body { margin: 0; height: 100%; background: #0c0c0c; color: #ddd; font: 13px 'Segoe UI', system-ui, sans-serif; overflow: hidden; }
+  body { display: grid; grid-template-rows: auto 1fr auto; grid-template-columns: 200px 1fr 320px; }
+  #bar { grid-column: 1 / -1; display: flex; gap: 6px; align-items: center; padding: 8px; border-bottom: 1px solid #222; }
+  #bar button { background: #161616; color: #ddd; border: 1px solid #2a2a2a; border-radius: 4px; min-width: 30px; height: 28px; cursor: pointer; font-size: 14px; }
+  #bar button:hover:not(:disabled) { background: #23324a; border-color: #3d6bb3; }
+  #bar button:disabled { color: #555; cursor: default; }
+  #path { flex: 1; height: 26px; padding: 0 10px; font: 13px 'Cascadia Mono', Consolas, monospace; background: #1a1a1a; color: #eee; border: 1px solid #444; border-radius: 4px; }
+  #rail { overflow: auto; padding: 8px 0; border-right: 1px solid #222; }
+  #rail h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: #888; margin: 12px 14px 4px; }
+  #rail a { display: block; padding: 4px 14px; color: #ccc; text-decoration: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
+  #rail a:hover { background: #1b2433; }
+  #rail a.here { background: #23324a; color: #fff; }
+  #main { overflow: auto; outline: none; }
+  table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+  th { position: sticky; top: 0; background: #121212; color: #999; font-weight: 500; text-align: left; padding: 6px 10px; border-bottom: 1px solid #222; cursor: pointer; user-select: none; white-space: nowrap; }
+  th:hover { color: #eee; }
+  th.sorted::after { content: ' ▲'; font-size: 9px; }
+  th.sorted.desc::after { content: ' ▼'; }
+  th.c-mod { width: 150px; } th.c-type { width: 130px; } th.c-size { width: 80px; text-align: right; }
+  td { padding: 3px 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: default; }
+  td.c-size { text-align: right; color: #aaa; } td.c-mod, td.c-type { color: #aaa; }
+  tr.row:hover { background: #161c26; }
+  tr.row.sel { background: #23324a; }
+  #main:focus tr.row.sel { background: #2b4a7a; }
+  tr.row.hidden td { opacity: .5; }
+  .ico { display: inline-block; width: 20px; }
+  #empty { padding: 24px; color: #777; }
+  #preview { overflow: auto; border-left: 1px solid #222; padding: 12px; }
+  #preview img, #preview video { max-width: 100%; max-height: 60vh; display: block; margin: 0 auto 10px; background: #1a1a1a; }
+  #preview audio { width: 100%; margin-bottom: 10px; }
+  #preview pre { font: 12px 'Cascadia Mono', Consolas, monospace; white-space: pre-wrap; word-break: break-all; color: #ccc; margin: 0 0 10px; }
+  #preview .name { font-weight: 600; word-break: break-all; margin-bottom: 6px; }
+  #preview .meta { color: #888; line-height: 1.6; }
+  #status { grid-column: 1 / -1; padding: 4px 10px; color: #888; border-top: 1px solid #222; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #status.err { color: #e5534b; }
+  #menu { position: fixed; display: none; background: #1a1a1a; border: 1px solid #333; border-radius: 4px; padding: 4px 0; min-width: 200px; box-shadow: 0 4px 16px #000a; z-index: 10; }
+  #menu div { padding: 6px 14px; cursor: pointer; }
+  #menu div:hover { background: #23324a; }
+</style>
+</head>
+<body>
+<div id="bar">
+  <button id="back" title="Back (Alt+Left)">←</button>
+  <button id="fwd" title="Forward (Alt+Right)">→</button>
+  <button id="up" title="Up a folder (Backspace)">↑</button>
+  <button id="refresh" title="Refresh (F5)">⟳</button>
+  <input id="path" type="text" spellcheck="false" autocomplete="off" title="Type a path or \\server\share">
+</div>
+<nav id="rail"></nav>
+<div id="main" tabindex="0">
+  <table>
+    <thead><tr>
+      <th class="c-name" data-key="name">Name</th>
+      <th class="c-mod" data-key="modified">Date modified</th>
+      <th class="c-type" data-key="type">Type</th>
+      <th class="c-size" data-key="size">Size</th>
+    </tr></thead>
+    <tbody id="rows"></tbody>
+  </table>
+  <div id="empty" hidden>This folder is empty.</div>
+</div>
+<aside id="preview"></aside>
+<div id="status"></div>
+<div id="menu"></div>
+<script>
+  // #322 PR 1: browse, preview, open. Every disk read goes through window.files
+  // (files-preload.js → files-main.js); sorting happens in main, so the rules
+  // live once, in files.js, under test.
+  const $ = (id) => document.getElementById(id);
+  const ICON = { folder: '📁', image: '🖼️', video: '🎞️', audio: '🎵', pdf: '📕', text: '📄', page: '🌐', other: '📦' };
+  const state = { dir: null, parent: null, entries: [], sel: -1, sort: 'name', order: 'asc' };
+  const when = (ms) => (typeof ms === 'number' ? new Date(ms).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' }) : '');
+  const el = (tag, props, ...kids) => {
+    const n = Object.assign(document.createElement(tag), props || {});
+    n.append(...kids);
+    return n;
+  };
+  const status = (text, err) => {
+    $('status').textContent = text;
+    $('status').className = err ? 'err' : '';
+  };
+
+  // Load a folder. `how`: 'push' (a new place), 'pop' (back/forward got here), or
+  // 'stay' (refresh/sort). Folders are real history entries, so WebForge's own
+  // Back/Forward (Alt+Left/Right, mouse buttons) walk them; the session reopens
+  // at the current one.
+  let loadSeq = 0;
+  async function go(target, how = 'push', select = null) {
+    const seq = ++loadSeq;
+    const r = await window.files.list(target, state.sort, state.order);
+    if (seq !== loadSeq || !r) return;
+    if (!r.ok) {
+      status(r.error || 'Could not open that folder.', true);
+      $('path').value = state.dir || target;
+      return;
+    }
+    const keep = how === 'stay' && state.entries[state.sel]?.name;
+    Object.assign(state, { dir: r.dir, parent: r.parent, entries: r.entries });
+    const want = r.select || select || keep;
+    state.sel = want ? r.entries.findIndex((e) => e.name === want) : -1;
+    if (state.sel < 0 && r.entries.length) state.sel = 0;
+    $('path').value = r.dir;
+    document.title = r.dir.split(/[\\/]/).filter(Boolean).pop() || r.dir;
+    const url = `?path=${encodeURIComponent(r.dir)}`;
+    if (how === 'push' && state.shown && state.shown !== r.dir) history.pushState(null, '', url);
+    else history.replaceState(null, '', url);
+    state.shown = r.dir;
+    const hidden = r.entries.filter((e) => e.hidden).length;
+    status(`${r.entries.length} item${r.entries.length === 1 ? '' : 's'}${hidden ? ` (${hidden} hidden)` : ''}`);
+    render();
+    markRail();
+    if (how === 'push' && /^\\\\/.test(r.dir)) loadRail(); // a newly visited share joins the rail
+  }
+
+  function render() {
+    for (const th of document.querySelectorAll('th')) {
+      th.classList.toggle('sorted', th.dataset.key === state.sort);
+      th.classList.toggle('desc', th.dataset.key === state.sort && state.order === 'desc');
+    }
+    const rows = state.entries.map((e, i) => {
+      const tr = el('tr', { className: `row${e.hidden ? ' hidden' : ''}${i === state.sel ? ' sel' : ''}` },
+        el('td', { className: 'c-name', title: e.name }, el('span', { className: 'ico', textContent: ICON[e.kind] || ICON.other }), e.name),
+        el('td', { className: 'c-mod', textContent: when(e.mtime) }),
+        el('td', { className: 'c-type', textContent: e.type }),
+        el('td', { className: 'c-size', textContent: e.sizeLabel }));
+      tr.onmousedown = (ev) => { if (ev.button === 0 || ev.button === 2) select(i); };
+      tr.ondblclick = () => openEntry(e);
+      tr.oncontextmenu = (ev) => { ev.preventDefault(); showMenu(ev.clientX, ev.clientY, e); };
+      return tr;
+    });
+    $('rows').replaceChildren(...rows);
+    $('empty').hidden = state.entries.length > 0;
+    $('back').disabled = window.navigation ? !navigation.canGoBack : false;
+    $('fwd').disabled = window.navigation ? !navigation.canGoForward : false;
+    $('up').disabled = !state.parent;
+    scrollToSel();
+    showPreview();
+  }
+
+  function select(i) {
+    if (i < 0 || i >= state.entries.length || i === state.sel) return;
+    const rows = $('rows').children;
+    rows[state.sel]?.classList.remove('sel');
+    state.sel = i;
+    rows[i]?.classList.add('sel');
+    scrollToSel();
+    showPreview();
+  }
+  const scrollToSel = () => $('rows').children[state.sel]?.scrollIntoView({ block: 'nearest' });
+
+  // The preview follows the selection; a fast arrow run only previews where it stops.
+  let previewTimer = null;
+  let previewSeq = 0;
+  function showPreview() {
+    clearTimeout(previewTimer);
+    const e = state.entries[state.sel];
+    if (!e) { $('preview').replaceChildren(); return; }
+    previewTimer = setTimeout(async () => {
+      const seq = ++previewSeq;
+      const p = await window.files.preview(e.path);
+      if (seq !== previewSeq || !p) return;
+      const box = [];
+      if (p.kind === 'image') box.push(el('img', { src: p.url, alt: '' }));
+      else if (p.kind === 'video') box.push(el('video', { src: p.url, controls: true, muted: true }));
+      else if (p.kind === 'audio') box.push(el('audio', { src: p.url, controls: true }));
+      else if (p.kind === 'text') box.push(el('pre', { textContent: p.text + (p.more ? '\n…' : '') }));
+      box.push(el('div', { className: 'name', textContent: e.name }));
+      const meta = [e.type, p.size, when(p.mtime), p.error].filter(Boolean);
+      box.push(el('div', { className: 'meta' }, ...meta.flatMap((m, i) => (i ? [el('br'), m] : [m]))));
+      $('preview').replaceChildren(...box);
+    }, 90);
+  }
+
+  async function openEntry(e, how) {
+    if (!e) return;
+    if (e.dir && how !== 'system') return go(e.path);
+    const r = await window.files.open(e.path, how);
+    if (r && !r.ok) status(r.error || `Could not open ${e.name}.`, true);
+  }
+  const up = () => state.parent && go(state.parent, 'push', state.dir.split(/[\\/]/).filter(Boolean).pop());
+  const back = () => history.back();
+  const fwd = () => history.forward();
+  addEventListener('popstate', () => {
+    const p = new URLSearchParams(location.search).get('path');
+    if (p) go(p, 'pop');
+  });
+
+  // Right-click: the read-only actions. Rename, delete and the rest arrive with PR 2.
+  function showMenu(x, y, e) {
+    const items = [
+      ['Open', () => openEntry(e)],
+      [e.dir ? 'Open in Explorer' : 'Open with system app', () => openEntry(e, 'system')],
+      ['Copy path', () => { window.files.copyPath(e.path); status(`Copied ${e.path}`); }],
+    ];
+    const m = $('menu');
+    m.replaceChildren(...items.map(([label, fn]) => {
+      const d = el('div', { textContent: label });
+      d.onclick = () => { hideMenu(); fn(); };
+      return d;
+    }));
+    m.style.display = 'block';
+    m.style.left = `${Math.min(x, innerWidth - m.offsetWidth - 4)}px`;
+    m.style.top = `${Math.min(y, innerHeight - m.offsetHeight - 4)}px`;
+  }
+  const hideMenu = () => { $('menu').style.display = 'none'; };
+  addEventListener('mousedown', (ev) => { if (!$('menu').contains(ev.target)) hideMenu(); }, true);
+  addEventListener('blur', hideMenu);
+
+  // The left rail: the usual folders, every drive, and shares visited before.
+  async function loadRail() {
+    const pl = await window.files.places();
+    if (!pl) return;
+    const section = (title, list) => (list.length ? [el('h2', { textContent: title }), ...list.map((p) => {
+      const a = el('a', { textContent: p.label, title: p.path });
+      a.dataset.path = p.path;
+      a.onclick = () => go(p.path);
+      return a;
+    })] : []);
+    $('rail').replaceChildren(...section('Places', pl.folders), ...section('Drives', pl.drives), ...section('Network', pl.shares));
+    markRail();
+    return pl;
+  }
+  const markRail = () => {
+    for (const a of $('rail').querySelectorAll('a')) a.classList.toggle('here', a.dataset.path.toLowerCase() === (state.dir || '').toLowerCase());
+  };
+
+  for (const th of document.querySelectorAll('th')) {
+    th.onclick = () => {
+      if (state.sort === th.dataset.key) state.order = state.order === 'asc' ? 'desc' : 'asc';
+      else Object.assign(state, { sort: th.dataset.key, order: th.dataset.key === 'name' || th.dataset.key === 'type' ? 'asc' : 'desc' });
+      go(state.dir, 'stay');
+    };
+  }
+  $('back').onclick = back;
+  $('fwd').onclick = fwd;
+  $('up').onclick = up;
+  $('refresh').onclick = () => go(state.dir, 'stay');
+  $('path').addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter') { ev.preventDefault(); go($('path').value).then(() => $('main').focus()); }
+    else if (ev.key === 'Escape') { $('path').value = state.dir; $('main').focus(); }
+  });
+
+  // Keys, Explorer's: arrows move, Enter opens, Backspace goes up, Alt+D or F4
+  // edits the path (Ctrl+L stays WebForge's address bar), F5 refreshes, and typing a letter jumps to the next name with it.
+  let typed = '';
+  let typedAt = 0;
+  addEventListener('keydown', (ev) => {
+    if (ev.target === $('path')) return;
+    const n = state.entries.length;
+    const page = Math.max(1, Math.floor($('main').clientHeight / 24) - 1);
+    const k = ev.key;
+    let handled = true;
+    if (ev.altKey && k === 'ArrowUp') up();
+    else if (k === 'F4' || (ev.altKey && (k === 'd' || k === 'D'))) { $('path').focus(); $('path').select(); }
+    else if (ev.ctrlKey || ev.altKey || ev.metaKey) handled = false;
+    else if (k === 'ArrowDown') select(Math.min(n - 1, state.sel + 1));
+    else if (k === 'ArrowUp') select(Math.max(0, state.sel - 1));
+    else if (k === 'PageDown') select(Math.min(n - 1, state.sel + page));
+    else if (k === 'PageUp') select(Math.max(0, state.sel - page));
+    else if (k === 'Home') select(0);
+    else if (k === 'End') select(n - 1);
+    else if (k === 'Enter') openEntry(state.entries[state.sel]);
+    else if (k === 'Backspace') up();
+    else if (k === 'F5') go(state.dir, 'stay');
+    else if (k === 'Escape') hideMenu();
+    else if (k.length === 1 && k !== ' ') {
+      typed = Date.now() - typedAt > 800 ? k.toLowerCase() : typed + k.toLowerCase();
+      typedAt = Date.now();
+      const from = typed.length === 1 ? state.sel + 1 : state.sel;
+      for (let j = 0; j < n; j++) {
+        const i = (from + j) % n;
+        if (state.entries[i].name.toLowerCase().startsWith(typed)) { select(i); break; }
+      }
+    } else handled = false;
+    if (handled) ev.preventDefault();
+  });
+
+  (async () => {
+    const pl = await loadRail();
+    const start = new URLSearchParams(location.search).get('path') || (pl && pl.home) || '/';
+    await go(start, 'stay');
+    $('main').focus();
+  })();
+</script>
+</body>
+</html>

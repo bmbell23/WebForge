@@ -181,6 +181,13 @@
       const names = g.names || {};
       const groups = document.getElementById('groups');
       groups.replaceChildren();
+      // #322: the file browser sits above every shell.
+      groups.appendChild(Object.assign(document.createElement('h2'), { textContent: 'Files' }));
+      const filesRow = Object.assign(document.createElement('div'), { className: 'host' });
+      const filesGo = Object.assign(document.createElement('button'), { className: 'go', textContent: '📁 Files', title: 'Browse this computer and network shares' });
+      filesGo.onclick = () => window.terminal.openFiles();
+      filesRow.appendChild(filesGo);
+      groups.appendChild(filesRow);
       // #276: this PC's shells come first; no star, edit or remove.
       if (g.local && g.local.length) {
         groups.appendChild(Object.assign(document.createElement('h2'), { textContent: 'This PC' }));

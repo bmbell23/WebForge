@@ -123,6 +123,13 @@ const isInternalUrl = (u) => Object.values(INTERNAL_PAGES).some((p) => isFileUrl
 const TERMINAL_FILE = path.join(__dirname, 'ui', 'terminal.html');
 const terminalUrl = (target) => fileUrl(TERMINAL_FILE) + (target ? `?host=${encodeURIComponent(target)}` : '');
 const isTerminalUrl = (u) => isFileUrlOf(u, TERMINAL_FILE); // #319
+// #322: the Files page. A tab in the Terminal Persona with its own narrow
+// bridge (files-preload.js); `?path=` opens a folder, or a file's folder with
+// the file selected. Like a terminal tab, never synced.
+const FILES_FILE = path.join(__dirname, 'ui', 'files.html');
+const filesUrl = (p) => fileUrl(FILES_FILE) + (p ? `?path=${encodeURIComponent(p)}` : '');
+const isFilesUrl = (u) => isFileUrlOf(u, FILES_FILE);
+const filesMain = require('./files-main');
 const isTerminalTab = (id) => personaByTab.get(id) === personas.TERMINAL;
 // #214: an app slot's tab (Mattermost, Teams, Outlook): one pinned page that
 // never re-homes, syncs or restores. View tabs = terminal or app slot.
@@ -299,6 +306,8 @@ function sessionSnapshot() {
   // picker (no host chosen yet) is not worth bringing back.
   const termUrl = (id) => {
     if (lazyTabs.has(id)) return lazyTabs.get(id).url;
+    const live = tablive.liveUrl(tabs.get(id));
+    if (isFilesUrl(live)) return live; // #322: reopens at the same folder
     const target = terminalMain.targetOf(tabs.get(id).webContents);
     return target ? terminalUrl(target) : null;
   };
@@ -1314,6 +1323,7 @@ function createTab(url = null, background = false, personaId = null, opts = {}) 
   if (!url && slot) url = slot.url;
   if (!url) url = newTabUrl(); // #43: default landing page is our search page
   const terminal = isTerminalUrl(url);
+  const filesPage = isFilesUrl(url); // #322
   const lazy = Boolean(opts.lazy);
   if (lazy) lazyTabs.set(id, { url, title: opts.title || url }); // #78
   lastActiveAt.set(id, opts.lastActiveAt || Date.now()); // #79
@@ -1325,7 +1335,7 @@ function createTab(url = null, background = false, personaId = null, opts = {}) 
   const claimed = claimOf(url); // #221: a slot's own site lands in the slot
   personaByTab.set(
     id,
-    terminal
+    terminal || filesPage
       ? personas.TERMINAL
       : slot
         ? personaId
@@ -1346,7 +1356,9 @@ function createTab(url = null, background = false, personaId = null, opts = {}) 
     webPreferences: {
       preload: terminal
         ? path.join(__dirname, 'terminal-preload.js') // #214
-        : isInternalUrl(url)
+        : filesPage
+          ? path.join(__dirname, 'files-preload.js') // #322
+          : isInternalUrl(url)
           ? path.join(__dirname, 'internal-preload.js')
           : path.join(__dirname, 'content-preload.js'),
     },
@@ -1356,7 +1368,7 @@ function createTab(url = null, background = false, personaId = null, opts = {}) 
   // not fix the missing frame — forceRepaint does — but a blank white page is a
   // far less alarming failure than a black window if one ever slips through.
   try {
-    view.setBackgroundColor(terminal ? '#0c0c0c' : '#ffffff');
+    view.setBackgroundColor(terminal || filesPage ? '#0c0c0c' : '#ffffff');
   } catch (err) {
     errorlog.record('setBackgroundColor', err);
   }
@@ -1372,6 +1384,8 @@ function createTab(url = null, background = false, personaId = null, opts = {}) 
     // A terminal tab never becomes a web page: that page would inherit window.terminal.
     wc.on('will-navigate', (event) => event.preventDefault());
   }
+  // #322: nor does the Files page; that page would inherit window.files.
+  if (filesPage) wc.on('will-navigate', (event) => event.preventDefault());
   // Popups (window.open / target=_blank) become tabs, never OS windows.
   // #30: they open FOREGROUND — clicking a link that spawns a tab should put
   // you in that tab (matches every mainstream browser; reverses #4's call).
@@ -1436,7 +1450,7 @@ function createTab(url = null, background = false, personaId = null, opts = {}) 
     if (!home) return;
     // Our own pages (the net-error page above all) are not "leaving home": a failed
     // load swapped in neterror.html and the re-home bounced you to another tab.
-    if (isInternalUrl(navUrl) || isNewTabUrl(navUrl)) return;
+    if (isInternalUrl(navUrl) || isNewTabUrl(navUrl) || isFilesUrl(navUrl)) return; // #322: a pinned Files tab moves between folders
     // #78: only enforce across ORIGINS — comparing full URLs livelocked the app.
     // The rule and the reasoning now live in stickytab.js, under test.
     if (!stickytab.shouldRehome(navUrl, home, stickyScope(id))) return; // #311: scope, when set
@@ -1943,6 +1957,15 @@ function openTerminal() {
   else switchPersona(personas.TERMINAL);
 }
 
+// #322: "Files" in the terminal picker turns that picker tab into a Files tab.
+// A new tab, because a tab's bridge is fixed when it is made.
+ipcMain.on('terminal:open-files', (e) => {
+  if (locked || !isTerminalUrl(e.sender.getURL()) || !terminalMain.isPicker(e.sender)) return;
+  const picker = [...tabs.keys()].find((id) => tabs.get(id).webContents === e.sender);
+  createTab(filesUrl(null), false, personas.TERMINAL, picker !== undefined ? { after: picker } : {});
+  if (picker !== undefined) closeTab(picker);
+});
+
 // #214: a connection clicked in the panel opens as a new terminal tab.
 function openConnection(target) {
   if (locked || !termhosts.validTarget(target)) return;
@@ -2429,6 +2452,12 @@ function createWindow() {
       },
     },
   });
+  // #322: the Files page's disk access. Files open as tabs in Unassigned.
+  filesMain.installIpc({
+    isFilesSender: (e) => Boolean(e.senderFrame) && e.senderFrame === e.sender.mainFrame && isFilesUrl(e.sender.getURL()),
+    openInApp: (url) => { if (!locked) openOrFocus(url, false, null, personas.UNASSIGNED); },
+    record: (where, err) => errorlog.record(where, err),
+  });
   win.on('blur', () => closeStrayNewTabs()); // #82: Alt+Tab away disposes of it
   win.on('blur', () => terminalMain.clearAllHolds()); // #214: a held Ctrl+Space doesn't survive leaving
   // #176: leaving the window closes every adult tab — alt-tab, clicking another
@@ -2733,7 +2762,7 @@ function shareable(url) {
   // #176: adult tabs never reach the other device, the close tombstones, or
   // Ctrl+Shift+T — every path that remembers a tab goes through here.
   // #232: a reader view is a data: URL — it must never be synced, restored or reopened.
-  return Boolean(url) && url !== 'about:blank' && !String(url).startsWith('data:') && !isNewTabUrl(url) && !isInternalUrl(url) && !isTerminalUrl(url) && !ytdlp.isAdult(url); // #214
+  return Boolean(url) && url !== 'about:blank' && !String(url).startsWith('data:') && !isNewTabUrl(url) && !isInternalUrl(url) && !isTerminalUrl(url) && !isFilesUrl(url) && !ytdlp.isAdult(url); // #214
 }
 
 function localTabPayload() {
