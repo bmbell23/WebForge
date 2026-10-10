@@ -41,20 +41,67 @@ function noteShare(dir) {
 // to give up, whatever our timeout says, so drives are probed once and again
 // only on an explicit Refresh.
 let drivesCache = null;
+
+/** stdout of a short Windows command, or '' when it fails or takes too long. */
+function run(cmd, args, timeout = 5000) {
+  const { execFile } = require('child_process');
+  return new Promise((resolve) => {
+    execFile(cmd, args, { timeout, windowsHide: true, maxBuffer: 1 << 20 }, (err, stdout) => resolve(err ? '' : String(stdout)));
+  });
+}
+
+// #341: every mapped drive (HKCU\Network keeps the disconnected ones too) and
+// the volume names Explorer shows ("OS (C:)"). Only known letters are probed.
+async function windowsDrives() {
+  const [reg, disks] = await Promise.all([
+    run('reg', ['query', 'HKCU\\Network', '/s']),
+    run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+      'Get-CimInstance Win32_LogicalDisk | Select-Object DeviceID,VolumeName,ProviderName | ConvertTo-Json -Compress']),
+  ]);
+  const mapped = files.parseMappedDrives(reg);
+  const info = files.parseLogicalDisks(disks);
+  const known = new Set([...Object.keys(info), ...mapped.map((m) => m.letter)]);
+  const answering = await files.listDrives((root) =>
+    known.size && !known.has(root[0]) ? false : fs.promises.access(root).then(() => true, () => false));
+  return files.buildDrives(answering, mapped, info);
+}
+
 async function drives(fresh) {
   if (drivesCache && !fresh) return drivesCache;
   if (process.platform === 'win32') {
-    drivesCache = await files.listDrives((root) => fs.promises.access(root).then(() => true, () => false));
+    drivesCache = await windowsDrives();
   } else if (process.platform === 'darwin') {
     let vols = [];
     try {
       vols = fs.readdirSync('/Volumes').map((v) => `/Volumes/${v}`);
     } catch (_) {}
-    drivesCache = ['/', ...vols];
+    drivesCache = ['/', ...vols].map((d) => ({ label: d, path: d }));
   } else {
-    drivesCache = ['/'];
+    drivesCache = [{ label: '/', path: '/' }];
   }
   return drivesCache;
+}
+
+// #341: Explorer's "Network locations": folders in Network Shortcuts, each
+// holding a target.lnk that points at a share.
+function networkLocations() {
+  if (process.platform !== 'win32') return [];
+  const { app, shell } = require('electron');
+  const dir = path.join(app.getPath('appData'), 'Microsoft', 'Windows', 'Network Shortcuts');
+  let names = [];
+  try {
+    names = fs.readdirSync(dir);
+  } catch (_) {
+    return [];
+  }
+  const out = [];
+  for (const name of names) {
+    try {
+      const target = shell.readShortcutLink(path.join(dir, name, 'target.lnk')).target;
+      if (target) out.push({ label: name, path: target });
+    } catch (_) {} // not a folder shortcut (or a broken one)
+  }
+  return out;
 }
 
 /** `fn` over `items`, at most `n` at a time (a big share must not flood the thread pool). */
@@ -95,8 +142,10 @@ async function places(fresh) {
   return {
     home: get('home'),
     folders,
-    drives: (await drives(fresh)).map((d) => ({ label: d, path: d })),
-    shares: savedShares().map((s) => ({ label: s, path: s })),
+    drives: await drives(fresh),
+    shares: [...networkLocations(), ...savedShares().map((s) => ({ label: s, path: s }))].filter(
+      (x, i, all) => all.findIndex((y) => y.path.toLowerCase() === x.path.toLowerCase()) === i
+    ),
   };
 }
 

@@ -18,6 +18,8 @@
   #rail a { display: block; padding: 4px 14px; color: #ccc; text-decoration: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
   #rail a:hover { background: #1b2433; }
   #rail a.here { background: #23324a; color: #fff; }
+  #rail a.offline { color: #777; }
+  #rail a.offline::after { content: ' ✕'; color: #c4553c; } /* #341: mapped, not connected */
   #main { overflow: auto; outline: none; }
   table { width: 100%; border-collapse: collapse; table-layout: fixed; }
   th { position: sticky; top: 0; background: #121212; color: #999; font-weight: 500; text-align: left; padding: 6px 10px; border-bottom: 1px solid #222; cursor: pointer; user-select: none; white-space: nowrap; }
@@ -219,7 +221,7 @@
     const pl = await window.files.places(fresh);
     if (!pl) return;
     const section = (title, list) => (list.length ? [el('h2', { textContent: title }), ...list.map((p) => {
-      const a = el('a', { textContent: p.label, title: p.path });
+      const a = el('a', { textContent: p.label, title: p.offline ? `${p.path} (disconnected)` : p.path, className: p.offline ? 'offline' : '' });
       a.dataset.path = p.path;
       a.onclick = () => go(p.path);
       return a;

@@ -174,7 +174,74 @@ function textPreview(buf, maxLines = 200) {
   return { text: lines.slice(0, maxLines).join('\n'), more: lines.length > maxLines };
 }
 
+/** `reg query HKCU\Network /s` → every mapped drive, connected or not: [{ letter, remote }]. */
+function parseMappedDrives(stdout) {
+  const out = [];
+  let letter = null;
+  for (const line of String(stdout || '').split(/\r?\n/)) {
+    const key = /^HKEY_CURRENT_USER\\Network\\([A-Za-z])\s*$/i.exec(line.trim());
+    if (key) {
+      letter = key[1].toUpperCase();
+      continue;
+    }
+    const val = /^RemotePath\s+REG_\w+\s+(.+)$/i.exec(line.trim());
+    if (val && letter) {
+      out.push({ letter, remote: val[1].trim() });
+      letter = null;
+    }
+  }
+  return out;
+}
+
+/** Win32_LogicalDisk as JSON (one object or an array) → { 'C': { volume, remote } }. */
+function parseLogicalDisks(json) {
+  let list;
+  try {
+    list = JSON.parse(String(json || '').trim() || '[]');
+  } catch (_) {
+    return {};
+  }
+  const out = {};
+  for (const d of Array.isArray(list) ? list : [list]) {
+    const m = /^([A-Za-z]):/.exec((d && d.DeviceID) || '');
+    if (m) out[m[1].toUpperCase()] = { volume: d.VolumeName || '', remote: d.ProviderName || '' };
+  }
+  return out;
+}
+
+/** Explorer's names: "OS (C:)", "Local Disk (D:)", "brighton (\\10.0.0.197) (B:)". */
+function driveLabel(letter, info = {}) {
+  const share = /^\\\\([^\\]+)\\(.+?)\\?$/.exec(info.remote || '');
+  if (share) return `${share[2].split('\\').pop()} (\\\\${share[1]}) (${letter}:)`;
+  return `${info.volume || 'Local Disk'} (${letter}:)`;
+}
+
+/**
+ * The Drives section: every drive that answered plus every mapped drive that
+ * didn't, in letter order. A disconnected one browses its UNC path instead,
+ * which Windows reconnects when it can.
+ */
+function buildDrives(answering, mapped, disks = {}) {
+  const up = new Set((answering || []).map((r) => r[0].toUpperCase()));
+  const remoteOf = {};
+  for (const m of mapped || []) remoteOf[m.letter] = m.remote;
+  const letters = [...new Set([...up, ...Object.keys(remoteOf)])].sort();
+  return letters.map((l) => {
+    const remote = remoteOf[l] || (disks[l] && disks[l].remote) || '';
+    const offline = !up.has(l);
+    return {
+      label: driveLabel(l, { volume: disks[l] && disks[l].volume, remote }),
+      path: offline && remote ? remote : `${l}:\\`,
+      offline,
+    };
+  });
+}
+
 module.exports = {
+  parseMappedDrives,
+  parseLogicalDisks,
+  driveLabel,
+  buildDrives,
   extOf,
   kindOf,
   opensInApp,
