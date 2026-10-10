@@ -2265,10 +2265,20 @@
         keyForUrl(a.url).localeCompare(keyForUrl(b.url), undefined, { numeric: true })
       );
     if (boundBms.length) {
+      // #337: collapsible like a folder, and collapsed on every panel open
+      // (bmExpanded is cleared then, #35). The key can't collide with a folder path.
+      const HK = '\u0000hotkeys';
+      const open = bmExpanded.has(HK);
       const h = document.createElement('div');
       h.className = 'bmfolder';
-      h.textContent = 'Hotkeys';
-      nodes.unshift(h, ...boundBms.map((b) => makeBmRow(b, 0)));
+      h.style.cursor = 'pointer';
+      h.textContent = `${open ? '▾' : '▸'} Hotkeys (${boundBms.length})`;
+      h.onclick = () => {
+        if (open) bmExpanded.delete(HK);
+        else bmExpanded.add(HK);
+        renderBookmarks(lastBookmarks);
+      };
+      nodes.unshift(h, ...(open ? boundBms.map((b) => makeBmRow(b, 0)) : []));
     }
     // Root-level (folderless) bookmarks, then the tree.
     for (const b of root.items) nodes.push(makeBmRow(b, 0));
