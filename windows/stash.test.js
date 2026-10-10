@@ -45,6 +45,29 @@ eq(g.tags, ['redhead', 'dress'], 'keywords split, trimmed, deduped');
 eq(g.image_urls.length, 3, 'full-size image links, deduped, query allowed');
 ok(stash.isGallery(g), 'three images count as a gallery');
 
+console.log('page reader: lazy imx.to thumbnails (#345)');
+const nsfw = distill({
+  url: 'https://nsfwalbum.com/album/946155',
+  title: 'An album',
+  links: [{ href: 'https://nsfwalbum.com/photo/91244573', text: '' }],
+  imgs: [
+    'https://nsfwalbum.com/pic/p.png',
+    'https://image.imx.to/u/t/2026/10/09/76upom.jpg',
+    'https://image.imx.to/u/t/2026/10/09/76upoo.jpg',
+    'https://image.imx.to/u/t/2026/10/09/76upoo.jpg',
+    'https://image.imx.to/u/t/2026/10/09/76upor.jpg',
+    'https://image.imx.to/u/i/2026/10/09/already.jpg',
+    'https://other.example/u/t/x.jpg',
+  ],
+});
+eq(nsfw.image_urls, [
+  'https://image.imx.to/u/i/2026/10/09/76upom.jpg',
+  'https://image.imx.to/u/i/2026/10/09/76upoo.jpg',
+  'https://image.imx.to/u/i/2026/10/09/76upor.jpg',
+], 'thumbnails → originals, deduped; placeholders, non-thumbnails and other hosts ignored');
+ok(stash.isGallery(nsfw), 'the album counts as a gallery');
+eq(distill({ url: 'https://x.com/', links: [], imgs: ['https://x.com/a.jpg', 'https://x.com/b.jpg', 'https://x.com/c.jpg'] }).image_urls, [], 'plain <img> tags never make a gallery');
+
 console.log('page reader: a sidebar full of models only keeps the ones the title names');
 const many = ['Amy', 'Bea', 'Cat', 'Dee', 'Eve', 'Jane Doe'].map((t) => ({ href: `https://x.com/pornstars/${t}/`, text: t }));
 eq(distill({ url: 'https://x.com/g/1', title: 'Jane Doe solo', links: many }).performers, ['Jane Doe'], 'sidebar names dropped');

@@ -8,6 +8,11 @@
 (function () {
   var IMAGE = /\.(jpe?g|png|webp|gif|avif)$/i;
   var PERFORMER_PATH = /^\/(pornstars?|models?|performers?|stars?|actors?|actress(es)?|girls?)\/[^/]+\/?$/i;
+  // #345: thumbnail hosts whose originals sit at a known path. A page's <img>
+  // only counts as a gallery image when one of these turns it into the original.
+  var THUMB_RULES = [
+    { host: /(^|\.)imx\.to$/i, from: /^\/u\/t\//, to: '/u/i/' }, // nsfwalbum.com albums
+  ];
   var STUDIO_PATH = /^\/(channels?|sites?|studios?|paysites?|networks?)\/[^/]+\/?$/i;
 
   // Listing and nav links share the performer/studio paths ("Top Models", "All girls", "123 videos").
@@ -40,7 +45,21 @@
     try { return new URL(url).hostname.toLowerCase().replace(/^www\./, ''); } catch (e) { return ''; }
   }
 
-  // raw = {url, title, h1, meta: {name: content}, ld: [objects], links: [{href, text}]}
+  function original(src) { // #345: a known thumbnail's full-size URL, or null
+    try {
+      var u = new URL(src);
+      for (var i = 0; i < THUMB_RULES.length; i++) {
+        var r = THUMB_RULES[i];
+        if (r.host.test(u.hostname) && r.from.test(u.pathname) && IMAGE.test(u.pathname)) {
+          u.pathname = u.pathname.replace(r.from, r.to);
+          return u.href;
+        }
+      }
+    } catch (e) { /* not a URL */ }
+    return null;
+  }
+
+  // raw = {url, title, h1, meta: {name: content}, ld: [objects], links: [{href, text}], imgs: [src]}
   function distill(raw) {
     var meta = raw.meta || {}, ld = [], links = raw.links || [];
     (raw.ld || []).forEach(function (o) { ld = ld.concat(o && o['@graph'] ? o['@graph'] : [o]); });
@@ -104,6 +123,10 @@
         if ((u.protocol === 'http:' || u.protocol === 'https:') && IMAGE.test(u.pathname)) images.push(u.href);
       } catch (e) { /* not a URL */ }
     });
+    (raw.imgs || []).forEach(function (s) { // #345
+      var o = original(s);
+      if (o) images.push(o);
+    });
     images = dedupe(images, 500);
 
     return {
@@ -135,8 +158,15 @@
     var links = [];
     var as = doc.querySelectorAll('a[href]');
     for (var n = 0; n < as.length && n < 5000; n++) links.push({ href: as[n].href, text: as[n].textContent });
+    var imgs = []; // #345: lazy thumbnails keep the real address in data-src
+    var is = doc.querySelectorAll('img');
+    for (var q = 0; q < is.length && imgs.length < 5000; q++) {
+      var ds = is[q].getAttribute('data-src');
+      if (ds) { try { imgs.push(new URL(ds, doc.baseURI).href); } catch (e) { /* bad data-src */ } }
+      if (is[q].src) imgs.push(is[q].src);
+    }
     var h1 = doc.querySelector('h1');
-    return { url: url, title: doc.title, h1: h1 ? h1.textContent : '', meta: meta, ld: ld, links: links };
+    return { url: url, title: doc.title, h1: h1 ? h1.textContent : '', meta: meta, ld: ld, links: links, imgs: imgs };
   }
 
   if (typeof __stashExport === 'function') return __stashExport({ distill: distill, collect: collect });
