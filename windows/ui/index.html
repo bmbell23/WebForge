@@ -336,7 +336,9 @@
   #connlist .connempty { margin: 0 10px; opacity: .5; font-size: 12px; }
   /* #228: the inline Favorite editor */
   #connlist .connedit { display: flex; flex-direction: column; gap: 4px; margin: 4px 10px; }
-  #connlist .connedit input { width: 100%; margin: 0; }
+  #connlist .connedit input, #connlist .connedit textarea { width: 100%; margin: 0; box-sizing: border-box; }
+  #connlist .connedit textarea { resize: vertical; font: inherit; }
+  #connlist .connedit label { font-size: 12px; opacity: .7; margin-top: 4px; }
   #connlist .connedit .btns { display: flex; gap: 6px; }
   #connlist .connedit .err { color: #e5534b; font-size: 12px; }
   /* #27: bookmark search */
@@ -1467,6 +1469,7 @@
     return m ? { user: m[1] || '', host: m[2].replace(/^\[(.*)\]$/, '$1'), port: m[3] || '' } : { user: '', host: t, port: '' };
   };
   // #228: swaps a Favorite's row for Name / User / Host / Port. Enter saves, Esc cancels.
+  // #343: plus Run on connect (Enter there is a new line; Ctrl+Enter saves).
   const editRow = (t, label, row) => {
     const p = splitTarget(t);
     const form = Object.assign(document.createElement('div'), { className: 'connedit' });
@@ -1478,9 +1481,13 @@
     const fUser = field('User', p.user);
     const fHost = field('Host or IP', p.host);
     const fPort = field('Port (optional)', p.port);
+    const cmdLabel = Object.assign(document.createElement('label'), { textContent: 'Run on connect (one command per line)' });
+    const fCmds = Object.assign(document.createElement('textarea'), {
+      rows: 2, placeholder: 'e.g. forge', value: (lastConns.onConnect || {})[t] || '', spellcheck: false,
+    });
     const err = Object.assign(document.createElement('div'), { className: 'err' });
     const save = async () => {
-      const r = await webforge.editConnection(t, { name: fName.value, user: fUser.value, host: fHost.value, port: fPort.value });
+      const r = await webforge.editConnection(t, { name: fName.value, user: fUser.value, host: fHost.value, port: fPort.value, onConnect: fCmds.value });
       if (!r || !r.ok) err.textContent = (r && r.error) || 'Could not save.';
       // on success main pushes fresh connections, which redraws the list
     };
@@ -1493,10 +1500,10 @@
     btns.append(save_, cancel_);
     form.onkeydown = (e) => {
       e.stopPropagation();
-      if (e.key === 'Enter') { e.preventDefault(); save(); }
+      if (e.key === 'Enter' && (e.target !== fCmds || e.ctrlKey)) { e.preventDefault(); save(); }
       else if (e.key === 'Escape') { e.preventDefault(); cancel(); }
     };
-    form.append(fName, fUser, fHost, fPort, err, btns);
+    form.append(fName, fUser, fHost, fPort, cmdLabel, fCmds, err, btns);
     row.replaceWith(form);
     fName.focus();
   };

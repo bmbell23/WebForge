@@ -46,8 +46,8 @@ eq(th.rankFrequent(null), [], 'nothing yet');
 
 console.log('connectionGroups');
 eq(th.connectionGroups({ favorites: ['forge'], uses: { forge: 9, pve01: 4, x: 1 }, configHosts: ['forge', 'pve01', 'dh'] }),
-  { favorites: ['forge'], frequent: ['pve01', 'x'], config: ['dh'], names: {} }, 'each host once: Favorites > Frequent > config');
-eq(th.connectionGroups(), { favorites: [], frequent: [], config: [], names: {} }, 'empty');
+  { favorites: ['forge'], frequent: ['pve01', 'x'], config: ['dh'], names: {}, onConnect: {} }, 'each host once: Favorites > Frequent > config');
+eq(th.connectionGroups(), { favorites: [], frequent: [], config: [], names: {}, onConnect: {} }, 'empty');
 
 console.log('validTarget');
 for (const t of ['dockerhost', 'brandon@dockerhost', 'brandon@dockerhost:2222', 'u@[::1]:22', '10.0.0.160']) eq(th.validTarget(t), true, t);
@@ -88,18 +88,32 @@ eq(th.renameFavorite(base, 'a', { name: 'Alpha', host: 'a' }).hosts.names.a, 'Al
 eq(th.connectionGroups({ favorites: ['a', 'b'], names: { a: 'Alpha', z: 'Stray' } }).names, { a: 'Alpha' }, 'names only for favorites');
 
 eq(th.connectionGroups({ favorites: ['root@pve01'], uses: { pve01: 3, 'brandon@pve01': 2 }, configHosts: ['pve01', 'dh'] }),
-  { favorites: ['root@pve01'], frequent: ['brandon@pve01'], config: ['dh'], names: {} },
+  { favorites: ['root@pve01'], frequent: ['brandon@pve01'], config: ['dh'], names: {}, onConnect: {} },
   '#241: a Favorite hides its bare host, not another user on it');
 // #280: delete connections
 eq(th.connectionGroups({ favorites: ['a'], uses: { f1: 3, f2: 2 }, configHosts: ['c1', 'c2'], hidden: ['f1', 'c2'] }),
-  { favorites: ['a'], frequent: ['f2'], config: ['c1'], names: {} }, 'hidden leaves frequent and config');
+  { favorites: ['a'], frequent: ['f2'], config: ['c1'], names: {}, onConnect: {} }, 'hidden leaves frequent and config');
 eq(th.connectionGroups({ favorites: ['a'], hidden: ['a'] }).favorites, ['a'], 'favorites never hidden');
 eq(th.connectionGroups({ favorites: ['a'], uses: { f: 1 } }).frequent, ['f'], 'hidden defaults to none');
+console.log('run on connect (#343)');
+eq(th.onConnectLines(' forge \r\n\n  ls -la\n'), ['forge', 'ls -la'], 'trimmed, blank lines dropped');
+eq(th.onConnectLines(undefined), [], 'none');
+const b343 = { favorites: ['a', 'x@b'], uses: {}, names: {}, onConnect: { 'x@b': 'forge', a: 'top' } };
+const s343 = JSON.stringify(b343);
+eq(th.renameFavorite(b343, 'x@b', { user: 'x', host: 'b', onConnect: ' forge\n\n tmux a ' }).hosts.onConnect, { 'x@b': 'forge\ntmux a', a: 'top' }, 'saved, normalized');
+eq(th.renameFavorite(b343, 'x@b', { user: 'y', host: 'b' }).hosts.onConnect, { 'y@b': 'forge', a: 'top' }, 'omitted: kept, follows the rename');
+eq(th.renameFavorite(b343, 'x@b', { user: 'x', host: 'b', onConnect: '  ' }).hosts.onConnect, { a: 'top' }, 'blank clears');
+eq(th.renameFavorite({ favorites: ['a'] }, 'a', { host: 'a', onConnect: 'forge' }).hosts.onConnect, { a: 'forge' }, 'old hosts file without onConnect');
+eq(JSON.stringify(b343), s343, 'input not mutated');
+eq(th.removeConnection(b343, 'x@b', 'favorites').onConnect, { a: 'top' }, 'removing a favorite forgets its commands');
+eq(th.removeConnection(b343, 'x@b', 'frequent').onConnect, b343.onConnect, 'removing from frequent keeps them');
+eq(th.connectionGroups({ favorites: ['a'], onConnect: { a: 'forge', z: 'stray' } }).onConnect, { a: 'forge' }, 'commands only for favorites');
+
 const pre280 = { favorites: ['a', 'b'], uses: { a: 2, f: 1 }, names: { a: 'Alpha' }, hidden: ['h'] };
 const snap280 = JSON.parse(JSON.stringify(pre280));
 const rf280 = th.removeConnection(pre280, 'a', 'favorites');
-eq(rf280, { favorites: ['b'], uses: { f: 1 }, names: {}, hidden: ['h'] }, 'favorites: drops star, name and uses');
-eq(th.removeConnection(pre280, 'f', 'frequent'), { favorites: ['a', 'b'], uses: { a: 2 }, names: { a: 'Alpha' }, hidden: ['h'] }, 'frequent: forgets uses only');
+eq(rf280, { favorites: ['b'], uses: { f: 1 }, names: {}, onConnect: {}, hidden: ['h'] }, 'favorites: drops star, name and uses');
+eq(th.removeConnection(pre280, 'f', 'frequent'), { favorites: ['a', 'b'], uses: { a: 2 }, names: { a: 'Alpha' }, onConnect: {}, hidden: ['h'] }, 'frequent: forgets uses only');
 eq(th.removeConnection(pre280, 'c', 'config').hidden, ['h', 'c'], 'config: hides');
 eq(th.removeConnection(pre280, 'h', 'config').hidden, ['h'], 'config: hidden deduped');
 eq(th.removeConnection({ favorites: [], uses: {}, names: {} }, 'c', 'config').hidden, ['c'], 'hidden created when missing');

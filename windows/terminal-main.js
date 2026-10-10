@@ -271,6 +271,7 @@ function loadHosts() {
     if (!Array.isArray(hostsCache.favorites)) hostsCache.favorites = [];
     if (!hostsCache.uses || typeof hostsCache.uses !== 'object') hostsCache.uses = {};
     if (!hostsCache.names || typeof hostsCache.names !== 'object' || Array.isArray(hostsCache.names)) hostsCache.names = {}; // #228
+    if (!hostsCache.onConnect || typeof hostsCache.onConnect !== 'object' || Array.isArray(hostsCache.onConnect)) hostsCache.onConnect = {}; // #343
     if (!Array.isArray(hostsCache.hidden)) hostsCache.hidden = []; // #280: ssh-config hosts the user removed
   }
   return hostsCache;
@@ -283,7 +284,7 @@ function saveHosts() {
 function connections() {
   const h = loadHosts();
   const cfg = termhosts.configHosts(termhosts.parseSshConfig(sshConfigText()));
-  return termhosts.connectionGroups({ favorites: h.favorites, uses: h.uses, names: h.names, configHosts: cfg, hidden: h.hidden, platform: process.platform });
+  return termhosts.connectionGroups({ favorites: h.favorites, uses: h.uses, names: h.names, onConnect: h.onConnect, configHosts: cfg, hidden: h.hidden, platform: process.platform });
 }
 // #280: remove a connection from its group (see termhosts.removeConnection).
 function deleteConnection(target, group) {
@@ -298,8 +299,10 @@ function toggleFavorite(target) {
   if (!t || t.startsWith(term.LOCAL_PREFIX)) return; // #276: local shells are not Favorites
   const h = loadHosts();
   h.favorites = h.favorites.includes(t) ? h.favorites.filter((f) => f !== t) : [...h.favorites, t];
-  if (!h.favorites.includes(t)) delete h.names[t]; // #228: an unstarred host forgets its name
-  else h.hidden = h.hidden.filter((x) => x !== t); // #280: starring un-hides
+  if (!h.favorites.includes(t)) {
+    delete h.names[t]; // #228: an unstarred host forgets its name
+    delete h.onConnect[t]; // #343: and its commands
+  } else h.hidden = h.hidden.filter((x) => x !== t); // #280: starring un-hides
   saveHosts();
 }
 // #228: edit a Favorite's name / user / host / port. Returns { ok, error? , target? }.
@@ -353,6 +356,9 @@ function connect(st) {
     },
     onReady: () => {
       if (term.parseLocal(st.target)) return; // #276: no use counts for local shells
+      // #343: the connection's "Run on connect" commands, typed into the fresh shell
+      const cmds = termhosts.onConnectLines(loadHosts().onConnect[st.target]);
+      if (cmds.length) mine?.write(cmds.map((c) => c + '\r').join(''));
       recordUse(st.target);
       hooks.onConnectionsChanged?.();
     },
