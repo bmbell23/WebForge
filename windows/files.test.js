@@ -133,6 +133,53 @@ test('drives: only the roots that answer, slow ones time out', () =>
     )
     .then((d) => assert.deepStrictEqual(d, ['C:\\', 'M:\\'])));
 
+test('mapped drives come from HKCU\\Network, connected or not', () => {
+  const reg = [
+    '',
+    'HKEY_CURRENT_USER\\Network\\B',
+    '    RemotePath    REG_SZ    \\\\10.0.0.197\\brighton',
+    '    UserName    REG_SZ    brandon',
+    '',
+    'HKEY_CURRENT_USER\\Network\\y',
+    '    ConnectionType    REG_DWORD    0x1',
+    '    RemotePath    REG_SZ    \\\\100.66.123.108\\boston',
+    '',
+  ].join('\r\n');
+  assert.deepStrictEqual(files.parseMappedDrives(reg), [
+    { letter: 'B', remote: '\\\\10.0.0.197\\brighton' },
+    { letter: 'Y', remote: '\\\\100.66.123.108\\boston' },
+  ]);
+  assert.deepStrictEqual(files.parseMappedDrives(''), []);
+});
+
+test('logical disks: one object or many, bad JSON is empty', () => {
+  assert.deepStrictEqual(files.parseLogicalDisks('{"DeviceID":"C:","VolumeName":"OS","ProviderName":null}'), { C: { volume: 'OS', remote: '' } });
+  const many = files.parseLogicalDisks('[{"DeviceID":"C:","VolumeName":"OS"},{"DeviceID":"B:","VolumeName":"","ProviderName":"\\\\\\\\10.0.0.197\\\\brighton"}]');
+  assert.strictEqual(many.B.remote, '\\\\10.0.0.197\\brighton');
+  assert.deepStrictEqual(files.parseLogicalDisks('oops'), {});
+});
+
+test('drive labels read like Explorer\'s', () => {
+  assert.strictEqual(files.driveLabel('C', { volume: 'OS' }), 'OS (C:)');
+  assert.strictEqual(files.driveLabel('D', {}), 'Local Disk (D:)');
+  assert.strictEqual(files.driveLabel('B', { remote: '\\\\10.0.0.197\\brighton' }), 'brighton (\\\\10.0.0.197) (B:)');
+  assert.strictEqual(files.driveLabel('Z', { remote: '\\\\100.66.123.108\\external\\' }), 'external (\\\\100.66.123.108) (Z:)');
+});
+
+test('drives: disconnected mapped drives stay listed and browse their share', () => {
+  const d = files.buildDrives(
+    ['C:\\', 'B:\\'],
+    [{ letter: 'B', remote: '\\\\10.0.0.197\\brighton' }, { letter: 'Z', remote: '\\\\100.66.123.108\\external' }, { letter: 'Y', remote: '\\\\100.66.123.108\\boston' }],
+    { C: { volume: 'OS', remote: '' } }
+  );
+  assert.deepStrictEqual(d, [
+    { label: 'brighton (\\\\10.0.0.197) (B:)', path: 'B:\\', offline: false },
+    { label: 'OS (C:)', path: 'C:\\', offline: false },
+    { label: 'boston (\\\\100.66.123.108) (Y:)', path: '\\\\100.66.123.108\\boston', offline: true },
+    { label: 'external (\\\\100.66.123.108) (Z:)', path: '\\\\100.66.123.108\\external', offline: true },
+  ]);
+});
+
 Promise.all(pending).then(
   () => console.log(`files: ${run} tests passed`),
   (err) => {
