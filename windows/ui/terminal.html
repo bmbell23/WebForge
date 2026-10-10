@@ -105,7 +105,14 @@
 
   const COLORS = { info: '36', warn: '33', error: '31;1' };
   window.terminal.onData((buf) => term.write(buf));
+  // #335: a full-screen program (vim, htop, tmux) that dies, or a session that
+  // drops and reconnects, leaves xterm in mouse-tracking mode, and every mouse
+  // move then reaches the new shell as typed text ("-bash: 46M35: command not
+  // found"). Any session change switches all mouse modes off; a program that
+  // wants the mouse turns it back on itself.
+  const MOUSE_OFF = '\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1005l\x1b[?1006l\x1b[?1015l';
   window.terminal.onStatus(({ kind, text }) => {
+    term.write(MOUSE_OFF);
     term.write(`\r\n\x1b[${COLORS[kind] || '0'}m${text}\x1b[0m\r\n`);
   });
   term.onData((d) => window.terminal.write(d));
