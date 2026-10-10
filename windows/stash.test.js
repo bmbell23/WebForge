@@ -68,6 +68,20 @@ eq(nsfw.image_urls, [
 ok(stash.isGallery(nsfw), 'the album counts as a gallery');
 eq(distill({ url: 'https://x.com/', links: [], imgs: ['https://x.com/a.jpg', 'https://x.com/b.jpg', 'https://x.com/c.jpg'] }).image_urls, [], 'plain <img> tags never make a gallery');
 
+console.log('page reader: sxypix viewer answer (#347)');
+const sxyEl = (sig, pid) => `<div class='gall_pix_el' data-photoid='${pid}' style='width:800px' data-src='//x.sxypix.com/pixiw/${sig}/1791766800/o/64aac/d28f/${pid}.webp' data-ow='1920'><img data-src='//x.sxypix.com/pixi/zz/1791766800/n/64aac/d28f/${pid}.jpg' class='gall_pix_pix'></div>`;
+const sxyAnswer = JSON.stringify({ r: [sxyEl('k69', 'a1'), sxyEl('Q2x', 'b2'), sxyEl('Q2x', 'b2'), sxyEl('m-3', 'c3'), '<div>ad</div>'] });
+eq(reader.sxypixOriginals(sxyAnswer), [
+  'https://x.sxypix.com/pixiw/k69/1791766800/o/64aac/d28f/a1.webp',
+  'https://x.sxypix.com/pixiw/Q2x/1791766800/o/64aac/d28f/b2.webp',
+  'https://x.sxypix.com/pixiw/Q2x/1791766800/o/64aac/d28f/b2.webp',
+  'https://x.sxypix.com/pixiw/m-3/1791766800/o/64aac/d28f/c3.webp',
+], 'large data-src per photo, made https; inner thumbnails ignored');
+const sxy = distill({ url: 'https://sxypix.com/w/d28f', title: 'A set', links: [], sxypix: sxyAnswer });
+eq(sxy.image_urls.length, 3, 'deduped into the gallery');
+ok(stash.isGallery(sxy), 'the set counts as a gallery');
+for (const bad of [null, '', 'not json', '{"r":"x"}', '{"status":"err"}']) eq(reader.sxypixOriginals(bad), [], 'unreadable answer: ' + bad);
+
 console.log('page reader: a sidebar full of models only keeps the ones the title names');
 const many = ['Amy', 'Bea', 'Cat', 'Dee', 'Eve', 'Jane Doe'].map((t) => ({ href: `https://x.com/pornstars/${t}/`, text: t }));
 eq(distill({ url: 'https://x.com/g/1', title: 'Jane Doe solo', links: many }).performers, ['Jane Doe'], 'sidebar names dropped');

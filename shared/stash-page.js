@@ -59,7 +59,21 @@
     return null;
   }
 
-  // raw = {url, title, h1, meta: {name: content}, ld: [objects], links: [{href, text}], imgs: [src]}
+  // #347: sxypix's viewer answer ({r: [html…]}, one .gall_pix_el per photo) ->
+  // each photo's large URL (its data-src). [] when it isn't that shape.
+  function sxypixOriginals(text) {
+    var r;
+    try { r = JSON.parse(text).r; } catch (e) { return []; }
+    if (!Array.isArray(r)) return [];
+    var out = [];
+    r.forEach(function (h) {
+      var m = /class=['"]gall_pix_el['"][^>]*?\sdata-src=['"]([^'"]+)['"]/.exec(String(h));
+      if (m) { try { out.push(new URL(m[1], 'https://sxypix.com/').href); } catch (e) { /* bad URL */ } }
+    });
+    return out;
+  }
+
+  // raw = {url, title, h1, meta: {name: content}, ld: [objects], links: [{href, text}], imgs: [src], sxypix: text}
   function distill(raw) {
     var meta = raw.meta || {}, ld = [], links = raw.links || [];
     (raw.ld || []).forEach(function (o) { ld = ld.concat(o && o['@graph'] ? o['@graph'] : [o]); });
@@ -123,6 +137,9 @@
         if ((u.protocol === 'http:' || u.protocol === 'https:') && IMAGE.test(u.pathname)) images.push(u.href);
       } catch (e) { /* not a URL */ }
     });
+    sxypixOriginals(raw.sxypix).forEach(function (u) { // #347
+      if (IMAGE.test(new URL(u).pathname)) images.push(u);
+    });
     (raw.imgs || []).forEach(function (s) { // #345
       var o = original(s);
       if (o) images.push(o);
@@ -166,9 +183,28 @@
       if (is[q].src) imgs.push(is[q].src);
     }
     var h1 = doc.querySelector('h1');
-    return { url: url, title: doc.title, h1: h1 ? h1.textContent : '', meta: meta, ld: ld, links: links, imgs: imgs };
+    return { url: url, title: doc.title, h1: h1 ? h1.textContent : '', meta: meta, ld: ld, links: links, imgs: imgs, sxypix: sxypixViewer(doc, url) };
   }
 
-  if (typeof __stashExport === 'function') return __stashExport({ distill: distill, collect: collect });
+  // #347: a sxypix gallery page shows 36 signed thumbnails; the large URLs of
+  // every photo come from the site's own viewer request, asked the same way it
+  // asks. Synchronous because Android's evaluateJavascript cannot wait on a
+  // Promise (move to fetch when #326 makes the reader async).
+  function sxypixViewer(doc, url) {
+    try {
+      if (!/^(www\.)?sxypix\.com$/i.test(new URL(url).hostname)) return null;
+      var grid = doc.querySelector('.gallgrid'), first = doc.querySelector('.gall_el[data-photoid]');
+      if (!grid || !first) return null;
+      var a = function (n) { return encodeURIComponent(grid.getAttribute('data-' + n) || ''); };
+      var xhr = new XMLHttpRequest();
+      xhr.open('POST', '/php/gall.php', false);
+      xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded; charset=UTF-8');
+      xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
+      xhr.send('x=' + a('x') + '&pid=' + encodeURIComponent(first.getAttribute('data-photoid')) + '&aid=' + a('aid') + '&ghash=' + a('ghash') + '&width=1920');
+      return xhr.status === 200 ? xhr.responseText : null;
+    } catch (e) { return null; }
+  }
+
+  if (typeof __stashExport === 'function') return __stashExport({ distill: distill, collect: collect, sxypixOriginals: sxypixOriginals });
   return distill(collect(document, location.href));
 })();
