@@ -85,11 +85,16 @@ function rankFrequent(uses, limit = 8) {
     .map(([t]) => t);
 }
 
+// #343: a connection's "Run on connect" text as the commands to send, in order.
+function onConnectLines(text) {
+  return String(text || '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+}
+
 // The three groups the panel and the new-tab picker show. A host appears in
 // one group only: Favorites beat Frequent beat ssh config.
 // #280: `hidden` targets are left out of Frequent and ssh config, never Favorites.
 // #276: given a `platform`, a `local` group (this PC's shells) comes first.
-function connectionGroups({ favorites = [], uses = {}, configHosts: cfg = [], names = {}, hidden = [], platform = null } = {}) {
+function connectionGroups({ favorites = [], uses = {}, configHosts: cfg = [], names = {}, onConnect = {}, hidden = [], platform = null } = {}) {
   const gone = new Set(hidden);
   const seen = new Set(favorites);
   // #241: a Favorite also hides the bare host it was made from (an edited
@@ -106,6 +111,7 @@ function connectionGroups({ favorites = [], uses = {}, configHosts: cfg = [], na
     frequent,
     config: cfg.filter((t) => !seen.has(t) && !gone.has(t)),
     names: Object.fromEntries(favorites.filter((t) => names[t]).map((t) => [t, names[t]])), // #228
+    onConnect: Object.fromEntries(favorites.filter((t) => onConnect[t]).map((t) => [t, onConnect[t]])), // #343
   };
 }
 
@@ -143,7 +149,8 @@ function joinTarget({ user, host, port } = {}) {
 }
 
 // #228: edit a Favorite in place. Pure: returns new hosts, never touches the input.
-function renameFavorite(hosts, oldTarget, { name, user, host, port } = {}) {
+// #343: `onConnect` (one command per line) is left alone when the caller omits it.
+function renameFavorite(hosts, oldTarget, { name, user, host, port, onConnect } = {}) {
   const favorites = (hosts && hosts.favorites) || [];
   const at = favorites.indexOf(oldTarget);
   if (at < 0) return { ok: false, error: 'That favorite no longer exists.' };
@@ -152,19 +159,25 @@ function renameFavorite(hosts, oldTarget, { name, user, host, port } = {}) {
   if (target !== oldTarget && favorites.includes(target)) return { ok: false, error: `${target} is already a favorite.` };
   const uses = { ...(hosts.uses || {}) };
   const names = { ...(hosts.names || {}) };
+  const cmds = { ...(hosts.onConnect || {}) };
+  const keepCmds = cmds[oldTarget];
   if (target !== oldTarget) {
     if (oldTarget in uses) {
       uses[target] = (uses[target] || 0) + uses[oldTarget];
       delete uses[oldTarget];
     }
     delete names[oldTarget];
+    delete cmds[oldTarget];
   }
+  const lines = onConnectLines(onConnect === undefined ? keepCmds : onConnect);
+  if (lines.length) cmds[target] = lines.join('\n');
+  else delete cmds[target];
   const label = String(name || '').trim();
   if (label && label !== target) names[target] = label;
   else delete names[target];
   const next = [...favorites];
   next[at] = target;
-  return { ok: true, hosts: { ...hosts, favorites: next, uses, names }, target };
+  return { ok: true, hosts: { ...hosts, favorites: next, uses, names, onConnect: cmds }, target };
 }
 
 // #280: remove a connection from one group. Pure: returns new hosts, never
@@ -174,18 +187,20 @@ function removeConnection(hosts, target, group) {
   const h = hosts || {};
   const uses = { ...(h.uses || {}) };
   const names = { ...(h.names || {}) };
+  const onConnect = { ...(h.onConnect || {}) };
   let favorites = [...(h.favorites || [])];
   let hidden = [...(h.hidden || [])];
   if (group === 'favorites') {
     favorites = favorites.filter((f) => f !== target);
     delete names[target];
+    delete onConnect[target]; // #343
     delete uses[target];
   } else if (group === 'frequent') {
     delete uses[target];
   } else if (group === 'config') {
     if (!hidden.includes(target)) hidden.push(target);
   }
-  return { ...h, favorites, uses, names, hidden };
+  return { ...h, favorites, uses, names, onConnect, hidden };
 }
 
-module.exports = { parseSshConfig, configHosts, resolveHost, rankFrequent, connectionGroups, validTarget, splitTarget, joinTarget, renameFavorite, removeConnection };
+module.exports = { onConnectLines, parseSshConfig, configHosts, resolveHost, rankFrequent, connectionGroups, validTarget, splitTarget, joinTarget, renameFavorite, removeConnection };

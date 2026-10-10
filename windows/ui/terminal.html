@@ -26,8 +26,10 @@
   .host button.edit { background: none; border: none; color: #888; font-size: 14px; cursor: pointer; }
   .host button.edit:hover { color: #ddd; }
   .hostedit { display: flex; flex-direction: column; gap: 4px; max-width: 480px; margin: 4px 0; }
-  .hostedit input { padding: 6px 10px; font: 14px 'Cascadia Mono', Consolas, monospace;
+  .hostedit input, .hostedit textarea { padding: 6px 10px; font: 14px 'Cascadia Mono', Consolas, monospace;
                     background: #1a1a1a; color: #eee; border: 1px solid #444; border-radius: 4px; }
+  .hostedit textarea { resize: vertical; }
+  .hostedit label { font-size: 12px; opacity: .7; margin-top: 4px; }
   .hostedit .btns { display: flex; gap: 8px; }
   .hostedit .err { color: #e5534b; font-size: 12px; }
 </style>
@@ -143,7 +145,9 @@
       const m = /^(?:([^@]+)@)?(\[[^\]]*\]|[^:]+)(?::(\d+))?$/.exec(t);
       return m ? { user: m[1] || '', host: m[2].replace(/^\[(.*)\]$/, '$1'), port: m[3] || '' } : { user: '', host: t, port: '' };
     };
+    let onConnect = {}; // #343: target -> its "Run on connect" commands, from the last render
     // #228: swaps a Favorite's row for Name / User / Host / Port. Enter saves, Esc cancels.
+    // #343: plus Run on connect (Enter there is a new line; Ctrl+Enter saves).
     const editRow = (t, label, row) => {
       const p = splitTarget(t);
       const form = Object.assign(document.createElement('div'), { className: 'hostedit' });
@@ -155,9 +159,13 @@
       const fUser = field('User', p.user);
       const fHost = field('Host or IP', p.host);
       const fPort = field('Port (optional)', p.port);
+      const cmdLabel = Object.assign(document.createElement('label'), { textContent: 'Run on connect (one command per line)' });
+      const fCmds = Object.assign(document.createElement('textarea'), {
+        rows: 2, placeholder: 'e.g. forge', value: onConnect[t] || '', spellcheck: false,
+      });
       const err = Object.assign(document.createElement('div'), { className: 'err' });
       const save = async () => {
-        const r = await window.terminal.editFavorite(t, { name: fName.value, user: fUser.value, host: fHost.value, port: fPort.value });
+        const r = await window.terminal.editFavorite(t, { name: fName.value, user: fUser.value, host: fHost.value, port: fPort.value, onConnect: fCmds.value });
         if (r && r.ok) render();
         else err.textContent = (r && r.error) || 'Could not save.';
       };
@@ -169,16 +177,17 @@
       btns.append(saveBtn, cancelBtn);
       form.onkeydown = (e) => {
         e.stopPropagation();
-        if (e.key === 'Enter') { e.preventDefault(); save(); }
+        if (e.key === 'Enter' && (e.target !== fCmds || e.ctrlKey)) { e.preventDefault(); save(); }
         else if (e.key === 'Escape') { e.preventDefault(); render(); }
       };
-      form.append(fName, fUser, fHost, fPort, err, btns);
+      form.append(fName, fUser, fHost, fPort, cmdLabel, fCmds, err, btns);
       row.replaceWith(form);
       fName.focus();
     };
     const render = async () => {
       const g = (await window.terminal.connections()) || { favorites: [], frequent: [], config: [], names: {} };
       const names = g.names || {};
+      onConnect = g.onConnect || {};
       const groups = document.getElementById('groups');
       groups.replaceChildren();
       // #322: the file browser sits above every shell.
